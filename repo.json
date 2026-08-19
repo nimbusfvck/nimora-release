@@ -1,0 +1,37 @@
+{
+  "extensions": [
+    {
+      "id": "nimora",
+      "name": "Nimora",
+      "version": "0.6.9",
+      "description": "Live and upcoming sports, plus movie and TV catalogs, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
+      "author": "nimbusfvck",
+      "hosts": [
+        "www.fotmob.com",
+        "images.fotmob.com",
+        "cdn.kora-api.org",
+        "kora-api.space",
+        "*.kora-plus.li",
+        "p.genzdev.xyz",
+        "c.playtek.xyz",
+        "cricyplayers.com",
+        "raw.githubusercontent.com",
+        "encrypted-tbn0.gstatic.com",
+        "blogger.googleusercontent.com",
+        "api.themoviedb.org",
+        "image.tmdb.org",
+        "lists.shegu.st",
+        "vidrock.ru",
+        "subtitles.shegu.st",
+        "api.speedracelight.com",
+        "enc-dec.app",
+        "streamdata.vaplayer.ru",
+        "h5-api.aoneroom.com",
+        "h5.aoneroom.com"
+      ],
+      "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
+      "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
+      "bundleSha256": "5e0b0a01091dbed0b933dbf0b8999241ea0fcefb80a47d1eaebdfbfc24af50c7"
+    }
+  ]
+}

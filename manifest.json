@@ -1,0 +1,138 @@
+{
+  "apiVersion": 2,
+  "id": "nimora",
+  "name": "Nimora",
+  "version": "0.6.9",
+  "runtime": "js",
+  "description": "Live and upcoming sports, plus movie and TV catalogs, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
+  "author": "nimbusfvck",
+  "entry": "bundle.js",
+  "categories": [
+    "all",
+    "live",
+    "sport",
+    "movie",
+    "tv"
+  ],
+  "providers": [
+    {
+      "id": "nimora.matches",
+      "roles": [
+        "catalog"
+      ],
+      "catalogs": [
+        {
+          "id": "fixtures",
+          "name": "Nimora",
+          "categories": [
+            "all",
+            "live",
+            "sport"
+          ],
+          "display": "row"
+        }
+      ]
+    },
+    {
+      "id": "nimora.kora",
+      "name": "Atlas",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.cricfy",
+      "name": "Boreal",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.tmdb",
+      "roles": [
+        "catalog",
+        "meta",
+        "search"
+      ],
+      "catalogs": [
+        {
+          "id": "discover",
+          "name": "TMDB",
+          "categories": [
+            "movie",
+            "tv"
+          ],
+          "display": "grid",
+          "expanded": true
+        },
+        {
+          "id": "highlights",
+          "name": "TMDB",
+          "categories": [
+            "all"
+          ],
+          "display": "row"
+        }
+      ]
+    },
+    {
+      "id": "nimora.vidrock",
+      "name": "Cinder",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.videasy",
+      "name": "Drift",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.vaplayer",
+      "name": "Ember",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.moviebox",
+      "name": "Flux",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.shegu",
+      "roles": [
+        "subtitles"
+      ]
+    }
+  ],
+  "permissions": {
+    "hosts": [
+      "www.fotmob.com",
+      "images.fotmob.com",
+      "cdn.kora-api.org",
+      "kora-api.space",
+      "*.kora-plus.li",
+      "p.genzdev.xyz",
+      "c.playtek.xyz",
+      "cricyplayers.com",
+      "raw.githubusercontent.com",
+      "encrypted-tbn0.gstatic.com",
+      "blogger.googleusercontent.com",
+      "api.themoviedb.org",
+      "image.tmdb.org",
+      "lists.shegu.st",
+      "vidrock.ru",
+      "subtitles.shegu.st",
+      "api.speedracelight.com",
+      "enc-dec.app",
+      "streamdata.vaplayer.ru",
+      "h5-api.aoneroom.com",
+      "h5.aoneroom.com"
+    ]
+  }
+}
