@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.9",
+      "version": "0.6.10",
       "description": "Live and upcoming sports, plus movie and TV catalogs, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -28,6 +28,12 @@
         "streamdata.vaplayer.ru",
         "h5-api.aoneroom.com",
         "h5.aoneroom.com"
+      ],
+      "releaseNotes": [
+        "Added release notes to extension updates.",
+        "Restored Boxing, Tennis, Baseball, Basketball, and Motorsport sections.",
+        "Added event artwork for MotoGP, Formula 1, and other non-versus events.",
+        "Excluded Cricket and NFL events from the sports catalog."
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
