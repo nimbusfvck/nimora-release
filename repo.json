@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.15",
+      "version": "0.6.16",
       "description": "Live and upcoming sports, plus movie and TV catalogs, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -32,6 +32,7 @@
         "h5.aoneroom.com"
       ],
       "releaseNotes": [
+        "Excluded Baseball events from the sports catalog and featured feed.",
         "Prioritized fixtures involving the configured top football clubs while preserving FotMob's order for the rest of the schedule.",
         "Added TMDB title artwork to featured movie and series items, with text fallback when no logo is available.",
         "Validate Cricfy playback manifests before handing them to the native player, filtering upstream 4xx/5xx and invalid HLS/DASH responses.",
@@ -41,7 +42,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "4fa336562c955f01ff930f47c147b1d3b3c946354e3150f3b2f55647c76ae1d8"
+      "bundleSha256": "a61049cf7b38ce08bad218939430e7d0fca50aa2a96580d1d22c69e53481807b"
     }
   ]
 }

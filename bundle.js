@@ -473,7 +473,13 @@ function isFootballCategory(category) {
 
 function isExcludedSportCategory(category) {
   const name = `${category || ''}`.toLowerCase();
-  return name.includes('cricket') || name === 'nfl' || name.includes('american football');
+  return (
+    name.includes('cricket') ||
+    name.includes('baseball') ||
+    name === 'mlb' ||
+    name === 'nfl' ||
+    name.includes('american football')
+  );
 }
 
 function cricfyEventItem(event, status) {
