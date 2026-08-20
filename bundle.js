@@ -1870,6 +1870,25 @@ function cricfyStreamFormatFromUrl(url) {
   return 'other';
 }
 
+// Validate the manifest before handing it to the native player. Upstream
+// mirrors sometimes return an HTML/502 body at a URL that still looks like a
+// playlist; letting that body reach the player produces a misleading
+// "missing #EXTM3U" parser error and can make a bad source look playable.
+async function cricfyValidatePlaybackManifest(url, { headers, format }) {
+  if (format === 'other') return;
+  const response = await fetch(url, { headers });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Playback manifest request failed: ${response.status}`);
+  }
+  const body = response.body.trim();
+  if (format === 'hls' && !body.startsWith('#EXTM3U')) {
+    throw new Error('Playback response is not an HLS playlist');
+  }
+  if (format === 'dash' && !/<MPD(?:\s|>)/i.test(body)) {
+    throw new Error('Playback response is not a DASH manifest');
+  }
+}
+
 // ---- client (port of CricfyClient) ----
 
 let cricfyConfigCache = null;
@@ -2293,11 +2312,16 @@ async function cricfyResolveStreamAt(link, depth) {
     split.headers,
     finalSplit.headers,
   ]);
+  const format = cricfyStreamFormatFromUrl(finalSplit.url);
+  await cricfyValidatePlaybackManifest(finalSplit.url, {
+    headers: merged,
+    format,
+  });
 
   return {
     url: finalSplit.url,
     headers: merged,
-    format: cricfyStreamFormatFromUrl(finalSplit.url),
+    format,
     drm: cricfyBuildDrm(link),
     audioUrl: link.audio.length === 0 ? null : link.audio,
     label: link.name,
@@ -2577,26 +2601,17 @@ function parseTmdbRef(refId) {
 
 // --- mapping ---
 
-// `subtitle` doubles as a rating + release year line (`"★8.6 2024"`) —
-// built the same way regardless of which upstream (TMDB directly, or
-// shegu.st's own normalized `ratings`) the rating and year came from.
-function ratingAndYearSubtitle(ratingLabel, year) {
-  const parts = [ratingLabel, year].filter((part) => part != null);
-  return parts.length > 0 ? parts.join(' ') : null;
-}
-
 // Works for both a search-result-shaped object (trending/top_rated/discover
 // `results[]`) and a detail-shaped one (`/movie/{id}`, `/tv/{id}`) — the
-// fields this reads are the same in both. `vote_average` is TMDB's own
-// 0–10 score, already the scale a subtitle wants.
+// fields this reads are the same in both.
 function tmdbToMediaItem(result, mediaType) {
   const kind = mediaType === 'movie' ? 'video' : 'series';
   const title = result.title || result.name || 'Untitled';
   const dateStr = result.release_date || result.first_air_date;
-  const year = dateStr ? dateStr.slice(0, 4) : null;
-  const ratingLabel =
+  const releaseYear = dateStr ? parseInt(dateStr.slice(0, 4), 10) : null;
+  const rating =
     typeof result.vote_average === 'number' && result.vote_average > 0
-      ? `★${result.vote_average.toFixed(1)}`
+      ? result.vote_average
       : null;
   const mediaItem = {
     ref: {
@@ -2607,8 +2622,10 @@ function tmdbToMediaItem(result, mediaType) {
     kind,
     title,
   };
-  const subtitle = ratingAndYearSubtitle(ratingLabel, year);
-  if (subtitle != null) mediaItem.subtitle = subtitle;
+  if (Number.isInteger(releaseYear) && releaseYear > 0) {
+    mediaItem.releaseYear = releaseYear;
+  }
+  if (rating != null) mediaItem.rating = rating;
   const artwork = {};
   if (result.poster_path) artwork.portrait = { url: `${TMDB_IMAGE_BASE}/w500${result.poster_path}` };
   if (result.backdrop_path) artwork.landscape = { url: `${TMDB_IMAGE_BASE}/w780${result.backdrop_path}` };
@@ -2616,16 +2633,15 @@ function tmdbToMediaItem(result, mediaType) {
   return mediaItem;
 }
 
-// shegu.st's own `ratings.tmdb` is `{value, votes, scale, url}` — a score
-// out of `scale` (100), not the familiar out-of-10 TMDB shows elsewhere, so
-// it's normalized before formatting the same way tmdbToMediaItem's is.
-function sheguRatingLabel(item) {
+// shegu.st's own `ratings.tmdb` is `{value, votes, scale, url}`. Normalize
+// it to the 0–10 scale used by the TMDB catalog before exposing it as rating.
+function sheguRating(item) {
   const tmdbRating = item.ratings && item.ratings.tmdb;
   if (tmdbRating == null || typeof tmdbRating.value !== 'number') return null;
   const scale =
     typeof tmdbRating.scale === 'number' && tmdbRating.scale > 0 ? tmdbRating.scale : 100;
   const normalized = (tmdbRating.value / scale) * 10;
-  return normalized > 0 ? `★${normalized.toFixed(1)}` : null;
+  return normalized > 0 ? Math.round(normalized * 10) / 10 : null;
 }
 
 // shegu.st's `/joy/<slug>` lists (oscar-nominees-best-picture,
@@ -2645,11 +2661,12 @@ function sheguToMediaItem(item, group) {
     kind: 'video',
     title: item.title || 'Untitled',
   };
-  const subtitle = ratingAndYearSubtitle(
-    sheguRatingLabel(item),
-    item.year != null ? `${item.year}` : null,
-  );
-  if (subtitle != null) mediaItem.subtitle = subtitle;
+  const releaseYear = Number(item.year);
+  const rating = sheguRating(item);
+  if (Number.isInteger(releaseYear) && releaseYear > 0) {
+    mediaItem.releaseYear = releaseYear;
+  }
+  if (rating != null) mediaItem.rating = rating;
   if (item.poster) mediaItem.artwork = { portrait: { url: item.poster } };
   return mediaItem;
 }
@@ -2849,6 +2866,53 @@ function tmdbGenresOf(data) {
   return Array.isArray(data.genres) ? data.genres.map((g) => g.name).filter((n) => !!n) : [];
 }
 
+function tmdbFact(facts, label, value) {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    facts.push({ label, value });
+  }
+}
+
+function tmdbNames(values) {
+  if (!Array.isArray(values)) return null;
+  const names = values
+    .map((value) => value && typeof value.name === 'string' ? value.name : null)
+    .filter((value) => value != null);
+  return names.length > 0 ? names.join(', ') : null;
+}
+
+function tmdbMovieFacts(data) {
+  const facts = [];
+  if (typeof data.runtime === 'number' && data.runtime > 0) {
+    tmdbFact(facts, 'Runtime', `${data.runtime} min`);
+  }
+  tmdbFact(facts, 'Release date', data.release_date);
+  tmdbFact(facts, 'Certification', tmdbUsCertification(data));
+  tmdbFact(facts, 'Status', data.status);
+  tmdbFact(facts, 'Original language', data.original_language);
+  tmdbFact(facts, 'Languages', tmdbNames(data.spoken_languages));
+  tmdbFact(facts, 'Production countries', tmdbNames(data.production_countries));
+  return facts;
+}
+
+function tmdbTvFacts(data) {
+  const facts = [];
+  if (Array.isArray(data.episode_run_time) && data.episode_run_time.length > 0) {
+    tmdbFact(facts, 'Episode runtime', `${data.episode_run_time[0]} min`);
+  }
+  tmdbFact(facts, 'First aired', data.first_air_date);
+  tmdbFact(facts, 'Certification', tmdbUsContentRating(data));
+  tmdbFact(facts, 'Status', data.status);
+  if (typeof data.number_of_seasons === 'number' && data.number_of_seasons > 0) {
+    tmdbFact(facts, 'Seasons', String(data.number_of_seasons));
+  }
+  if (typeof data.number_of_episodes === 'number' && data.number_of_episodes > 0) {
+    tmdbFact(facts, 'Episodes', String(data.number_of_episodes));
+  }
+  tmdbFact(facts, 'Original language', data.original_language);
+  tmdbFact(facts, 'Networks', tmdbNames(data.networks));
+  return facts;
+}
+
 function tmdbEpisodeRef(tvId, seasonNumber, episodeNumber) {
   return {
     extensionId: EXTENSION_ID,
@@ -2904,12 +2968,7 @@ async function tmdbMovieMeta(tmdbId) {
   if (data.overview) detail.description = data.overview;
   const genres = tmdbGenresOf(data);
   if (genres.length > 0) detail.tags = genres;
-  const facts = [];
-  if (typeof data.runtime === 'number' && data.runtime > 0) {
-    facts.push({ label: 'Runtime', value: `${data.runtime} min` });
-  }
-  const certification = tmdbUsCertification(data);
-  if (certification) facts.push({ label: 'Rating', value: certification });
+  const facts = tmdbMovieFacts(data);
   if (facts.length > 0) detail.facts = facts;
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;
@@ -2924,12 +2983,7 @@ async function tmdbTvMeta(tmdbId) {
   if (data.overview) detail.description = data.overview;
   const genres = tmdbGenresOf(data);
   if (genres.length > 0) detail.tags = genres;
-  const facts = [];
-  if (Array.isArray(data.episode_run_time) && data.episode_run_time.length > 0) {
-    facts.push({ label: 'Episode runtime', value: `${data.episode_run_time[0]} min` });
-  }
-  const certification = tmdbUsContentRating(data);
-  if (certification) facts.push({ label: 'Rating', value: certification });
+  const facts = tmdbTvFacts(data);
   if (facts.length > 0) detail.facts = facts;
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;

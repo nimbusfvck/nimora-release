@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.10",
+      "version": "0.6.13",
       "description": "Live and upcoming sports, plus movie and TV catalogs, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -15,6 +15,8 @@
         "p.genzdev.xyz",
         "c.playtek.xyz",
         "cricyplayers.com",
+        "cast.zlive.st",
+        "otte.cache.aiv-cdn.net",
         "raw.githubusercontent.com",
         "encrypted-tbn0.gstatic.com",
         "blogger.googleusercontent.com",
@@ -30,14 +32,14 @@
         "h5.aoneroom.com"
       ],
       "releaseNotes": [
-        "Added release notes to extension updates.",
-        "Restored Boxing, Tennis, Baseball, Basketball, and Motorsport sections.",
-        "Added event artwork for MotoGP, Formula 1, and other non-versus events.",
-        "Excluded Cricket and NFL events from the sports catalog."
+        "Validate Cricfy playback manifests before handing them to the native player, filtering upstream 4xx/5xx and invalid HLS/DASH responses.",
+        "Added the exact Cricfy playback hosts required by the manifest preflight guard.",
+        "Added richer movie and series details, including release, language, status, and availability facts.",
+        "Renamed content certification facts for clarity."
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "5e0b0a01091dbed0b933dbf0b8999241ea0fcefb80a47d1eaebdfbfc24af50c7"
+      "bundleSha256": "485be7379edc20a4717c15cfe742b67033971bbef85c67236dea844546bcf3b6"
     }
   ]
 }
