@@ -48,6 +48,35 @@ const UNGROUPED = 'Other';
 // Live is always relevant regardless of kickoff.
 const UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Editorial ranking for globally recognisable clubs. FotMob ids are the
+// primary key; aliases cover alternate names returned by different daily
+// feeds. This belongs to the extension because the shell must not know what
+// counts as a top football club.
+const TOP_CLUBS = [
+  { id: '8633', aliases: ['real madrid', 'real madrid cf'] },
+  { id: '8634', aliases: ['barcelona', 'fc barcelona', 'barca', 'barça'] },
+  { id: '8456', aliases: ['manchester city', 'man city'] },
+  { id: '8650', aliases: ['liverpool', 'liverpool fc'] },
+  { id: '9825', aliases: ['arsenal', 'arsenal fc'] },
+  { id: '10260', aliases: ['manchester united', 'man united', 'man utd'] },
+  { id: '9823', aliases: ['bayern munich', 'bayern munchen', 'fc bayern'] },
+  {
+    id: '9847',
+    aliases: ['paris saint-germain', 'paris saint germain', 'psg'],
+  },
+  { id: '8636', aliases: ['inter milan', 'internazionale', 'inter'] },
+  { id: '9885', aliases: ['juventus', 'juve'] },
+];
+
+const TOP_CLUB_BY_ID = new Map(
+  TOP_CLUBS.map((club, index) => [club.id, index]),
+);
+const TOP_CLUB_BY_NAME = new Map(
+  TOP_CLUBS.flatMap((club, index) =>
+    club.aliases.map((alias) => [alias, index]),
+  ),
+);
+
 // fotmob's tvguide is a forward listing, not a live tracker — `isLive` was
 // `false` on every match sampled while building this, live or not, so a
 // kickoff time-window is the reliable signal. ~130 minutes covers a normal
@@ -270,6 +299,61 @@ function isWomenMatch(match) {
   const homeName = match.home && (match.home.longName || match.home.name);
   const awayName = match.away && (match.away.longName || match.away.name);
   return womenSuffix.test(`${homeName || ''}`) || womenSuffix.test(`${awayName || ''}`);
+}
+
+function normalizedClubName(team) {
+  return `${team && (team.longName || team.name) || ''}`
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+function topClubRank(team) {
+  if (team == null) return null;
+  if (team.id != null) {
+    const rankById = TOP_CLUB_BY_ID.get(String(team.id));
+    if (rankById != null) return rankById;
+  }
+  const rankByName = TOP_CLUB_BY_NAME.get(normalizedClubName(team));
+  return rankByName == null ? null : rankByName;
+}
+
+function topClubMatchRank(match) {
+  const ranks = [topClubRank(match.home), topClubRank(match.away)]
+    .filter((rank) => rank != null);
+  if (ranks.length === 0) return null;
+  return {
+    clubs: ranks.length,
+    rank: Math.min(...ranks),
+  };
+}
+
+// Keep FotMob's response order as the default. A fixture involving two
+// configured top clubs comes first, followed by fixtures involving one; ties
+// retain their original response order. This gives the app a useful editorial
+// lead without replacing the upstream schedule with a hardcoded league order.
+function prioritizeTopClubMatches(matches) {
+  return matches
+    .map((match, index) => ({
+      match,
+      index,
+      priority: topClubMatchRank(match),
+    }))
+    .sort((a, b) => {
+      if (a.priority == null && b.priority == null) return a.index - b.index;
+      if (a.priority == null) return 1;
+      if (b.priority == null) return -1;
+      if (a.priority.clubs !== b.priority.clubs) {
+        return b.priority.clubs - a.priority.clubs;
+      }
+      if (a.priority.rank !== b.priority.rank) {
+        return a.priority.rank - b.priority.rank;
+      }
+      return a.index - b.index;
+    })
+    .map((entry) => entry.match);
 }
 
 // --- status / relevance ---
@@ -561,6 +645,7 @@ async function fixturesCatalog(query) {
     flattenDailyMatches(rawDaily),
   ).filter((match) => !isWomenMatch(match) && isRelevantMatch(match, nowMs));
   matches = filterPopularMatches(matches, popularLeagues);
+  matches = prioritizeTopClubMatches(matches);
   if (live) {
     matches = matches.filter((match) => isMatchLive(match, nowMs));
   }
