@@ -2629,8 +2629,19 @@ function tmdbToMediaItem(result, mediaType) {
   const artwork = {};
   if (result.poster_path) artwork.portrait = { url: `${TMDB_IMAGE_BASE}/w500${result.poster_path}` };
   if (result.backdrop_path) artwork.landscape = { url: `${TMDB_IMAGE_BASE}/w780${result.backdrop_path}` };
+  const titleLogo = tmdbTitleLogo(result.images);
+  if (titleLogo) artwork.logo = { url: `${TMDB_IMAGE_BASE}/w300${titleLogo.file_path}` };
   if (Object.keys(artwork).length > 0) mediaItem.artwork = artwork;
   return mediaItem;
+}
+
+// TMDB returns logos in popularity order. Prefer an English title treatment,
+// then an untagged one that can work across locales.
+function tmdbTitleLogo(images) {
+  const logos = images && Array.isArray(images.logos) ? images.logos : [];
+  return logos.find((logo) => logo.file_path && logo.iso_639_1 === 'en')
+    || logos.find((logo) => logo.file_path && logo.iso_639_1 == null)
+    || null;
 }
 
 // shegu.st's own `ratings.tmdb` is `{value, votes, scale, url}`. Normalize
@@ -2677,7 +2688,26 @@ function sheguToMediaItem(item, group) {
 async function fetchTrending(mediaType) {
   const data = await tmdbGetJson(`/trending/${mediaType}/day`, { include_adult: 'false' });
   const results = Array.isArray(data.results) ? data.results : [];
-  return results.map((r) => tmdbToMediaItem(r, mediaType));
+  const items = results.map((r) => tmdbToMediaItem(r, mediaType));
+  if (results.length === 0) return items;
+
+  // Only the editorial lead is enriched because it is the featured candidate.
+  // Fetching images for every card would turn one catalog request into N+1.
+  try {
+    const images = await tmdbGetJson(`/${mediaType}/${results[0].id}/images`, {
+      include_image_language: 'en,null',
+    });
+    const logo = tmdbTitleLogo(images);
+    if (logo) {
+      items[0].artwork = {
+        ...(items[0].artwork || {}),
+        logo: { url: `${TMDB_IMAGE_BASE}/w300${logo.file_path}` },
+      };
+    }
+  } catch (e) {
+    // Artwork enrichment is optional; the catalog remains usable with text.
+  }
+  return items;
 }
 
 async function fetchTopRated(mediaType) {
@@ -2962,7 +2992,8 @@ async function tmdbSeasonsOf(tvId, showData) {
 
 async function tmdbMovieMeta(tmdbId) {
   const data = await tmdbGetJson(`/movie/${tmdbId}`, {
-    append_to_response: 'credits,release_dates',
+    append_to_response: 'credits,release_dates,images',
+    include_image_language: 'en,null',
   });
   const detail = { item: tmdbToMediaItem(data, 'movie') };
   if (data.overview) detail.description = data.overview;
@@ -2977,7 +3008,8 @@ async function tmdbMovieMeta(tmdbId) {
 
 async function tmdbTvMeta(tmdbId) {
   const data = await tmdbGetJson(`/tv/${tmdbId}`, {
-    append_to_response: 'credits,content_ratings',
+    append_to_response: 'credits,content_ratings,images',
+    include_image_language: 'en,null',
   });
   const detail = { item: tmdbToMediaItem(data, 'tv') };
   if (data.overview) detail.description = data.overview;

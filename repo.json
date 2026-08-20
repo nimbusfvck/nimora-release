@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.13",
+      "version": "0.6.14",
       "description": "Live and upcoming sports, plus movie and TV catalogs, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -32,6 +32,7 @@
         "h5.aoneroom.com"
       ],
       "releaseNotes": [
+        "Added TMDB title artwork to featured movie and series items, with text fallback when no logo is available.",
         "Validate Cricfy playback manifests before handing them to the native player, filtering upstream 4xx/5xx and invalid HLS/DASH responses.",
         "Added the exact Cricfy playback hosts required by the manifest preflight guard.",
         "Added richer movie and series details, including release, language, status, and availability facts.",
@@ -39,7 +40,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "485be7379edc20a4717c15cfe742b67033971bbef85c67236dea844546bcf3b6"
+      "bundleSha256": "bff91922d28cd618f04310d63fbb7ca42d31faec1901ec749eb4017bbc445a59"
     }
   ]
 }
