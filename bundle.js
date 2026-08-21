@@ -4920,11 +4920,30 @@ function sokujaItemQuery(item) {
   const extra = item && item.extra && typeof item.extra === 'object'
     ? item.extra
     : {};
-  const title = typeof extra.seriesTitle === 'string' && extra.seriesTitle.trim()
-    ? extra.seriesTitle
-    : item && typeof item.title === 'string' ? item.title : '';
-  const season = Number.isInteger(extra.season) ? extra.season : null;
-  const episode = Number.isInteger(extra.episode) ? extra.episode : null;
+  const v2Episode = item && item.episode && typeof item.episode === 'object'
+    ? item.episode
+    : null;
+  const groupId = v2Episode && typeof v2Episode.groupId === 'string'
+    ? v2Episode.groupId
+    : '';
+  const seasonMatch = /(?:^|:)season:(\d+)/i.exec(groupId);
+  const v2Season = seasonMatch == null ? null : Number(seasonMatch[1]);
+  const v2EpisodeNumber = v2Episode && Number.isInteger(v2Episode.position)
+    ? v2Episode.position
+    : null;
+  const v2SeriesTitle = item && typeof item.subtitle === 'string'
+    ? item.subtitle.trim()
+    : '';
+  let title = '';
+  if (typeof extra.seriesTitle === 'string' && extra.seriesTitle.trim()) {
+    title = extra.seriesTitle;
+  } else if (v2SeriesTitle) {
+    title = v2SeriesTitle;
+  } else if (item && typeof item.title === 'string') {
+    title = item.title;
+  }
+  const season = Number.isInteger(extra.season) ? extra.season : v2Season;
+  const episode = Number.isInteger(extra.episode) ? extra.episode : v2EpisodeNumber;
   return { title, season, episode, isEpisode: item && item.kind === 'episode' };
 }
 
