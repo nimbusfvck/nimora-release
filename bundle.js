@@ -2646,6 +2646,8 @@ const TMDB_PROVIDER_ID = 'nimora.tmdb';
 const TMDB_CATALOG_ID = 'discover';
 const TMDB_MOVIE_CATEGORY = 'movie';
 const TMDB_TV_CATEGORY = 'tv';
+const TMDB_WATCH_REGION = globalThis.__tmdbWatchRegion || 'US';
+const TMDB_STREAMING_TYPES = 'flatrate|free|ads';
 
 // --- fetch helpers ---
 
@@ -2912,6 +2914,39 @@ async function fetchDiscover(mediaType, page) {
   return fetchDiscoverPage(mediaType, {}, page);
 }
 
+async function fetchPopularStreamingMediaType(mediaType) {
+  try {
+    const data = await tmdbGetJson(`/discover/${mediaType}`, {
+      include_adult: 'false',
+      watch_region: TMDB_WATCH_REGION,
+      with_watch_monetization_types: TMDB_STREAMING_TYPES,
+      sort_by: 'popularity.desc',
+      page: 1,
+    });
+    const results = Array.isArray(data.results) ? data.results : [];
+    return results.map((result) => ({
+      item: tmdbToMediaItem(result, mediaType),
+      popularity: typeof result.popularity === 'number' ? result.popularity : 0,
+    }));
+  } catch (_) {
+    return [];
+  }
+}
+
+// TMDB's Streaming tab combines movies and TV, ordered by the same popularity
+// score used by the site. Keep one mixed shelf so the app can show the result
+// as a single "Popular Today" section.
+async function fetchPopularStreaming() {
+  const [movies, tv] = await Promise.all([
+    fetchPopularStreamingMediaType('movie'),
+    fetchPopularStreamingMediaType('tv'),
+  ]);
+  return [...movies, ...tv]
+    .sort((a, b) => b.popularity - a.popularity)
+    .slice(0, 25)
+    .map((entry) => entry.item);
+}
+
 // TMDB's `watch_providers` catalog ids — stable across regions, used with
 // `with_watch_providers` to narrow discover to one streamer's US catalog.
 const WATCH_PROVIDER = {
@@ -2954,6 +2989,7 @@ const TMDB_ALL_CATEGORY = 'all';
 const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
+  { id: 'popular_today', name: 'Popular Today', fetch: fetchPopularStreaming },
   { id: 'top_rated_movie', name: 'Top Rated Movie', fetch: () => fetchTopRated('movie') },
   { id: 'top_rated_tv', name: 'Top Rated TV', fetch: () => fetchTopRated('tv') },
   { id: 'oscar_nominees', name: 'Oscar Nominees', fetch: () => fetchSheguList('oscar-nominees-best-picture') },

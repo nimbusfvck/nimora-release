@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.20",
+      "version": "0.6.21",
       "description": "Live and upcoming sports, plus movie and TV catalogs, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -33,6 +33,7 @@
         "h5.aoneroom.com"
       ],
       "releaseNotes": [
+        "Added a Popular Today shelf with streaming titles from TMDB.",
         "Added similar movie and series recommendations to detail metadata.",
         "Added YouTube preview thumbnails to Shegu trailer metadata when TMDB provides one.",
         "Added optional Shegu preview streams for autoplay in the detail header.",
@@ -47,7 +48,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "7dd3006e9d505134151fc7ffbde7f748b16ea2848e3592821354046722af0bcd"
+      "bundleSha256": "676c56e3a055d1408faf26cadde232b9f720d3ef21263db3f0c97a4c3bb487bc"
     }
   ]
 }
