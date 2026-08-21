@@ -2,9 +2,9 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "0.6.22",
+  "version": "0.6.23",
   "runtime": "js",
-  "description": "Live and upcoming sports, plus movie and TV catalogs, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
+  "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
   "entry": "bundle.js",
   "categories": [
@@ -104,6 +104,13 @@
       ]
     },
     {
+      "id": "nimora.sokuja",
+      "name": "Nova",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
       "id": "nimora.shegu",
       "roles": [
         "subtitles"
@@ -135,7 +142,9 @@
       "enc-dec.app",
       "streamdata.vaplayer.ru",
       "h5-api.aoneroom.com",
-      "h5.aoneroom.com"
+      "h5.aoneroom.com",
+      "x6.sokuja.uk",
+      "global.nontony.uk"
     ]
   }
 }

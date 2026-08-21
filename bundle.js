@@ -2949,9 +2949,43 @@ async function fetchPopularStreaming() {
     .map((entry) => entry.item);
 }
 
+async function fetchTopAnimeMediaType(mediaType) {
+  const data = await tmdbGetJson(`/discover/${mediaType}`, {
+    include_adult: 'false',
+    watch_region: TMDB_WATCH_REGION,
+    with_watch_providers: WATCH_PROVIDER.crunchyroll,
+    with_watch_monetization_types: TMDB_STREAMING_TYPES,
+    with_genres: '16',
+    with_origin_country: 'JP',
+    sort_by: 'popularity.desc',
+    page: 1,
+  });
+  const results = Array.isArray(data.results) ? data.results : [];
+  return results.map((result) => ({
+    item: tmdbToMediaItem(result, mediaType),
+    popularity: typeof result.popularity === 'number' ? result.popularity : 0,
+  }));
+}
+
+// Keep anime in the same TMDB-backed catalog as the other Home shelves. The
+// Japanese origin and Crunchyroll availability filters avoid mixing general
+// animation into this section, while the source provider remains responsible
+// for playback.
+async function fetchTopAnime() {
+  const [movies, tv] = await Promise.all([
+    fetchTopAnimeMediaType('movie'),
+    fetchTopAnimeMediaType('tv'),
+  ]);
+  return [...movies, ...tv]
+    .sort((a, b) => b.popularity - a.popularity)
+    .slice(0, 25)
+    .map((entry) => entry.item);
+}
+
 // TMDB's `watch_providers` catalog ids — stable across regions, used with
 // `with_watch_providers` to narrow discover to one streamer's US catalog.
 const WATCH_PROVIDER = {
+  crunchyroll: 283,
   netflix: 8,
   hulu: 15,
   disneyPlus: 337,
@@ -2992,6 +3026,7 @@ const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
   { id: 'popular_today', name: 'Popular Today', fetch: fetchPopularStreaming },
+  { id: 'top_anime', name: 'Top Anime', fetch: fetchTopAnime },
   { id: 'top_rated_movie', name: 'Top Rated Movie', fetch: () => fetchTopRated('movie') },
   { id: 'top_rated_tv', name: 'Top Rated TV', fetch: () => fetchTopRated('tv') },
   { id: 'oscar_nominees', name: 'Oscar Nominees', fetch: () => fetchSheguList('oscar-nominees-best-picture') },
@@ -4687,3 +4722,323 @@ globalThis.__streamProviders.push({
   sources: movieboxListSources,
   resolve: (sourceId) => movieboxResolveSource(sourceId),
 });
+
+// Sokuja anime streams, exposed as a stream provider for Nimora's VOD items.
+//
+// Sokuja's CloudStream implementation delegates mirror extraction to the
+// CloudStream extractor framework. The app has no extractor runtime, so this
+// provider follows Sokuja's own JSON mirror endpoint and only returns mirrors
+// that already contain a direct media URL.
+
+const SOKUJA_BASE = globalThis.__sokujaBaseUrl || 'https://x6.sokuja.uk';
+const SOKUJA_PROVIDER_KEY = 'sokuja';
+const SOKUJA_PROVIDER_ID = 'nimora.sokuja';
+const SOKUJA_USER_AGENT =
+  'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
+
+function sokujaHeaders(referer) {
+  return {
+    Accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
+    Referer: referer || `${SOKUJA_BASE}/`,
+    'User-Agent': SOKUJA_USER_AGENT,
+  };
+}
+
+function sokujaUrl(path) {
+  if (typeof path !== 'string' || path.length === 0) return null;
+  if (/^https?:\/\//i.test(path)) return path;
+  if (path.startsWith('/')) return `${SOKUJA_BASE}${path}`;
+  return `${SOKUJA_BASE}/${path}`;
+}
+
+function sokujaDecodeHtml(value) {
+  return String(value || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sokujaAttribute(attributes, name) {
+  const pattern = new RegExp(
+    `${name}\\s*=\\s*[\\\"']([^\\\"']+)[\\\"']`,
+    'i',
+  );
+  const match = pattern.exec(attributes || '');
+  return match == null ? null : match[1];
+}
+
+function sokujaTagText(html, tag) {
+  const match = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i').exec(html);
+  return match == null ? '' : sokujaDecodeHtml(match[1]);
+}
+
+function sokujaNormalizeTitle(title) {
+  return String(title || '')
+    .replace(/\s*subtitle\s+indonesia\s*$/i, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function sokujaSearchResults(html) {
+  const results = [];
+  const cardPattern =
+    /<a\b([^>]*class\s*=\s*[\"'][^\"']*\bgroup\b[^\"']*[\"'][^>]*)>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = cardPattern.exec(html || '')) != null) {
+    const href = sokujaUrl(sokujaAttribute(match[1], 'href'));
+    if (href == null) continue;
+    const card = match[2];
+    const title = sokujaTagText(card, 'h3') || sokujaTagText(card, 'p');
+    if (!title) continue;
+    const imageTag = /<img\b([^>]*)>/i.exec(card);
+    const poster = imageTag == null
+      ? null
+      : sokujaUrl(
+          sokujaAttribute(imageTag[1], 'src') ||
+            sokujaAttribute(imageTag[1], 'data-src'),
+        );
+    results.push({ title, url: href, poster });
+  }
+  return results;
+}
+
+function sokujaSearchPick(results, title, season) {
+  const wanted = sokujaNormalizeTitle(title);
+  if (!wanted) return null;
+  const candidates = results
+    .map((result, index) => {
+      const normalized = sokujaNormalizeTitle(result.title);
+      if (!normalized) return null;
+      const exact = normalized === wanted;
+      const startsWith = normalized.startsWith(wanted);
+      if (!exact && !startsWith) return null;
+      const seasonMatch = season != null &&
+        new RegExp(`(?:season\\s*${season}|\\bs${season}\\b)`, 'i')
+          .test(result.title);
+      return {
+        result,
+        score: (exact ? 0 : 10) + (seasonMatch ? -2 : 0) + index / 1000,
+      };
+    })
+    .filter((entry) => entry != null)
+    .sort((a, b) => a.score - b.score);
+  return candidates.length === 0 ? null : candidates[0].result;
+}
+
+async function sokujaGet(url, options) {
+  try {
+    const response = await fetch(url, options);
+    if (response.status < 200 || response.status >= 300) return null;
+    return response;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function sokujaFindAnime(title, season) {
+  const searchUrl =
+    `${SOKUJA_BASE}/?s=${encodeURIComponent(title)}&page=1`;
+  const response = await sokujaGet(searchUrl, { headers: sokujaHeaders(searchUrl) });
+  if (response == null) return null;
+  return sokujaSearchPick(sokujaSearchResults(response.body), title, season);
+}
+
+// Next.js renders the episode list inside an escaped JSON payload. The same
+// shape is also present in the older HTML used by the original extension.
+function sokujaEpisodes(html) {
+  const normalized = String(html || '')
+    .replace(/\\"/g, '"')
+    .replace(/\\u0026/g, '&');
+  const match = /"episodes"\s*:\s*\[([\s\S]*?)\]\s*,\s*"episodesTotal"/.exec(normalized);
+  if (match == null) return [];
+  try {
+    const episodes = JSON.parse(`[${match[1]}]`);
+    return Array.isArray(episodes) ? episodes : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function sokujaEpisodeUrl(html, episodeNumber) {
+  const wanted = Number(episodeNumber);
+  if (!Number.isInteger(wanted) || wanted < 1) return null;
+  const episodes = sokujaEpisodes(html);
+  const episode = episodes.find(
+    (entry) => Number(entry && entry.episodeNumber) === wanted,
+  );
+  if (episode && typeof episode.slug === 'string') return sokujaUrl(`/${episode.slug}/`);
+
+  const pattern = new RegExp(
+    `href=[\"']([^\"']*episode-${wanted}[^\"']*)[\"']`,
+    'i',
+  );
+  const fallback = pattern.exec(html || '');
+  return fallback == null ? null : sokujaUrl(fallback[1]);
+}
+
+function sokujaMovieUrl(html) {
+  const pattern = /href=[\"']([^\"']+)[\"']/gi;
+  let match;
+  while ((match = pattern.exec(html || '')) != null) {
+    if (/episode-/i.test(match[1])) return sokujaUrl(match[1]);
+  }
+  return null;
+}
+
+function sokujaEpisodeId(html) {
+  const normalized = String(html || '').replace(/\\"/g, '"');
+  const match = /episodeId"\s*:\s*(\d+)/i.exec(normalized);
+  return match == null ? null : match[1];
+}
+
+function encodeSokujaSource(payload) {
+  return host.codec.textToBase64(JSON.stringify(payload))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function decodeSokujaSource(encoded) {
+  let base64 = String(encoded || '').replace(/-/g, '+').replace(/_/g, '/');
+  const remainder = base64.length % 4;
+  if (remainder !== 0) base64 += '='.repeat(4 - remainder);
+  try {
+    return JSON.parse(host.codec.base64ToText(base64));
+  } catch (_) {
+    return null;
+  }
+}
+
+function sokujaItemQuery(item) {
+  const extra = item && item.extra && typeof item.extra === 'object'
+    ? item.extra
+    : {};
+  const title = typeof extra.seriesTitle === 'string' && extra.seriesTitle.trim()
+    ? extra.seriesTitle
+    : item && typeof item.title === 'string' ? item.title : '';
+  const season = Number.isInteger(extra.season) ? extra.season : null;
+  const episode = Number.isInteger(extra.episode) ? extra.episode : null;
+  return { title, season, episode, isEpisode: item && item.kind === 'episode' };
+}
+
+async function sokujaSources(args) {
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && enabled.indexOf(SOKUJA_PROVIDER_ID) === -1) {
+    return { sources: [] };
+  }
+  const item = args && args.item;
+  if (!item || (item.kind !== 'episode' && item.kind !== 'video')) {
+    return { sources: [] };
+  }
+
+  const query = sokujaItemQuery(item);
+  if (!query.title) return { sources: [] };
+  const result = await sokujaFindAnime(query.title, query.season);
+  if (result == null) return { sources: [] };
+
+  const detailResponse = await sokujaGet(
+    result.url,
+    { headers: sokujaHeaders(`${SOKUJA_BASE}/`) },
+  );
+  if (detailResponse == null) return { sources: [] };
+  const watchUrl = query.isEpisode
+    ? sokujaEpisodeUrl(detailResponse.body, query.episode)
+    : sokujaMovieUrl(detailResponse.body) || result.url;
+  if (watchUrl == null) return { sources: [] };
+
+  const episodeResponse = await sokujaGet(
+    watchUrl,
+    { headers: sokujaHeaders(result.url) },
+  );
+  if (episodeResponse == null) return { sources: [] };
+  const episodeId = sokujaEpisodeId(episodeResponse.body);
+  if (episodeId == null) return { sources: [] };
+
+  const mirrorsUrl = `${SOKUJA_BASE}/api/video-mirrors/?e=${encodeURIComponent(episodeId)}`;
+  const mirrorsResponse = await sokujaGet(
+    mirrorsUrl,
+    { headers: sokujaHeaders(watchUrl) },
+  );
+  if (mirrorsResponse == null) return { sources: [] };
+  let mirrors;
+  try {
+    const data = JSON.parse(mirrorsResponse.body);
+    mirrors = Array.isArray(data.mirrors) ? data.mirrors : [];
+  } catch (_) {
+    return { sources: [] };
+  }
+
+  return {
+    sources: mirrors
+      .filter((mirror) => mirror && typeof mirror.embedUrl === 'string')
+      .filter((mirror) => /^https?:\/\//i.test(mirror.embedUrl))
+      .map((mirror, index) => {
+        const id = `${SOKUJA_PROVIDER_KEY}:${encodeSokujaSource({
+          u: mirror.embedUrl,
+          q: mirror.quality || '',
+          s: index,
+        })}`;
+        return {
+          id,
+          label: sourceAlias(id, index),
+          provider: 'Nimora',
+          providerId: SOKUJA_PROVIDER_ID,
+        };
+      }),
+  };
+}
+
+async function sokujaResolveSource(sourceId) {
+  const prefix = `${SOKUJA_PROVIDER_KEY}:`;
+  if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) {
+    throw new Error(`Invalid Sokuja sourceId: ${sourceId}`);
+  }
+  const payload = decodeSokujaSource(sourceId.slice(prefix.length));
+  if (!payload || typeof payload.u !== 'string' || !/^https?:\/\//i.test(payload.u)) {
+    throw new Error('Malformed Sokuja source id');
+  }
+  const format = /\.m3u8(?:$|\?)/i.test(payload.u) ? 'hls' : 'other';
+  return {
+    url: payload.u,
+    format,
+    headers: sokujaHeaders(`${SOKUJA_BASE}/`),
+    ...(payload.q ? { label: `Sokuja ${payload.q}` } : {}),
+  };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: SOKUJA_PROVIDER_KEY,
+  sources: sokujaSources,
+  resolve: (sourceId) => sokujaResolveSource(sourceId),
+});
+
+globalThis.__extension = globalThis.__extension || {};
+if (!globalThis.__extension.sources) {
+  globalThis.__extension.sources = async (args) => {
+    const perProvider = await Promise.all(
+      globalThis.__streamProviders.map((provider) =>
+        provider.sources(args).catch(() => ({ sources: [] })),
+      ),
+    );
+    return { sources: perProvider.flatMap((result) => result.sources) };
+  };
+  globalThis.__extension.resolve = async (args) => {
+    const sourceId = args.sourceId;
+    const separator = sourceId.indexOf(':');
+    if (separator < 0) throw new Error(`Malformed source id: ${sourceId}`);
+    const providerKey = sourceId.slice(0, separator);
+    const provider = globalThis.__streamProviders.find(
+      (entry) => entry.providerKey === providerKey,
+    );
+    if (!provider) throw new Error(`No stream provider registered for "${providerKey}"`);
+    return provider.resolve(sourceId);
+  };
+}
