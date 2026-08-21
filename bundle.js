@@ -2699,6 +2699,12 @@ async function sheguVideoTrailer(tmdbId, type) {
   }
 }
 
+function sheguPreviewWithThumbnail(preview, trailers) {
+  if (preview == null) return null;
+  const thumbnail = trailers.find((trailer) => trailer.thumbnail)?.thumbnail;
+  return thumbnail == null ? preview : { ...preview, thumbnail };
+}
+
 // --- ref id ---
 
 function tmdbRefId(mediaType, id) {
@@ -2803,7 +2809,7 @@ function tmdbTrailers(data) {
       url,
       site: video.site,
       ...(String(video.site || '').toLowerCase() === 'youtube' && video.key
-        ? { thumbnail: { url: `https://img.youtube.com/vi/${encodeURIComponent(video.key)}/hqdefault.jpg` } }
+        ? { thumbnail: { url: `https://img.youtube.com/vi/${encodeURIComponent(video.key)}/mqdefault.jpg` } }
         : {}),
     }));
 }
@@ -3169,7 +3175,10 @@ async function tmdbMovieMeta(tmdbId) {
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;
   const trailers = tmdbTrailers(data);
-  const preview = await sheguVideoTrailer(tmdbId, 'movie');
+  const preview = sheguPreviewWithThumbnail(
+    await sheguVideoTrailer(tmdbId, 'movie'),
+    trailers,
+  );
   if (preview != null) trailers.unshift(preview);
   if (trailers.length > 0) detail.trailers = trailers;
   return detail;
@@ -3190,7 +3199,10 @@ async function tmdbTvMeta(tmdbId) {
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;
   const trailers = tmdbTrailers(data);
-  const preview = await sheguVideoTrailer(tmdbId, 'tv');
+  const preview = sheguPreviewWithThumbnail(
+    await sheguVideoTrailer(tmdbId, 'tv'),
+    trailers,
+  );
   if (preview != null) trailers.unshift(preview);
   if (trailers.length > 0) detail.trailers = trailers;
   const seasons = await tmdbSeasonsOf(tmdbId, data);
