@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.23",
+      "version": "0.6.24",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -32,9 +32,11 @@
         "h5-api.aoneroom.com",
         "h5.aoneroom.com",
         "x6.sokuja.uk",
-        "global.nontony.uk"
+        "global.nontony.uk",
+        "storages.sokuja.uk"
       ],
       "releaseNotes": [
+        "Added the current Sokuja storage host used by anime mirrors.",
         "Added Sokuja anime mirrors as the Nova stream provider.",
         "Added a Top Anime shelf to the Home catalog using Crunchyroll availability.",
         "Limited Popular Today to paid streaming subscriptions from TMDB.",
