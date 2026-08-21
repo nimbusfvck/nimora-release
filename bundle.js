@@ -3160,6 +3160,25 @@ async function tmdbSeasonsOf(tvId, showData) {
   );
 }
 
+// Similar results are optional metadata. Keep the detail response usable when
+// TMDB's recommendation endpoint is unavailable or returns an empty page.
+async function tmdbSimilarOf(tmdbId, mediaType) {
+  try {
+    const data = await tmdbGetJson(`/${mediaType}/${tmdbId}/similar`, {
+      page: 1,
+      include_adult: 'false',
+    });
+    const results = Array.isArray(data.results) ? data.results : [];
+    const currentRef = tmdbRefId(mediaType, tmdbId);
+    return results
+      .map((result) => tmdbToMediaItem(result, mediaType))
+      .filter((item) => item.ref.id !== currentRef)
+      .slice(0, 10);
+  } catch (_) {
+    return [];
+  }
+}
+
 async function tmdbMovieMeta(tmdbId) {
   const data = await tmdbGetJson(`/movie/${tmdbId}`, {
     append_to_response: 'credits,release_dates,images,videos',
@@ -3175,12 +3194,14 @@ async function tmdbMovieMeta(tmdbId) {
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;
   const trailers = tmdbTrailers(data);
-  const preview = sheguPreviewWithThumbnail(
-    await sheguVideoTrailer(tmdbId, 'movie'),
-    trailers,
-  );
+  const [previewResponse, recommendations] = await Promise.all([
+    sheguVideoTrailer(tmdbId, 'movie'),
+    tmdbSimilarOf(tmdbId, 'movie'),
+  ]);
+  const preview = sheguPreviewWithThumbnail(previewResponse, trailers);
   if (preview != null) trailers.unshift(preview);
   if (trailers.length > 0) detail.trailers = trailers;
+  if (recommendations.length > 0) detail.recommendations = recommendations;
   return detail;
 }
 
@@ -3199,12 +3220,14 @@ async function tmdbTvMeta(tmdbId) {
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;
   const trailers = tmdbTrailers(data);
-  const preview = sheguPreviewWithThumbnail(
-    await sheguVideoTrailer(tmdbId, 'tv'),
-    trailers,
-  );
+  const [previewResponse, recommendations] = await Promise.all([
+    sheguVideoTrailer(tmdbId, 'tv'),
+    tmdbSimilarOf(tmdbId, 'tv'),
+  ]);
+  const preview = sheguPreviewWithThumbnail(previewResponse, trailers);
   if (preview != null) trailers.unshift(preview);
   if (trailers.length > 0) detail.trailers = trailers;
+  if (recommendations.length > 0) detail.recommendations = recommendations;
   const seasons = await tmdbSeasonsOf(tmdbId, data);
   if (seasons.length > 0) {
     detail.episodeGuide = { groups: seasons };
