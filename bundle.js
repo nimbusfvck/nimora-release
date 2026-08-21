@@ -2647,7 +2647,9 @@ const TMDB_CATALOG_ID = 'discover';
 const TMDB_MOVIE_CATEGORY = 'movie';
 const TMDB_TV_CATEGORY = 'tv';
 const TMDB_WATCH_REGION = globalThis.__tmdbWatchRegion || 'US';
-const TMDB_STREAMING_TYPES = 'flatrate|free|ads';
+// Popular Today follows TMDB's paid streaming tab. Rent and purchase offers
+// are separate categories on TMDB and are intentionally not included here.
+const TMDB_STREAMING_TYPES = 'flatrate';
 
 // --- fetch helpers ---
 
@@ -2933,9 +2935,9 @@ async function fetchPopularStreamingMediaType(mediaType) {
   }
 }
 
-// TMDB's Streaming tab combines movies and TV, ordered by the same popularity
-// score used by the site. Keep one mixed shelf so the app can show the result
-// as a single "Popular Today" section.
+// Combine paid movie and TV streaming results into one shelf. The public API
+// exposes the availability filter, while the website's private panel owns its
+// own ranking and may therefore show a different order.
 async function fetchPopularStreaming() {
   const [movies, tv] = await Promise.all([
     fetchPopularStreamingMediaType('movie'),
