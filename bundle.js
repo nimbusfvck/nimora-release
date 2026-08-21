@@ -2639,6 +2639,7 @@ if (!globalThis.__extension.sources) {
 const TMDB_BASE = globalThis.__tmdbBaseUrl || 'https://api.themoviedb.org/3';
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
 const SHEGU_LISTS_BASE = globalThis.__sheguListsBaseUrl || 'https://lists.shegu.st/joy';
+const SHEGU_TRAILER_BASE = globalThis.__sheguTrailerBaseUrl || 'https://trailer.shegu.st';
 const TMDB_API_KEY = '8476a7ab80ad76f0936744df0430e67c';
 
 const TMDB_PROVIDER_ID = 'nimora.tmdb';
@@ -2670,6 +2671,32 @@ async function sheguGetJson(slug, limit) {
     throw new Error(`Request to ${slug} failed: ${response.status}`);
   }
   return JSON.parse(response.body);
+}
+
+function sheguVideoTrailerFromResponse(data) {
+  if (data == null || typeof data !== 'object') return null;
+  const url = typeof data.url === 'string' ? data.url.trim() : '';
+  const mimeType = typeof data.mime === 'string' ? data.mime.trim() : '';
+  if ((!url.startsWith('http://') && !url.startsWith('https://')) ||
+      !mimeType.toLowerCase().startsWith('video/')) return null;
+  return {
+    title: 'Trailer',
+    url,
+    site: data.source || null,
+    mimeType,
+  };
+}
+
+async function sheguVideoTrailer(tmdbId, type) {
+  try {
+    const url = `${SHEGU_TRAILER_BASE}/trailer?tmdb=${encodeURIComponent(tmdbId)}&type=${encodeURIComponent(type)}`;
+    const response = await fetch(url);
+    if (response.status < 200 || response.status >= 300) return null;
+    return sheguVideoTrailerFromResponse(JSON.parse(response.body));
+  } catch (_) {
+    // Trailer previews are optional; a provider outage must not hide metadata.
+    return null;
+  }
 }
 
 // --- ref id ---
@@ -2733,6 +2760,52 @@ function tmdbTitleLogo(images) {
   return logos.find((logo) => logo.file_path && logo.iso_639_1 === 'en')
     || logos.find((logo) => logo.file_path && logo.iso_639_1 == null)
     || null;
+}
+
+function tmdbTrailerUrl(video) {
+  const site = String(video.site || '').toLowerCase();
+  const key = String(video.key || '').trim();
+  if (key.length === 0) return null;
+  if (site === 'youtube') {
+    return `https://www.youtube.com/watch?v=${encodeURIComponent(key)}`;
+  }
+  if (site === 'vimeo') return `https://vimeo.com/${encodeURIComponent(key)}`;
+  return null;
+}
+
+// Keep only preview videos the app can open externally. Official trailers are
+// preferred, then teasers, while the upstream publication date breaks ties.
+function tmdbTrailers(data) {
+  const videos = data && data.videos && Array.isArray(data.videos.results)
+    ? data.videos.results
+    : [];
+  const typeRank = { Trailer: 0, Teaser: 1, Clip: 2, Featurette: 3 };
+  return videos
+    .map((video, index) => ({ video, index, url: tmdbTrailerUrl(video) }))
+    .filter(({ video, url }) =>
+      url != null && Object.prototype.hasOwnProperty.call(typeRank, video.type),
+    )
+    .sort((a, b) => {
+      const aOfficial = a.video.official === true ? 0 : 1;
+      const bOfficial = b.video.official === true ? 0 : 1;
+      if (aOfficial !== bOfficial) return aOfficial - bOfficial;
+      const aType = typeRank[a.video.type];
+      const bType = typeRank[b.video.type];
+      if (aType !== bType) return aType - bType;
+      const aDate = Date.parse(a.video.published_at || '') || 0;
+      const bDate = Date.parse(b.video.published_at || '') || 0;
+      if (aDate !== bDate) return bDate - aDate;
+      return a.index - b.index;
+    })
+    .slice(0, 3)
+    .map(({ video, url }) => ({
+      title: video.name || video.type || 'Trailer',
+      url,
+      site: video.site,
+      ...(String(video.site || '').toLowerCase() === 'youtube' && video.key
+        ? { thumbnail: { url: `https://img.youtube.com/vi/${encodeURIComponent(video.key)}/hqdefault.jpg` } }
+        : {}),
+    }));
 }
 
 // shegu.st's own `ratings.tmdb` is `{value, votes, scale, url}`. Normalize
@@ -3083,8 +3156,9 @@ async function tmdbSeasonsOf(tvId, showData) {
 
 async function tmdbMovieMeta(tmdbId) {
   const data = await tmdbGetJson(`/movie/${tmdbId}`, {
-    append_to_response: 'credits,release_dates,images',
+    append_to_response: 'credits,release_dates,images,videos',
     include_image_language: 'en,null',
+    include_video_language: 'en,null',
   });
   const detail = { item: tmdbToMediaItem(data, 'movie') };
   if (data.overview) detail.description = data.overview;
@@ -3094,13 +3168,18 @@ async function tmdbMovieMeta(tmdbId) {
   if (facts.length > 0) detail.facts = facts;
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;
+  const trailers = tmdbTrailers(data);
+  const preview = await sheguVideoTrailer(tmdbId, 'movie');
+  if (preview != null) trailers.unshift(preview);
+  if (trailers.length > 0) detail.trailers = trailers;
   return detail;
 }
 
 async function tmdbTvMeta(tmdbId) {
   const data = await tmdbGetJson(`/tv/${tmdbId}`, {
-    append_to_response: 'credits,content_ratings,images',
+    append_to_response: 'credits,content_ratings,images,videos',
     include_image_language: 'en,null',
+    include_video_language: 'en,null',
   });
   const detail = { item: tmdbToMediaItem(data, 'tv') };
   if (data.overview) detail.description = data.overview;
@@ -3110,6 +3189,10 @@ async function tmdbTvMeta(tmdbId) {
   if (facts.length > 0) detail.facts = facts;
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;
+  const trailers = tmdbTrailers(data);
+  const preview = await sheguVideoTrailer(tmdbId, 'tv');
+  if (preview != null) trailers.unshift(preview);
+  if (trailers.length > 0) detail.trailers = trailers;
   const seasons = await tmdbSeasonsOf(tmdbId, data);
   if (seasons.length > 0) {
     detail.episodeGuide = { groups: seasons };

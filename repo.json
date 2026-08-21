@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.16",
+      "version": "0.6.18",
       "description": "Live and upcoming sports, plus movie and TV catalogs, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -23,6 +23,7 @@
         "api.themoviedb.org",
         "image.tmdb.org",
         "lists.shegu.st",
+        "trailer.shegu.st",
         "vidrock.ru",
         "subtitles.shegu.st",
         "api.speedracelight.com",
@@ -32,6 +33,8 @@
         "h5.aoneroom.com"
       ],
       "releaseNotes": [
+        "Added optional Shegu preview streams for autoplay in the detail header.",
+        "Added official TMDB trailers to movie and series detail metadata.",
         "Excluded Baseball events from the sports catalog and featured feed.",
         "Prioritized fixtures involving the configured top football clubs while preserving FotMob's order for the rest of the schedule.",
         "Added TMDB title artwork to featured movie and series items, with text fallback when no logo is available.",
@@ -42,7 +45,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "a61049cf7b38ce08bad218939430e7d0fca50aa2a96580d1d22c69e53481807b"
+      "bundleSha256": "ab2855f180285364579811797495282332e079ff6b245c44f4ebcae2302b47de"
     }
   ]
 }
