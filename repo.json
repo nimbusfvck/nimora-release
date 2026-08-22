@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.25",
+      "version": "0.6.26",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -33,9 +33,11 @@
         "h5.aoneroom.com",
         "x6.sokuja.uk",
         "global.nontony.uk",
-        "storages.sokuja.uk"
+        "storages.sokuja.uk",
+        "streamtvapp.top"
       ],
       "releaseNotes": [
+        "Added SportzX as a live sports stream provider.",
         "Fixed anime source matching for protocol-v2 episode items.",
         "Added the current Sokuja storage host used by anime mirrors.",
         "Added Sokuja anime mirrors as the Nova stream provider.",
@@ -56,7 +58,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "be28d40464ea4caf087497df3c10b4f2ff584256f22504789f9641e6f7d20aaa"
+      "bundleSha256": "82b8ed0924089cb3395306f12beb1020633f65d8484339e6709f1bfac66cd426"
     }
   ]
 }

@@ -2625,6 +2625,150 @@ if (!globalThis.__extension.sources) {
   };
 }
 
+// SportzX live-sport provider. The upstream wraps its JSON in the native
+// SportzX v2 envelope: version(2), IV, AES-CBC mask, and HMAC-SHA256 tag.
+// This is a byte-for-byte port of DataHelper.help in libnative-lib.so.
+
+const SPORTZX_PROVIDER_KEY = 'sportzx';
+const SPORTZX_PROVIDER_ID = 'nimora.sportzx';
+const SPORTZX_API = globalThis.__sportzxApiBaseUrl || 'https://streamtvapp.top/';
+const SPORTZX_CERT = '1676ec7db4771b0d826d70369b579684b182d2c0133be041bdd55f5d6d79a98b';
+
+function sportzxTextB64(value) { return host.codec.textToBase64(value); }
+function sportzxHexB64(hex) { return host.codec.hexToBase64(hex); }
+function sportzxB64Hex(value) { return host.codec.base64ToHex(value); }
+
+function sportzxUrlB64(value) {
+  let out = String(value).trim().replace(/-/g, '+').replace(/_/g, '/');
+  while (out.length % 4 !== 0) out += '=';
+  return out;
+}
+
+function sportzxXorHex(left, right) {
+  let out = '';
+  for (let i = 0; i < left.length; i += 2) {
+    const a = parseInt(left.slice(i, i + 2), 16);
+    const b = parseInt(right.slice(i, i + 2), 16);
+    out += (a ^ b).toString(16).padStart(2, '0');
+  }
+  return out;
+}
+
+// Host crypto intentionally exposes SHA-256 but not HMAC. HMAC is compact
+// enough to express safely over its base64 byte primitives.
+function sportzxHmac(keyB64, dataB64) {
+  let keyHex = sportzxB64Hex(keyB64);
+  if (keyHex.length > 128) keyHex = sportzxB64Hex(host.crypto.sha256(keyB64));
+  keyHex = keyHex.padEnd(128, '0');
+  const ipad = '36'.repeat(64);
+  const opad = '5c'.repeat(64);
+  const inner = host.crypto.sha256(sportzxHexB64(sportzxXorHex(keyHex, ipad) + sportzxB64Hex(dataB64)));
+  return host.crypto.sha256(sportzxHexB64(sportzxXorHex(keyHex, opad) + sportzxB64Hex(inner)));
+}
+
+function sportzxBytesXorRotate(cipherB64, maskB64) {
+  const cipher = sportzxB64Hex(cipherB64);
+  const mask = sportzxB64Hex(maskB64);
+  let out = '';
+  for (let i = 0; i < mask.length; i += 2) {
+    const m = parseInt(mask.slice(i, i + 2), 16);
+    const c = parseInt(cipher.slice(i, i + 2), 16);
+    const rotated = ((m >>> 3) | (m << 5)) & 0xff;
+    out += (rotated ^ c).toString(16).padStart(2, '0');
+  }
+  return sportzxHexB64(out);
+}
+
+function sportzxDecodeEnvelope(raw) {
+  const outer = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  const wire = sportzxUrlB64(outer && outer.data ? outer.data : raw);
+  const hex = sportzxB64Hex(wire);
+  if (hex.length < 98 || hex.slice(0, 2) !== '02') throw new Error('Unsupported SportzX envelope');
+  const iv = sportzxHexB64(hex.slice(2, 34));
+  const tag = sportzxHexB64(hex.slice(-64));
+  const signed = sportzxHexB64(hex.slice(0, -64));
+  const cipher = sportzxHexB64(hex.slice(34, -64));
+  const certificate = sportzxHexB64(SPORTZX_CERT);
+  const prk = sportzxHmac(sportzxTextB64('sportzx/v2/prk'), certificate);
+  const encKey = sportzxHmac(prk, sportzxTextB64('enc'));
+  const macKey = sportzxHmac(prk, sportzxTextB64('mac'));
+  if (sportzxHmac(macKey, signed) !== tag) throw new Error('SportzX envelope authentication failed');
+  const mask = host.crypto.aesCbcDecrypt(encKey, iv, cipher);
+  if (mask === null) throw new Error('SportzX envelope decryption failed');
+  return host.codec.base64ToText(sportzxBytesXorRotate(cipher, mask));
+}
+
+async function sportzxFetchJson(path) {
+  const response = await host.fetch(`${SPORTZX_API}${path}`, { headers: { Accept: 'application/json' } });
+  return JSON.parse(sportzxDecodeEnvelope(response.body));
+}
+
+// The channel schema has changed several times. Keep field selection narrow
+// but tolerant: only candidates with a concrete http(s) URL become sources.
+function sportzxCollectLinks(value, out) {
+  if (!value) return;
+  if (typeof value === 'string') {
+    if (/^https?:\/\//i.test(value)) out.push({ url: value, name: 'SportzX Live' });
+    return;
+  }
+  if (Array.isArray(value)) { for (const item of value) sportzxCollectLinks(item, out); return; }
+  if (typeof value !== 'object') return;
+  const url = String(value.url || value.link || value.stream_url || value.stream || '').trim();
+  if (/^https?:\/\//i.test(url)) out.push({ url, name: String(value.name || value.title || value.server || 'SportzX Live') });
+  for (const key of ['servers', 'channels', 'sources', 'links', 'streams']) sportzxCollectLinks(value[key], out);
+}
+
+let sportzxEventsMemo = null;
+async function sportzxEvents() {
+  if (sportzxEventsMemo) return sportzxEventsMemo;
+  sportzxEventsMemo = sportzxFetchJson('events.json');
+  return sportzxEventsMemo;
+}
+
+function sportzxEventList(payload) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of ['events', 'data', 'matches', 'results']) if (Array.isArray(payload && payload[key])) return payload[key];
+  return [];
+}
+
+function sportzxEventName(event) {
+  return String(event.title || event.name || event.event_name || `${event.home_team || event.team1 || ''} ${event.away_team || event.team2 || ''}`).trim();
+}
+
+async function sportzxSources(args) {
+  const enabled = args.enabledProviders;
+  if (enabled != null && enabled.indexOf(SPORTZX_PROVIDER_ID) === -1) return { sources: [] };
+  const item = args.item;
+  const query = [item.title, item.name, ...(item.participants || []).map((p) => p.name)].filter(Boolean).join(' ').toLowerCase();
+  if (!query) return { sources: [] };
+  let events;
+  try { events = sportzxEventList(await sportzxEvents()); } catch (_) { return { sources: [] }; }
+  const event = events.find((candidate) => {
+    const name = sportzxEventName(candidate).toLowerCase();
+    return name && (query.includes(name) || name.split(/\s+vs?\.?\s+/).every((part) => part.length < 3 || query.includes(part)));
+  });
+  if (!event) return { sources: [] };
+  const links = [];
+  sportzxCollectLinks(event, links);
+  const unique = new Map();
+  for (const link of links) unique.set(`${link.name}|${link.url}`, link);
+  return { sources: [...unique.values()].map((link, index) => ({
+    id: `${SPORTZX_PROVIDER_KEY}:${sportzxTextB64(JSON.stringify(link)).replace(/=+$/g, '')}`,
+    label: sourceAlias(`${SPORTZX_PROVIDER_KEY}:${link.name}`),
+    provider: 'Nimora', providerId: SPORTZX_PROVIDER_ID,
+  })) };
+}
+
+async function sportzxResolve(sourceId) {
+  const value = sourceId.slice(`${SPORTZX_PROVIDER_KEY}:`.length);
+  const link = JSON.parse(host.codec.base64ToText(sportzxUrlB64(value)));
+  return { url: link.url, headers: {}, format: /\.mpd(?:$|\?)/i.test(link.url) ? 'dash' : 'hls', label: link.name };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({ providerKey: SPORTZX_PROVIDER_KEY, sources: sportzxSources, resolve: sportzxResolve });
+globalThis.sportzx = { decodeEnvelope: sportzxDecodeEnvelope, hmac: sportzxHmac };
+
 // TMDB + shegu.st curated-lists catalog, as a JS extension — Movies and TV.
 //
 // Talks to TMDB and lists.shegu.st directly. Items use stable

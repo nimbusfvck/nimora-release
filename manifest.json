@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "0.6.25",
+  "version": "0.6.26",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -43,6 +43,13 @@
     {
       "id": "nimora.cricfy",
       "name": "Boreal",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.sportzx",
+      "name": "SportzX",
       "roles": [
         "stream"
       ]
@@ -145,7 +152,8 @@
       "h5.aoneroom.com",
       "x6.sokuja.uk",
       "global.nontony.uk",
-      "storages.sokuja.uk"
+      "storages.sokuja.uk",
+      "streamtvapp.top"
     ]
   }
 }
