@@ -249,6 +249,10 @@ function isFriendlyMatch(match) {
   return /friendl/i.test(`${match.leagueName || ''}`);
 }
 
+function isImportantFootballCompetition(match) {
+  return /super\s+cup/i.test(`${match.leagueName || ''}`);
+}
+
 // Filtering never sorts: matches that survive retain their exact position in
 // the daily matches response. Friendly fixtures remain available even though
 // FotMob does not include them in its account-localized popular league list.
@@ -259,7 +263,7 @@ function filterPopularMatches(matches, popularLeagues) {
       .map((league) => String(league.id)),
   );
   return matches.filter((match) => {
-    if (isFriendlyMatch(match)) return true;
+    if (isFriendlyMatch(match) || isImportantFootballCompetition(match)) return true;
     const leagueId = match.primaryLeagueId != null
       ? match.primaryLeagueId
       : match.leagueId;
@@ -476,6 +480,7 @@ function isExcludedSportCategory(category) {
   return (
     name.includes('cricket') ||
     name.includes('baseball') ||
+    name.includes('rugby') ||
     name === 'mlb' ||
     name === 'nfl' ||
     name.includes('american football')
@@ -640,6 +645,7 @@ async function fixturesCatalog(query) {
     fetchPopularLeaguesMemo(),
   ]);
   const allowedDates = new Set([
+    jakartaDateKey(nowMs, -1),
     jakartaDateKey(nowMs, 0),
     jakartaDateKey(nowMs, 1),
   ]);
