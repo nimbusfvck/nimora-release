@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.27",
+      "version": "0.6.28",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -37,6 +37,7 @@
         "streamtvapp.top"
       ],
       "releaseNotes": [
+        "Removed the SportzX provider and its unsupported source integration.",
         "Restored FotMob as the football catalog source of truth and retained Super Cup fixtures across the popular-league filter.",
         "Fixed UTC-to-Jakarta TV guide date handling and excluded Rugby events from Cricfy catalog entries.",
         "Added SportzX as a live sports stream provider.",
@@ -60,7 +61,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "f36c7c0a7e5e0c96ef395f8ca6aa0496b847eb589fe5df518cfca7cf59653939"
+      "bundleSha256": "087e2d182e198ece02a3d8d2ae7790155524972b423926d3124cd06208e98529"
     }
   ]
 }
