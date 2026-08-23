@@ -692,54 +692,21 @@ if (!globalThis.__extension.catalog) {
   };
 }
 
-// Neutral display names for stream sources.
+// Shared helpers for source labels.
 //
-// Each provider/server source gets its own fixed, deterministic alias name
-// so that the same server always carries the same name across all titles.
-// This makes debugging and maintenance straightforward when a specific source has issues.
-
-const SERVER_ALIASES = {
-  // VidEasy servers
-  'videasy:cdn': 'Aurora',
-  'videasy:downloader2': 'Bellini',
-  'videasy:m4uhd': 'Cascade',
-  'videasy:hdmovie': 'Delphi',
-  'videasy:lamovie': 'Everest',
-  'videasy:superflix': 'Fjord',
-  'videasy:neon2': 'Granada',
-
-  // VaPlayer servers
-  'vaplayer:0': 'Harbour',
-  'vaplayer:1': 'Indigo',
-  'vaplayer:2': 'Juniper',
-
-  // Vidrock servers
-  'vidrock:0': 'Kestrel',
-  'vidrock:1': 'Lagoon',
-  'vidrock:2': 'Meridian',
-  'vidrock:3': 'Nimbus',
-
-  // MovieBox servers
-  'moviebox:0': 'Orchid',
-  'moviebox:1': 'Pinnacle',
-  'moviebox:2': 'Quarry',
-};
+// Providers pass their original upstream label to sourceAliasWithQuality.
+// This file only normalizes real quality tokens; it does not invent aliases.
 
 function sourceAlias(sourceId, serverKey) {
-  const identity = getSourceIdentity(sourceId, serverKey);
-  if (SERVER_ALIASES[identity]) {
-    return SERVER_ALIASES[identity];
-  }
-  return ALIAS_NAMES[aliasHash(identity) % ALIAS_NAMES.length];
+  return String(serverKey ?? sourceId ?? '').trim();
 }
 
-// Adds a resolution only when the provider's real source name contains one.
-// Do not infer quality from a server index or alias: `480` in a provider
-// label is useful, while a guessed value would mislead playback selection.
 function sourceAliasWithQuality(sourceId, serverKey, realName) {
-  const alias = sourceAlias(sourceId, serverKey);
+  const label = String(realName ?? '').trim() || sourceAlias(sourceId, serverKey);
   const quality = sourceQuality(realName);
-  return quality ? `${alias} (${quality})` : alias;
+  return quality && !label.toLowerCase().includes(quality.toLowerCase())
+    ? `${label} (${quality})`
+    : label;
 }
 
 function sourceQuality(value) {
@@ -751,87 +718,6 @@ function sourceQuality(value) {
   const numeric = /^(2160|1440|1080|720|576|480|360|240)p?$/.exec(normalized);
   return numeric == null ? normalized.toUpperCase() : `${numeric[1]}p`;
 }
-
-function getSourceIdentity(sourceId, serverKey) {
-  if (serverKey != null) {
-    const provider = typeof sourceId === 'string' && sourceId.includes(':')
-      ? sourceId.split(':')[0]
-      : '';
-    return provider ? `${provider}:${serverKey}` : String(serverKey);
-  }
-  if (!sourceId || typeof sourceId !== 'string') return '';
-
-  const parts = sourceId.split(':');
-  if (parts.length < 2) return sourceId;
-
-  const provider = parts[0];
-  const encoded = parts.slice(1).join(':');
-
-  // Try decoding base64url payload to extract server key / index if available
-  try {
-    let b64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
-    const rem = b64.length % 4;
-    if (rem !== 0) b64 += '='.repeat(4 - rem);
-
-    let text = '';
-    if (typeof host !== 'undefined' && host && host.codec && host.codec.base64ToText) {
-      text = host.codec.base64ToText(b64);
-    } else if (typeof atob !== 'undefined') {
-      text = atob(b64);
-    }
-    if (text) {
-      const obj = JSON.parse(text);
-      if (obj && typeof obj === 'object') {
-        const k = obj.s ?? obj.server ?? obj.i ?? obj.index ?? obj.subjectId;
-        if (k != null) return `${provider}:${k}`;
-      }
-    }
-  } catch (_) {}
-
-  return sourceId;
-}
-
-// FNV-1a, 32-bit. Any stable, well-spread hash would do; this one is short
-// enough to read and needs nothing from the host.
-function aliasHash(value) {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
-    // `Math.imul` keeps the multiply in 32 bits; a plain `*` would lose the
-    // low bits to float rounding once the product passes 2^53.
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash >>> 0;
-}
-
-const ALIAS_NAMES = [
-  'Aurora',
-  'Bellini',
-  'Cascade',
-  'Delphi',
-  'Everest',
-  'Fjord',
-  'Granada',
-  'Harbour',
-  'Indigo',
-  'Juniper',
-  'Kestrel',
-  'Lagoon',
-  'Meridian',
-  'Nimbus',
-  'Orchid',
-  'Pinnacle',
-  'Quarry',
-  'Rialto',
-  'Solstice',
-  'Tundra',
-  'Umbra',
-  'Verona',
-  'Willow',
-  'Xanadu',
-  'Yukon',
-  'Zephyr',
-];
 
 // Kora as a stream provider, in JS on the host `fetch`/`codec`/`match` API.
 //
@@ -1164,10 +1050,8 @@ function koraSourcesFromDetail(detail) {
     if (key.length === 0 || edges.length === 0 || edgeDomain.length === 0) {
       continue;
     }
-    const quality = koraStr(channel, ['quality']);
+    const label = koraStr(channel, ['name', 'label', 'server_name', 'quality']) || 'Kora';
     const sourceId = `${KORA_PROVIDER_KEY}:${key}`;
-    const alias = sourceAlias(sourceId, key);
-    const label = quality ? `${alias} (${quality})` : alias;
     const id = encodeKoraSourceId({
       matchId,
       edges,
@@ -1606,12 +1490,12 @@ async function movieboxListSources(args) {
         s: subject.subjectId,
         ...(tmdbId ? { m: tmdbId } : {}),
       })}`;
-      // The dub language stays — it is about the content. See alias.js.
+      // Keep the provider name and language; do not mask the source with an alias.
       const lang =
         subject.language === 'Original' ? '' : ` [${subject.language}]`;
       return {
         id,
-        label: `${sourceAlias(id, subject.subjectId != null ? subject.subjectId : index)}${lang}`,
+        label: `MovieBox${lang}`,
         provider: 'Nimora',
         providerId: 'nimora.moviebox',
       };
@@ -2900,15 +2784,15 @@ async function cricfySourcesForEvent(event) {
   for (let i = 0; i < links.length; i++) {
     const id = `s${session}-${i}`;
     const identity = cricfySourceIdentity(links[i]);
-    const alias = sourceAliasWithQuality(
+    const label = sourceAliasWithQuality(
       `${CRICFY_PROVIDER_KEY}:${identity}`,
       null,
-      links[i].name,
+      links[i].name || `Cricfy Link ${i + 1}`,
     );
-    cricfyLinkCache[id] = { ...links[i], name: alias };
+    cricfyLinkCache[id] = { ...links[i], name: label };
     sources.push({
       id: `${CRICFY_PROVIDER_KEY}:${id}`,
-      label: alias,
+      label,
       provider: 'Nimora',
       providerId: 'nimora.cricfy',
     });
@@ -4119,8 +4003,7 @@ async function vidrockSources(args) {
       const sourceId = `${VIDROCK_PROVIDER_KEY}:${id}`;
       sources.push({
         id: sourceId,
-        // The dub language stays: that is about the content, not the
-        // upstream. See alias.js.
+        // Keep the provider's original server name and the dub language.
         label: `${sourceAliasWithQuality(sourceId, name, realName)}${lang}`,
         provider: 'Nimora',
         providerId: 'nimora.vidrock',
@@ -4174,8 +4057,7 @@ async function vidrockSources(args) {
     const sourceId = `${VIDROCK_PROVIDER_KEY}:${id}`;
     sources.push({
       id: sourceId,
-      // The dub language stays: that is about the content, not the
-      // upstream. See alias.js.
+      // Keep the provider's original server name and the dub language.
       label: `${sourceAliasWithQuality(sourceId, name, realName)}${lang}`,
       provider: 'Nimora',
       providerId: 'nimora.vidrock',
@@ -4450,7 +4332,7 @@ async function videasyListSources(args) {
       season: isSeries ? episodeRef.season : null,
       episode: isSeries ? episodeRef.episode : null,
     })}`;
-    return { id, label: sourceAlias(id, srv.key), provider: 'Nimora', providerId: 'nimora.videasy' };
+    return { id, label: srv.label, provider: 'Nimora', providerId: 'nimora.videasy' };
   });
 
   return { sources };
@@ -4709,11 +4591,10 @@ async function vaplayerListSources(args) {
         episode: isSeries ? parsed.episode : null,
       })}`;
       // The upstream distinguishes them in no way at all — they are
-      // interchangeable playlists of the same title — so the alias is the
-      // whole label. See alias.js.
+      // The upstream gives these playlists no distinct names.
       return {
         id,
-        label: sourceAliasWithQuality(id, index, urls[index]),
+        label: `VaPlayer ${index + 1}`,
         provider: 'Nimora',
         providerId: 'nimora.vaplayer',
       };
@@ -5123,7 +5004,11 @@ async function sokujaSources(args) {
         })}`;
         return {
           id,
-          label: sourceAliasWithQuality(id, index, mirror.quality),
+          label: sourceAliasWithQuality(
+            id,
+            index,
+            mirror.quality || `Sokuja Mirror ${index + 1}`,
+          ),
           provider: 'Nimora',
           providerId: SOKUJA_PROVIDER_ID,
         };
