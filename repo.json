@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.48",
+      "version": "0.6.49",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -17,6 +17,10 @@
         "cricyplayers.com",
         "cast.zlive.st",
         "otte.cache.aiv-cdn.net",
+        "otte.live.fly.ww.aiv-cdn.net",
+        "chatgpt.hereisman.net",
+        "tmaxapp.site",
+        "live.vivo200.com",
         "raw.githubusercontent.com",
         "encrypted-tbn0.gstatic.com",
         "blogger.googleusercontent.com",
@@ -61,6 +65,7 @@
         "*.pyroplayerx15.xyz"
       ],
       "releaseNotes": [
+        "Added Kora edge fallback for failed frame resolutions and added the current Cricfy playback hosts to the manifest permissions.",
         "Fixed Indomax FirePlayer playback by forwarding the original page `Referer` and FirePlayer `Origin` headers to the signed HLS stream.",
         "Fixed generic split-season episode matching across Sokuja and Indomax.",
         "Added ImaxStreams `.com` player support and wildcard permission coverage for rotating player hosts.",
@@ -109,7 +114,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "ef615046d00a7d59703881ddc082021e9f3f7fdc95abb25dbb61966b4942906e"
+      "bundleSha256": "b03665a2fb2c7515282ae42d5a6a1218b2ff2cf7f7294d5765dcbc976c307ad7"
     }
   ]
 }

@@ -1155,6 +1155,14 @@ function koraFrameHeaders() {
   };
 }
 
+function koraFrameUrl(edge, edgeDomain, query) {
+  const configuredBase = globalThis.__koraEdgeBaseUrl;
+  const base = typeof configuredBase === 'string' && configuredBase.length > 0
+    ? `${configuredBase.replace(/\/$/, '')}/${edge}/frame.php`
+    : `https://${edge}.${edgeDomain}/frame.php`;
+  return withQuery(base, query);
+}
+
 async function resolveKoraSource(sourceId) {
   const prefix = `${KORA_PROVIDER_KEY}:`;
   const inner = sourceId.startsWith(prefix)
@@ -1167,18 +1175,25 @@ async function resolveKoraSource(sourceId) {
   const chParam = decoded.ch || decoded.key;
   if (!chParam) throw new Error('Kora source has no stream key');
 
-  const edge = decoded.edges[0];
-  const requestUrl = withQuery(`https://${edge}.${decoded.edgeDomain}/frame.php`, {
-    ch: chParam,
-    p: String(KORA_PLAYER_VALUE),
-    token: koraUuidV4(),
-    kt: String(Math.floor(Date.now() / 1000)),
-  });
-  const body = await koraGetText(requestUrl, koraFrameHeaders());
-  // The player carries a browser User-Agent into the m3u8/segment requests.
-  const stream = parseKoraFrame(body, { 'User-Agent': KORA_BROWSER_UA });
-
-  return { url: stream.url, headers: stream.headers, format: 'hls', label: decoded.label };
+  let lastError = null;
+  for (const edge of decoded.edges) {
+    const requestUrl = koraFrameUrl(edge, decoded.edgeDomain, {
+      ch: chParam,
+      p: String(KORA_PLAYER_VALUE),
+      token: koraUuidV4(),
+      kt: String(Math.floor(Date.now() / 1000)),
+    });
+    try {
+      const body = await koraGetText(requestUrl, koraFrameHeaders());
+      // The player carries a browser User-Agent into the m3u8/segment requests.
+      const stream = parseKoraFrame(body, { 'User-Agent': KORA_BROWSER_UA });
+      if (!/^https?:\/\//i.test(stream.url)) throw new Error('Kora frame returned an invalid stream URL');
+      return { url: stream.url, headers: stream.headers, format: 'hls', label: decoded.label };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('Kora edge resolution failed');
 }
 
 async function koraSources(args) {
