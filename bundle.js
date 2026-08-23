@@ -6041,7 +6041,7 @@ function indomaxFireId(url) {
   return match == null ? null : match[1];
 }
 
-async function indomaxFirePlaylist(url, referer) {
+async function indomaxFirePlaylists(url, referer) {
   const id = indomaxFireId(url);
   if (id == null) return null;
   const endpoint = `${INDOMAX_FIRE_BASE}/player/index.php?data=${encodeURIComponent(id)}&do=getVideo`;
@@ -6062,20 +6062,23 @@ async function indomaxFirePlaylist(url, referer) {
   if (response.status < 200 || response.status >= 300) return null;
   try {
     const data = JSON.parse(response.body);
+    const playlists = [];
+    const addPlaylist = (candidate) => {
+      if (typeof candidate !== 'string') return;
+      const normalized = candidate.replace(/\\\//g, '/');
+      if (!/\.m3u8(?:[?#]|$)/i.test(normalized)) return;
+      const resolved = indomaxUrl(normalized, INDOMAX_FIRE_BASE);
+      if (resolved && playlists.indexOf(resolved) === -1) playlists.push(resolved);
+    };
     const directLinks = [data.securedLink, data.videoSource];
-    for (const candidate of directLinks) {
-      if (typeof candidate === 'string' && /\.m3u8(?:[?#]|$)/i.test(candidate)) {
-        return indomaxUrl(candidate, INDOMAX_FIRE_BASE);
-      }
-    }
+    directLinks.forEach(addPlaylist);
     const candidates = Array.isArray(data.videoSources) ? data.videoSources : [];
     for (const candidate of candidates) {
-      if (candidate && typeof candidate.file === 'string' && /\.m3u8(?:[?#]|$)/i.test(candidate.file)) {
-        return candidate.file.replace(/\\\//g, '/');
-      }
+      addPlaylist(candidate && candidate.file);
     }
+    return playlists;
   } catch (_) {}
-  return null;
+  return [];
 }
 
 function imaxPlaylistUrls(script) {
@@ -6084,6 +6087,113 @@ function imaxPlaylistUrls(script) {
   let match;
   while ((match = regex.exec(script || '')) != null) urls.push(match[1].replace(/\\\//g, '/'));
   return urls.filter((url, index) => urls.indexOf(url) === index);
+}
+
+function indomaxResolveRelativeUrl(value, base) {
+  if (typeof value !== 'string' || !value.trim() || typeof base !== 'string') return null;
+  const raw = value.trim();
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const baseMatch = /^(https?:\/\/[^/]+)(\/[^?#]*)?(?:[?#].*)?$/i.exec(base);
+  if (baseMatch == null) return null;
+  if (raw.startsWith('//')) return `${baseMatch[1].split(':')[0]}:${raw}`;
+  const suffixIndex = raw.search(/[?#]/);
+  const rawPath = suffixIndex === -1 ? raw : raw.slice(0, suffixIndex);
+  const suffix = suffixIndex === -1 ? '' : raw.slice(suffixIndex);
+  const basePath = baseMatch[2] || '/';
+  let path;
+  if (rawPath.startsWith('/')) {
+    path = rawPath;
+  } else if (!rawPath) {
+    path = basePath;
+  } else {
+    const directory = basePath.slice(0, basePath.lastIndexOf('/') + 1);
+    path = `${directory}${rawPath}`;
+  }
+  const parts = path.split('/');
+  const normalized = [];
+  for (const part of parts) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      if (normalized.length > 0) normalized.pop();
+      continue;
+    }
+    normalized.push(part);
+  }
+  return `${baseMatch[1]}/${normalized.join('/')}${suffix}`;
+}
+
+function indomaxResponseHeader(response, name) {
+  const headers = response && response.headers;
+  if (headers == null || typeof headers !== 'object') return '';
+  const wanted = String(name).toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === wanted) return String(headers[key] || '');
+  }
+  return '';
+}
+
+function indomaxPlaylistFirstUri(body) {
+  const lines = String(body || '').replace(/^\uFEFF/, '').split(/\r?\n/);
+  for (const line of lines) {
+    const value = line.trim();
+    if (value && !value.startsWith('#')) return value;
+  }
+  return null;
+}
+
+function indomaxRejectMediaUri(url) {
+  return /(?:(?:^|[./_-])ad-site(?:[./_-]|$)|\.image(?:[?#]|$)|(?:^|[./_-])advert(?:isement)?(?:[./_-]|$))/i.test(url || '');
+}
+
+function indomaxMediaResponseIsPlayable(response, url) {
+  if (response == null || response.status < 200 || response.status >= 300) return false;
+  if (indomaxRejectMediaUri(url)) return false;
+  const body = String(response.body || '');
+  if (!body) return false;
+  if (/^GIF8|^\u0000?PNG/i.test(body)) return false;
+  // Some valid FirePlayer segments are mislabeled as .js/.css. A transport
+  // signature is stronger evidence than the extension or content type.
+  if (body.charCodeAt(0) === 0x47 || body.slice(4, 8) === 'ftyp' || body.indexOf('moof') === 4) return true;
+  const contentType = indomaxResponseHeader(response, 'content-type').toLowerCase();
+  if (!contentType || /(?:text\/html|text\/css|javascript|font\/|image\/|application\/json)/i.test(contentType)) return false;
+  return /(?:^|\/)(?:video|audio)\//i.test(contentType) ||
+    /(?:mpeg|mp4|octet-stream|x-mpegurl|vnd\.apple\.mpegurl)/i.test(contentType);
+}
+
+async function indomaxHlsHasPlayableMedia(url, headers) {
+  let response;
+  try {
+    response = await fetch(url, { headers });
+  } catch (_) {
+    return false;
+  }
+  if (response.status < 200 || response.status >= 300) return false;
+  const masterBody = String(response.body || '').replace(/^\uFEFF/, '').trimStart();
+  if (!masterBody.startsWith('#EXTM3U')) return false;
+  let playlistUrl = url;
+  let playlistBody = masterBody;
+  if (/#EXT-X-STREAM-INF\b/i.test(playlistBody)) {
+    const variant = indomaxPlaylistFirstUri(playlistBody);
+    playlistUrl = indomaxResolveRelativeUrl(variant, playlistUrl);
+    if (!playlistUrl || indomaxRejectMediaUri(playlistUrl)) return false;
+    try {
+      response = await fetch(playlistUrl, { headers });
+    } catch (_) {
+      return false;
+    }
+    if (response.status < 200 || response.status >= 300) return false;
+    playlistBody = String(response.body || '').replace(/^\uFEFF/, '').trimStart();
+    if (!playlistBody.startsWith('#EXTM3U')) return false;
+  }
+  const mediaUri = indomaxPlaylistFirstUri(playlistBody);
+  const mediaUrl = indomaxResolveRelativeUrl(mediaUri, playlistUrl);
+  if (!mediaUrl || indomaxRejectMediaUri(mediaUrl)) return false;
+  try {
+    const media = await fetch(mediaUrl, { headers });
+    return indomaxMediaResponseIsPlayable(media, mediaUrl);
+  } catch (_) {
+    return false;
+  }
 }
 
 // ImaxStreams commonly wraps `var links` in Dean Edwards' P.A.C.K.E.R.
@@ -6126,26 +6236,37 @@ async function indomaxResolveSource(sourceId) {
   if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) throw new Error('Invalid Indomax source id');
   const payload = decodeIndomaxSource(sourceId.slice(prefix.length));
   if (!payload || typeof payload.u !== 'string' || !/^https?:\/\//i.test(payload.u)) throw new Error('Malformed Indomax source id');
-  const firePlaylist = await indomaxFirePlaylist(payload.u, payload.r);
-  if (firePlaylist != null) {
-    return {
-      url: indomaxUrl(firePlaylist, INDOMAX_FIRE_BASE),
-      format: 'hls',
-      headers: {
-        ...indomaxHeaders(payload.r || INDOMAX_FIRE_BASE),
-        Origin: INDOMAX_FIRE_BASE,
-      },
+  const firePlaylists = await indomaxFirePlaylists(payload.u, payload.r);
+  if (firePlaylists != null) {
+    const fireHeaders = {
+      ...indomaxHeaders(payload.r || INDOMAX_FIRE_BASE),
+      Origin: INDOMAX_FIRE_BASE,
     };
+    for (const firePlaylist of firePlaylists) {
+      if (await indomaxHlsHasPlayableMedia(firePlaylist, fireHeaders)) {
+        return { url: firePlaylist, format: 'hls', headers: fireHeaders };
+      }
+    }
+    throw new Error('ImaxStreams playlist has no playable media');
   }
   const embed = imaxEmbedUrl(payload.u);
   const playerBase = imaxBaseUrl(payload.u);
   let response;
   try { response = await fetch(embed, { headers: indomaxHeaders(payload.r) }); } catch (_) { throw new Error('ImaxStreams embed request failed'); }
   if (response.status < 200 || response.status >= 300) throw new Error(`ImaxStreams returned HTTP ${response.status}`);
-  const playlist = imaxPlaylistUrls(response.body)[0] || imaxPlaylistUrls(imaxUnpack(response.body))[0];
-  const playlistUrl = indomaxUrl(playlist, playerBase);
-  if (!playlistUrl) throw new Error('No HLS playlist in ImaxStreams embed');
-  return { url: playlistUrl, format: 'hls', headers: imaxHeaders(playerBase) };
+  const playlistCandidates = [
+    ...imaxPlaylistUrls(response.body),
+    ...imaxPlaylistUrls(imaxUnpack(response.body)),
+  ].filter((url, index, entries) => entries.indexOf(url) === index);
+  const playbackHeaders = imaxHeaders(playerBase);
+  for (const playlist of playlistCandidates) {
+    const playlistUrl = indomaxResolveRelativeUrl(playlist, embed) || indomaxUrl(playlist, playerBase);
+    if (playlistUrl && await indomaxHlsHasPlayableMedia(playlistUrl, playbackHeaders)) {
+      return { url: playlistUrl, format: 'hls', headers: playbackHeaders };
+    }
+  }
+  if (playlistCandidates.length === 0) throw new Error('No HLS playlist in ImaxStreams embed');
+  throw new Error('ImaxStreams playlist has no playable media');
 }
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
