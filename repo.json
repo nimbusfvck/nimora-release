@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.30",
+      "version": "0.6.31",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -37,6 +37,7 @@
         "streamtvapp.top"
       ],
       "releaseNotes": [
+        "Prioritized the Flux movie source so it appears first in default source selection.",
         "Reverted Flux/MovieBox source priority so the default order follows configured provider ordering again.",
         "Fixed MovieBox playlist format detection and forwarded the player-specific referer required by its streams.",
         "Prioritized the Flux movie source so it appears first in default source selection.",
@@ -64,7 +65,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "382dec8a419e924b57df90b22e2552f084bd009a79f3bd049580ceb754efd429"
+      "bundleSha256": "3f6d7f1cea9469c392a37a538e457619793133be77b2fbf274ac3a708e6aee5e"
     }
   ]
 }
