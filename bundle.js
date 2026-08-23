@@ -6013,7 +6013,10 @@ async function indomaxResolveSource(sourceId) {
     return {
       url: indomaxUrl(firePlaylist, INDOMAX_FIRE_BASE),
       format: 'hls',
-      headers: indomaxHeaders(INDOMAX_FIRE_BASE),
+      headers: {
+        ...indomaxHeaders(payload.r || INDOMAX_FIRE_BASE),
+        Origin: INDOMAX_FIRE_BASE,
+      },
     };
   }
   const embed = imaxEmbedUrl(payload.u);

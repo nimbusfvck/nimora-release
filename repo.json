@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.47",
+      "version": "0.6.48",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -61,6 +61,7 @@
         "*.pyroplayerx15.xyz"
       ],
       "releaseNotes": [
+        "Fixed Indomax FirePlayer playback by forwarding the original page `Referer` and FirePlayer `Origin` headers to the signed HLS stream.",
         "Fixed generic split-season episode matching across Sokuja and Indomax.",
         "Added ImaxStreams `.com` player support and wildcard permission coverage for rotating player hosts.",
         "Replaced numbered FirePlayer segment host entries with suffix-specific wildcard permissions.",
@@ -108,7 +109,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "d067d765de33481f388299d0cbf058a4a1e62bc7158f1b137f2e323f64908e16"
+      "bundleSha256": "ef615046d00a7d59703881ddc082021e9f3f7fdc95abb25dbb61966b4942906e"
     }
   ]
 }
