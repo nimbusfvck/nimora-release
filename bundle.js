@@ -2278,6 +2278,9 @@ let cricfyConfigCache = null;
 
 async function cricfyGetText(url, headers) {
   const response = await fetch(url, { headers });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Cricfy request failed: ${response.status}`);
+  }
   return response.body;
 }
 
@@ -2287,6 +2290,9 @@ async function cricfyPostText(url, { headers, body, isJson }) {
     headers,
     body: isJson ? JSON.stringify(body) : String(body),
   });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Cricfy request failed: ${response.status}`);
+  }
   return response.body;
 }
 
@@ -2448,9 +2454,23 @@ function cricfyContentUri(cfg, path) {
 
 async function cricfyFetchContent(path) {
   const cfg = await cricfyConfig();
-  const uri = cricfyContentUri(cfg, path);
-  const body = await cricfyGetText(uri, cricfyDefaultHeaders());
-  return decodeCricfyResponse(body);
+  const fallback = cricfyFallbackConfig();
+  const configs = [cfg];
+  const configuredUri = cricfyContentUri(cfg, path);
+  const fallbackUri = cricfyContentUri(fallback, path);
+  if (fallbackUri !== configuredUri) configs.push(fallback);
+
+  let lastError = null;
+  for (const candidate of configs) {
+    const uri = cricfyContentUri(candidate, path);
+    try {
+      const body = await cricfyGetText(uri, cricfyDefaultHeaders());
+      return decodeCricfyResponse(body);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error(`Cricfy content request failed: ${path}`);
 }
 
 // Fetches a list from a file whose every element wraps a JSON string, shape
