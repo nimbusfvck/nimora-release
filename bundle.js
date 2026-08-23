@@ -5298,14 +5298,13 @@ function imaxUnpack(script) {
   const radix = Number(packed[2]);
   const words = packed[3].replace(/\\'/g, "'").split('|');
   if (!Number.isInteger(radix) || radix < 2 || words.length === 0) return String(script || '');
-  const token = (index) => index < 36
-    ? index.toString(36)
-    : String.fromCharCode(index + 29);
+  const token = (index) => index.toString(radix);
   let unpacked = payload;
   for (let index = words.length - 1; index >= 0; index -= 1) {
     if (!words[index]) continue;
+    const escapedToken = token(index).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     unpacked = unpacked.replace(
-      new RegExp(`\\b${token(index)}\\b`, 'g'),
+      new RegExp(`\\b${escapedToken}\\b`, 'g'),
       words[index],
     );
   }
