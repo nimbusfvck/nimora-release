@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.46",
+      "version": "0.6.47",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -40,25 +40,30 @@
         "vickylopexnegocios.com",
         "imaxstreams.net",
         "*.imaxstreams.net",
+        "imaxstreams.com",
+        "*.imaxstreams.com",
         "*.tiktokcdn.com",
         "embedpyrox.xyz",
-        "s1.pyroplayerx1.xyz",
-        "s1.pyroplayerx2.xyz",
-        "s1.pyroplayerx3.xyz",
-        "s1.pyroplayerx4.xyz",
-        "s1.pyroplayerx5.xyz",
-        "s1.pyroplayerx6.xyz",
-        "s1.pyroplayerx7.xyz",
-        "s1.pyroplayerx8.xyz",
-        "s1.pyroplayerx9.xyz",
-        "s1.pyroplayerx10.xyz",
-        "s1.pyroplayerx11.xyz",
-        "s1.pyroplayerx12.xyz",
-        "s1.pyroplayerx13.xyz",
-        "s1.pyroplayerx14.xyz",
-        "s1.pyroplayerx15.xyz"
+        "*.pyroplayerx1.xyz",
+        "*.pyroplayerx2.xyz",
+        "*.pyroplayerx3.xyz",
+        "*.pyroplayerx4.xyz",
+        "*.pyroplayerx5.xyz",
+        "*.pyroplayerx6.xyz",
+        "*.pyroplayerx7.xyz",
+        "*.pyroplayerx8.xyz",
+        "*.pyroplayerx9.xyz",
+        "*.pyroplayerx10.xyz",
+        "*.pyroplayerx11.xyz",
+        "*.pyroplayerx12.xyz",
+        "*.pyroplayerx13.xyz",
+        "*.pyroplayerx14.xyz",
+        "*.pyroplayerx15.xyz"
       ],
       "releaseNotes": [
+        "Fixed generic split-season episode matching across Sokuja and Indomax.",
+        "Added ImaxStreams `.com` player support and wildcard permission coverage for rotating player hosts.",
+        "Replaced numbered FirePlayer segment host entries with suffix-specific wildcard permissions.",
         "Broadened the ImaxStreams TikTok CDN permission to cover its rotating segment subdomains.",
         "Added the exact ImaxStreams TikTok CDN hosts required by Indomax HLS segments.",
         "Fixed Indomax NSFW catalogs to expose every subcategory as a separate section.",
@@ -103,7 +108,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "14041d348ad44a32ca63ada65e8215aa090c618f467acd0523e6aa43e8340095"
+      "bundleSha256": "d067d765de33481f388299d0cbf058a4a1e62bc7158f1b137f2e323f64908e16"
     }
   ]
 }

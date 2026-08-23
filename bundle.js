@@ -4756,9 +4756,9 @@ function sokujaSearchResults(html) {
   return results;
 }
 
-function sokujaSearchPick(results, title, season) {
+function sokujaSearchCandidates(results, title, season) {
   const wanted = sokujaNormalizeTitle(title);
-  if (!wanted) return null;
+  if (!wanted) return [];
   const candidates = results
     .map((result, index) => {
       const normalized = sokujaNormalizeTitle(result.title);
@@ -4776,6 +4776,11 @@ function sokujaSearchPick(results, title, season) {
     })
     .filter((entry) => entry != null)
     .sort((a, b) => a.score - b.score);
+  return candidates;
+}
+
+function sokujaSearchPick(results, title, season) {
+  const candidates = sokujaSearchCandidates(results, title, season);
   return candidates.length === 0 ? null : candidates[0].result;
 }
 
@@ -4796,12 +4801,52 @@ async function sokujaGet(url, options) {
   }
 }
 
-async function sokujaFindAnime(title, season) {
+async function sokujaFindAnime(title, season, availableAt) {
   const searchUrl =
     `${SOKUJA_BASE}/?s=${encodeURIComponent(title)}&page=1`;
   const response = await sokujaGet(searchUrl, { headers: sokujaHeaders(searchUrl) });
   if (response == null) return null;
-  return sokujaSearchPick(sokujaSearchResults(response.body), title, season);
+  const candidates = sokujaSearchCandidates(
+    sokujaSearchResults(response.body),
+    title,
+    season,
+  );
+  if (candidates.length === 0) return null;
+  const wantedDate = sokujaDateKey(availableAt);
+  if (wantedDate != null) {
+    for (const candidate of candidates) {
+      const detail = await sokujaGet(
+        candidate.result.url,
+        { headers: sokujaHeaders(searchUrl) },
+      );
+      if (detail == null) continue;
+      const episode = sokujaEpisodes(detail.body).find(
+        (entry) => sokujaDateKey(entry && entry.createdAt) === wantedDate,
+      );
+      if (episode != null && typeof episode.slug === 'string') {
+        return {
+          result: candidate.result,
+          detailBody: detail.body,
+          episodeNumber: Number(episode.episodeNumber),
+        };
+      }
+    }
+    return null;
+  }
+  const selected = candidates[0];
+  const detail = await sokujaGet(
+    selected.result.url,
+    { headers: sokujaHeaders(searchUrl) },
+  );
+  if (detail == null) return null;
+  // A loose title match with dated episodes is a split-cour candidate. Without
+  // an aired date, refusing it is safer than silently playing another cour.
+  const hasDatedEpisodes = sokujaEpisodes(detail.body).some(
+    (entry) => sokujaDateKey(entry && entry.createdAt) != null,
+  );
+  const exact = sokujaNormalizeTitle(selected.result.title) === sokujaNormalizeTitle(title);
+  if (!exact && hasDatedEpisodes) return null;
+  return { result: selected.result, detailBody: detail.body };
 }
 
 // Next.js renders the episode list inside an escaped JSON payload. The same
@@ -4966,18 +5011,19 @@ async function sokujaSources(args) {
 
   const query = sokujaItemQuery(item);
   if (!query.title) return { sources: [] };
-  const result = await sokujaFindAnime(query.title, query.season);
-  if (result == null) return { sources: [] };
+  const availableAt = await sokujaEpisodeAvailableAt(item);
+  const found = await sokujaFindAnime(query.title, query.season, availableAt);
+  if (found == null) return { sources: [] };
+  const result = found.result;
 
-  const detailResponse = await sokujaGet(
+  const detailBody = found.detailBody || (await sokujaGet(
     result.url,
     { headers: sokujaHeaders(`${SOKUJA_BASE}/`) },
-  );
-  if (detailResponse == null) return { sources: [] };
-  const availableAt = await sokujaEpisodeAvailableAt(item);
+  ))?.body;
+  if (detailBody == null) return { sources: [] };
   const watchUrl = query.isEpisode
-    ? sokujaEpisodeUrl(detailResponse.body, query.episode, availableAt)
-    : sokujaMovieUrl(detailResponse.body) || result.url;
+    ? sokujaEpisodeUrl(detailBody, found.episodeNumber || query.episode, availableAt)
+    : sokujaMovieUrl(detailBody) || result.url;
   if (watchUrl == null) return { sources: [] };
 
   const episodeResponse = await sokujaGet(
@@ -5113,13 +5159,14 @@ function indomaxHeaders(referer) {
   };
 }
 
-function imaxHeaders() {
+function imaxHeaders(base) {
+  const playerBase = base || IMAX_BASE;
   return {
     'Sec-Fetch-Dest': 'empty',
     'Sec-Fetch-Mode': 'cors',
     'Sec-Fetch-Site': 'cross-site',
-    Origin: IMAX_BASE,
-    Referer: `${IMAX_BASE}/`,
+    Origin: playerBase,
+    Referer: `${playerBase}/`,
     'User-Agent': INDOMAX_UA,
   };
 }
@@ -5422,9 +5469,14 @@ function indomaxSearchResults(html, base) {
       ? null
       : Number(/\d+(?:\.\d+)?/.exec(indomaxText(ratingMatch[1]))?.[0]);
     if (url && title) {
+      const season = indomaxSeasonNumber(title);
+      const hasEpisodeLabel = /\b(?:s\d{1,2}e\d+|episode\s*\d+|eps?\s*\d+|e\s*\d+)\b/i.test(title);
+      const episode = hasEpisodeLabel ? indomaxEpisodeNumber(title) : null;
       results.push({
         title,
         url,
+        ...(Number.isInteger(season) ? { season } : {}),
+        ...(Number.isInteger(episode) ? { episode } : {}),
         ...(poster ? { poster: indomaxUrl(poster, base) } : {}),
         ...(Number.isFinite(ratingValue) ? { rating: ratingValue } : {}),
       });
@@ -5662,8 +5714,9 @@ async function indomaxFindResult(title, base) {
     const searchUrl = `${base}/?s=${encodeURIComponent(searchTitle)}&post_type[]=post&post_type[]=tv`;
     const search = await indomaxGet(searchUrl, `${base}/`);
     if (search == null) continue;
-    const result = indomaxPickResult(indomaxSearchResults(search.body, base), searchTitle);
-    if (result != null) return { result, searchUrl };
+    const results = indomaxSearchResults(search.body, base);
+    const result = indomaxPickResult(results, searchTitle);
+    if (result != null) return { result, results, searchUrl };
   }
   return null;
 }
@@ -5679,6 +5732,46 @@ function indomaxItemQuery(item) {
     season: Number.isInteger(extra.season) ? extra.season : (season == null ? null : Number(season[1])),
     isEpisode: item && item.kind === 'episode',
   };
+}
+
+function indomaxSearchEpisodeUrl(results, title, season, episode) {
+  if (!Number.isInteger(season) || !Number.isInteger(episode)) return null;
+  const wanted = indomaxNormalize(title);
+  const candidates = results
+    .filter((result) => result.season != null && result.episode != null)
+    .filter((result) => {
+      const candidate = indomaxNormalize(result.title);
+      return candidate.includes(wanted) || wanted.includes(candidate);
+    });
+  const exact = candidates.find(
+    (result) => result.season === season && result.episode === episode,
+  );
+  if (exact != null) return exact.url;
+
+  // When a provider starts a new season/cour, its episode number often resets
+  // while TMDB continues the season. Infer that transition from the nearest
+  // known episode on each side instead of baking a provider-specific offset.
+  const previous = candidates
+    .filter((result) => result.season === season && result.episode < episode)
+    .sort((a, b) => b.episode - a.episode)[0];
+  if (previous == null) return null;
+  const providerEpisode = episode - previous.episode;
+  const next = candidates.find(
+    (result) => result.season > season && result.episode === providerEpisode,
+  );
+  if (next != null) return next.url;
+
+  // If the desired episode is newer than the search page, retain the same
+  // provider URL shape as the first episode of the new group and let the
+  // normal HTTP check decide whether that episode is published.
+  const groupStart = candidates.find(
+    (result) => result.season > season && result.episode === 1,
+  );
+  if (groupStart == null) return null;
+  return groupStart.url.replace(
+    new RegExp(`(episode[-_]?)${groupStart.episode}(?=[/?#]|$)`, 'i'),
+    (_, prefix) => `${prefix}${providerEpisode}`,
+  );
 }
 
 function indomaxEpisodeUrl(html, wanted, base, season) {
@@ -5718,8 +5811,10 @@ function indomaxImaxSourceUrl(value, base) {
   const url = indomaxUrl(value, base);
   if (!url) return null;
   if (/^https?:\/\/embedpyrox\.xyz\/video\//i.test(url)) return url;
-  const isImaxHost = url.startsWith(IMAX_BASE) || /(^|\.)imaxstreams\.net(?:\/|$)/i.test(url.replace(/^https?:\/\//i, ''));
-  return isImaxHost && /\/(?:d|download|file|f)\//i.test(url) ? url : null;
+  const configuredBase = String(base || IMAX_BASE).replace(/\/$/, '');
+  const isImaxHost = url.startsWith(configuredBase) ||
+    /^https?:\/\/(?:[^./]+\.)?imaxstreams\.(?:net|com)(?:\/|$)/i.test(url);
+  return isImaxHost && /\/(?:d|download|file|f|embed)\//i.test(url) ? url : null;
 }
 
 function indomaxPlayerUrls(html, base) {
@@ -5776,6 +5871,24 @@ async function indomaxSources(args) {
     if (found == null) return { sources: [] };
     result = found.result;
     detailReferer = found.searchUrl;
+    if (query.isEpisode) {
+      const searchedEpisodeUrl = indomaxSearchEpisodeUrl(
+        found.results || [],
+        query.title,
+        query.season,
+        query.episode,
+      );
+      if (searchedEpisodeUrl != null) {
+        const searchedEpisode = await indomaxGet(searchedEpisodeUrl, result.url);
+        if (searchedEpisode == null) return { sources: [] };
+        return {
+          sources: indomaxPlayerUrls(searchedEpisode.body, base).map((url, index) => {
+            const id = `${INDOMAX_PROVIDER_KEY}:${encodeIndomaxSource({ u: url, r: searchedEpisodeUrl })}`;
+            return { id, label: `ImaxStreams ${index + 1}`, provider: 'Nimora', providerId: INDOMAX_PROVIDER_ID };
+          }),
+        };
+      }
+    }
   } else {
     detailReferer = `${base}/`;
   }
@@ -5796,7 +5909,13 @@ async function indomaxSources(args) {
 }
 
 function imaxEmbedUrl(url) {
-  return url.replace(/\/(?:d|download|file|f)\//i, '/e/');
+  if (/\/embed\//i.test(url)) return url;
+  const playerPath = /imaxstreams\.com/i.test(url) ? '/embed/' : '/e/';
+  return url.replace(/\/(?:d|download|file|f)\//i, playerPath);
+}
+
+function imaxBaseUrl(url) {
+  return /imaxstreams\.com/i.test(url) ? 'https://imaxstreams.com' : IMAX_BASE;
 }
 
 function indomaxFireId(url) {
@@ -5898,13 +6017,14 @@ async function indomaxResolveSource(sourceId) {
     };
   }
   const embed = imaxEmbedUrl(payload.u);
+  const playerBase = imaxBaseUrl(payload.u);
   let response;
   try { response = await fetch(embed, { headers: indomaxHeaders(payload.r) }); } catch (_) { throw new Error('ImaxStreams embed request failed'); }
   if (response.status < 200 || response.status >= 300) throw new Error(`ImaxStreams returned HTTP ${response.status}`);
   const playlist = imaxPlaylistUrls(response.body)[0] || imaxPlaylistUrls(imaxUnpack(response.body))[0];
-  const playlistUrl = indomaxUrl(playlist, IMAX_BASE);
+  const playlistUrl = indomaxUrl(playlist, playerBase);
   if (!playlistUrl) throw new Error('No HLS playlist in ImaxStreams embed');
-  return { url: playlistUrl, format: 'hls', headers: imaxHeaders() };
+  return { url: playlistUrl, format: 'hls', headers: imaxHeaders(playerBase) };
 }
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
