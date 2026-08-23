@@ -2637,6 +2637,76 @@ function cricfyExtractKey(payload, key) {
   return null;
 }
 
+// ---- `tokenApi` type "embed" ----
+//
+// An embed entry carries no `url`; its target is `api`, an HTML page rather
+// than the JSON the plain token flow expects. The page is a wrapper whose
+// iframe holds a Clappr player, and the player's `source:` is the playback
+// URL under `window.atob`. Two hops, both plain HTML:
+//
+//   api (stream-N.php)  ->  <iframe src="…/daddy.php?id=N">
+//   iframe              ->  source: window.atob('<base64 m3u8 URL>')
+//
+// The signed URL 403s without the iframe's `Referer`/`Origin`, so those ride
+// back on the returned string in the usual `url|Header=value` form and reach
+// the player through the caller's existing header merge.
+
+const CRICFY_EMBED_IFRAME = /<iframe[^>]+src=["']([^"']+)["']/i;
+const CRICFY_EMBED_SOURCE = /source\s*:\s*(?:window\.)?atob\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)/i;
+
+function cricfyEmbedOrigin(url) {
+  const match = /^(https?:\/\/[^/?#]+)/i.exec(url.trim());
+  return match ? match[1] : '';
+}
+
+// `//host/path` is protocol-relative, not a path — resolve it against the
+// page's own scheme rather than treating it as relative to the origin.
+function cricfyEmbedAbsolute(candidate, baseUrl) {
+  const value = candidate.trim();
+  if (/^https?:\/\//i.test(value)) return value;
+  const origin = cricfyEmbedOrigin(baseUrl);
+  if (origin.length === 0) return '';
+  if (value.startsWith('//')) return `${origin.split('://')[0]}:${value}`;
+  if (value.startsWith('/')) return origin + value;
+  return `${origin}/${value}`;
+}
+
+async function cricfyResolveEmbedUrl(apiUrl) {
+  const target = apiUrl.trim();
+  if (target.length === 0) throw new Error('embed tokenApi has no api url');
+
+  const wrapper = await cricfyGetText(target, {
+    'User-Agent': CRICFY_DEFAULT_UA,
+  });
+  const iframeMatch = CRICFY_EMBED_IFRAME.exec(wrapper);
+  if (iframeMatch === null) throw new Error('embed page has no iframe');
+  const iframeUrl = cricfyEmbedAbsolute(iframeMatch[1], target);
+  if (iframeUrl.length === 0) throw new Error('embed iframe url is not absolute');
+
+  const origin = cricfyEmbedOrigin(target);
+  const player = await cricfyGetText(iframeUrl, {
+    'User-Agent': CRICFY_DEFAULT_UA,
+    Referer: origin.length === 0 ? target : `${origin}/`,
+  });
+  const sourceMatch = CRICFY_EMBED_SOURCE.exec(player);
+  if (sourceMatch === null) throw new Error('embed player has no source');
+
+  let playbackUrl;
+  try {
+    playbackUrl = host.codec.base64ToText(sourceMatch[1]).trim();
+  } catch (_) {
+    throw new Error('embed source is not valid base64');
+  }
+  if (!cricfyIsFullUrl(playbackUrl)) {
+    throw new Error('embed source did not decode to a url');
+  }
+
+  // Without these the signed playlist answers 403.
+  const iframeOrigin = cricfyEmbedOrigin(iframeUrl);
+  if (iframeOrigin.length === 0) return playbackUrl;
+  return `${playbackUrl}|Referer=${iframeOrigin}/&Origin=${iframeOrigin}`;
+}
+
 // Runs the `tokenApi` flow and returns the playback URL. No real captured
 // fixture exists for this path (the Dart client's own test suite has none
 // either) — the JS unit tests build one from the exact shape this function
@@ -2658,6 +2728,7 @@ async function cricfyResolveTokenUrl(blob) {
   if (type === 'daddy') {
     throw new Error('tokenApi type "daddy" is not supported by this client');
   }
+  if (type === 'embed') return cricfyResolveEmbedUrl(String(json.api ?? ''));
 
   const split = cricfySplitLinkAndHeaders(String(json.url ?? ''));
   if (split.url.length === 0) throw new Error('tokenApi did not include a url');
@@ -2706,15 +2777,18 @@ async function cricfyResolveStreamAt(link, depth) {
   if (depth > CRICFY_MAX_RESOLVE_DEPTH) throw new Error('Link resolution looped too deep');
 
   const split = cricfySplitLinkAndHeaders(link.link);
-  if (split.url.length === 0) throw new Error('Empty link');
+  const hasTokenApi = link.tokenApi.trim().length > 0;
+  // A link that carries only a `tokenApi` is normal, not malformed: the
+  // playback URL is what that call returns. Only a link with neither is empty.
+  if (split.url.length === 0 && !hasTokenApi) throw new Error('Empty link');
 
-  if (await cricfyNeedsExchange(split.url)) {
+  if (split.url.length > 0 && (await cricfyNeedsExchange(split.url))) {
     const resolved = await cricfyExchange(split.url, link);
     return cricfyResolveStreamAt(resolved, depth + 1);
   }
 
   let finalUrl = split.url;
-  if (link.tokenApi.trim().length > 0) {
+  if (hasTokenApi) {
     finalUrl = await cricfyResolveTokenUrl(link.tokenApi);
   }
 

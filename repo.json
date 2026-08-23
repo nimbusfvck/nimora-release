@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.51",
+      "version": "0.6.52",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added Cricfy `type: \"embed\"` stream resolution, recovering the DRM-free channel links that previously failed as \"Empty link\" because the resolver rejected them before consulting their `tokenApi`.",
         "Waived the host allowlist with a bare `*`: Cricfy and the other providers receive their stream hosts from upstream at runtime, so pinning them broke playback whenever a host rotated without bounding what the native player already reaches.",
         "Fixed Cricfy links whose header separator is percent-encoded, which sent the required `Referer` as part of the URL and made the origin reject playback with 403.",
         "Fixed Cricfy source discovery by validating API responses and falling back to the default API when a configured endpoint fails.",
@@ -62,7 +63,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "24f67cd01a4f7b2fcf65e1f409269b419d0f7a719cfbdfc78d0db6200b4f8680"
+      "bundleSha256": "10a7e0f29fbca6c7ba1a675a5744036fc97e3fd9501a232be25c0acde30667c3"
     }
   ]
 }
