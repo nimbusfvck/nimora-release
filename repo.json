@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.36",
+      "version": "0.6.37",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -42,6 +42,7 @@
         "*.imaxstreams.net"
       ],
       "releaseNotes": [
+        "Fixed Indomax source discovery to use the current ImaxStreams links from movie pages.",
         "Added Indomax movie and episode streams, including ImaxStreams HLS extraction.",
         "Use original provider names for all Nimora source labels instead of generated aliases.",
         "Show detected resolution tokens from real provider source names beside aliases.",
@@ -75,7 +76,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "d02f854b6f58476e2a962b196261697d701fc2ea9aa9204c721d5d399abb3504"
+      "bundleSha256": "97f8f3eb528ce6fbdf1bdf4398b36a40fd46955f3229865e5f31035b1e51d4fa"
     }
   ]
 }

@@ -5209,18 +5209,28 @@ function indomaxEpisodeUrl(html, wanted, base) {
   return null;
 }
 
-function indomaxIframes(html, base) {
+function indomaxImaxSourceUrl(value, base) {
+  const url = indomaxUrl(value, base);
+  if (!url) return null;
+  const isImaxHost = url.startsWith(IMAX_BASE) || /(^|\.)imaxstreams\.net(?:\/|$)/i.test(url.replace(/^https?:\/\//i, ''));
+  return isImaxHost && /\/(?:d|download|file|f)\//i.test(url) ? url : null;
+}
+
+function indomaxPlayerUrls(html, base) {
   const urls = [];
   const iframe = /<iframe\b([^>]*)>/gi;
   let match;
   while ((match = iframe.exec(html || '')) != null) {
-    const url = indomaxUrl(
+    const url = indomaxImaxSourceUrl(
       indomaxAttribute(match[1], 'data-litespeed-src') || indomaxAttribute(match[1], 'src'),
       base,
     );
-    if (url && (url.startsWith(IMAX_BASE) || /(^|\.)imaxstreams\.net(?:\/|$)/i.test(url.replace(/^https?:\/\//i, '')))) {
-      urls.push(url);
-    }
+    if (url) urls.push(url);
+  }
+  const anchor = /<a\b([^>]*)>/gi;
+  while ((match = anchor.exec(html || '')) != null) {
+    const url = indomaxImaxSourceUrl(indomaxAttribute(match[1], 'href'), base);
+    if (url) urls.push(url);
   }
   return urls.filter((url, index) => urls.indexOf(url) === index);
 }
@@ -5257,7 +5267,7 @@ async function indomaxSources(args) {
   const watch = watchUrl === result.url ? detail : await indomaxGet(watchUrl, result.url);
   if (watch == null) return { sources: [] };
   return {
-    sources: indomaxIframes(watch.body, base).map((url, index) => {
+    sources: indomaxPlayerUrls(watch.body, base).map((url, index) => {
       const id = `${INDOMAX_PROVIDER_KEY}:${encodeIndomaxSource({ u: url, r: watchUrl })}`;
       return { id, label: `ImaxStreams ${index + 1}`, provider: 'Nimora', providerId: INDOMAX_PROVIDER_ID };
     }),
