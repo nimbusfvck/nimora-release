@@ -5063,3 +5063,262 @@ if (!globalThis.__extension.sources) {
     return provider.resolve(sourceId);
   };
 }
+
+// Indomax VOD streams.  Indomax is a WordPress catalogue whose active domain
+// is published in CloudX's Website.json.  Its player pages hand off to
+// ImaxStreams; this file owns both the discovery path and that extractor.
+
+const INDOMAX_DEFAULT_BASE = 'https://idmxl.ink';
+const INDOMAX_DIRECTORY =
+  globalThis.__indomaxDirectoryUrl ||
+  'https://raw.githubusercontent.com/Asm0d3usX/CloudX/builds/Website.json';
+const INDOMAX_PROVIDER_KEY = 'indomax';
+const INDOMAX_PROVIDER_ID = 'nimora.indomax';
+const IMAX_BASE = globalThis.__imaxStreamsBaseUrl || 'https://imaxstreams.net';
+const INDOMAX_UA =
+  'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
+
+let indomaxBase = globalThis.__indomaxBaseUrl || null;
+
+function indomaxHeaders(referer) {
+  return {
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    Referer: referer || `${indomaxBase || INDOMAX_DEFAULT_BASE}/`,
+    'User-Agent': INDOMAX_UA,
+  };
+}
+
+function imaxHeaders() {
+  return {
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'cross-site',
+    Origin: IMAX_BASE,
+    Referer: `${IMAX_BASE}/`,
+    'User-Agent': INDOMAX_UA,
+  };
+}
+
+function indomaxUrl(path, base) {
+  if (typeof path !== 'string' || !path) return null;
+  if (/^https?:\/\//i.test(path)) return path;
+  const root = (base || indomaxBase || INDOMAX_DEFAULT_BASE).replace(/\/$/, '');
+  return path.startsWith('/') ? `${root}${path}` : `${root}/${path}`;
+}
+
+function indomaxText(value) {
+  return String(value || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function indomaxNormalize(value) {
+  return indomaxText(value)
+    .replace(/\s*(subtitle\s+indonesia|indo)\s*$/i, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function indomaxAttribute(attributes, name) {
+  const match = new RegExp(`${name}\\s*=\\s*["']([^"']+)["']`, 'i')
+    .exec(attributes || '');
+  return match == null ? null : match[1];
+}
+
+async function indomaxGet(url, referer) {
+  try {
+    const response = await fetch(url, { headers: indomaxHeaders(referer) });
+    return response.status >= 200 && response.status < 300 ? response : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function indomaxActiveBase() {
+  if (indomaxBase) return indomaxBase;
+  const response = await indomaxGet(INDOMAX_DIRECTORY, INDOMAX_DEFAULT_BASE);
+  if (response != null) {
+    try {
+      const urls = JSON.parse(response.body).indomax;
+      if (Array.isArray(urls) && typeof urls[0] === 'string' && /^https?:\/\//i.test(urls[0])) {
+        indomaxBase = urls[0].replace(/\/$/, '');
+      }
+    } catch (_) {}
+  }
+  return indomaxBase || INDOMAX_DEFAULT_BASE;
+}
+
+function indomaxSearchResults(html, base) {
+  const results = [];
+  const article = /<article\b([^>]*\bclass\s*=\s*["'][^"']*\bitem-infinite\b[^"']*["'][^>]*)>([\s\S]*?)<\/article>/gi;
+  let match;
+  while ((match = article.exec(html || '')) != null) {
+    const titleMatch = /<h2\b[^>]*\bentry-title\b[^>]*>[\s\S]*?<a\b([^>]*)>([\s\S]*?)<\/a>/i.exec(match[2]);
+    if (titleMatch == null) continue;
+    const url = indomaxUrl(indomaxAttribute(titleMatch[1], 'href'), base);
+    const title = indomaxText(titleMatch[2]);
+    if (url && title) results.push({ title, url });
+  }
+  return results;
+}
+
+function indomaxPickResult(results, title) {
+  const wanted = indomaxNormalize(title);
+  if (!wanted) return null;
+  const scored = results.map((result, index) => {
+    const candidate = indomaxNormalize(result.title);
+    if (!candidate) return null;
+    const exact = candidate === wanted;
+    const overlap = candidate.includes(wanted) || wanted.includes(candidate);
+    return !exact && !overlap ? null : { result, score: (exact ? 0 : 10) + index / 1000 };
+  }).filter((entry) => entry != null).sort((a, b) => a.score - b.score);
+  return scored.length ? scored[0].result : null;
+}
+
+function indomaxItemQuery(item) {
+  const extra = item && item.extra && typeof item.extra === 'object' ? item.extra : {};
+  const episode = item && item.episode && typeof item.episode === 'object' ? item.episode : null;
+  const group = episode && typeof episode.groupId === 'string' ? episode.groupId : '';
+  const season = /(?:^|:)season:(\d+)/i.exec(group);
+  return {
+    title: String(extra.seriesTitle || (episode && item.subtitle) || (item && item.title) || '').trim(),
+    episode: Number.isInteger(extra.episode) ? extra.episode : (episode && Number.isInteger(episode.position) ? episode.position : null),
+    season: Number.isInteger(extra.season) ? extra.season : (season == null ? null : Number(season[1])),
+    isEpisode: item && item.kind === 'episode',
+  };
+}
+
+function indomaxEpisodeUrl(html, wanted, base) {
+  if (!Number.isInteger(wanted) || wanted < 1) return null;
+  const links = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = links.exec(html || '')) != null) {
+    const href = indomaxAttribute(match[1], 'href');
+    if (!href) continue;
+    const label = `${indomaxAttribute(match[1], 'title') || ''} ${indomaxText(match[2])}`;
+    const number = /episode\s*(\d+)/i.exec(label) || /(?:^|\D)(\d+)(?:\D|$)/.exec(label);
+    if (number != null && Number(number[1]) === wanted) return indomaxUrl(href, base);
+  }
+  return null;
+}
+
+function indomaxIframes(html, base) {
+  const urls = [];
+  const iframe = /<iframe\b([^>]*)>/gi;
+  let match;
+  while ((match = iframe.exec(html || '')) != null) {
+    const url = indomaxUrl(
+      indomaxAttribute(match[1], 'data-litespeed-src') || indomaxAttribute(match[1], 'src'),
+      base,
+    );
+    if (url && (url.startsWith(IMAX_BASE) || /(^|\.)imaxstreams\.net(?:\/|$)/i.test(url.replace(/^https?:\/\//i, '')))) {
+      urls.push(url);
+    }
+  }
+  return urls.filter((url, index) => urls.indexOf(url) === index);
+}
+
+function encodeIndomaxSource(payload) {
+  return host.codec.textToBase64(JSON.stringify(payload))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function decodeIndomaxSource(value) {
+  let base64 = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const remaining = base64.length % 4;
+  if (remaining) base64 += '='.repeat(4 - remaining);
+  try { return JSON.parse(host.codec.base64ToText(base64)); } catch (_) { return null; }
+}
+
+async function indomaxSources(args) {
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && enabled.indexOf(INDOMAX_PROVIDER_ID) === -1) return { sources: [] };
+  const item = args && args.item;
+  if (!item || (item.kind !== 'video' && item.kind !== 'episode')) return { sources: [] };
+  const query = indomaxItemQuery(item);
+  if (!query.title || (query.isEpisode && !query.episode)) return { sources: [] };
+  const base = await indomaxActiveBase();
+  const searchUrl = `${base}/?s=${encodeURIComponent(query.title)}&post_type[]=post&post_type[]=tv`;
+  const search = await indomaxGet(searchUrl, `${base}/`);
+  if (search == null) return { sources: [] };
+  const result = indomaxPickResult(indomaxSearchResults(search.body, base), query.title);
+  if (result == null) return { sources: [] };
+  const detail = await indomaxGet(result.url, searchUrl);
+  if (detail == null) return { sources: [] };
+  const watchUrl = query.isEpisode ? indomaxEpisodeUrl(detail.body, query.episode, base) : result.url;
+  if (watchUrl == null) return { sources: [] };
+  const watch = watchUrl === result.url ? detail : await indomaxGet(watchUrl, result.url);
+  if (watch == null) return { sources: [] };
+  return {
+    sources: indomaxIframes(watch.body, base).map((url, index) => {
+      const id = `${INDOMAX_PROVIDER_KEY}:${encodeIndomaxSource({ u: url, r: watchUrl })}`;
+      return { id, label: `ImaxStreams ${index + 1}`, provider: 'Nimora', providerId: INDOMAX_PROVIDER_ID };
+    }),
+  };
+}
+
+function imaxEmbedUrl(url) {
+  return url.replace(/\/(?:d|download|file|f)\//i, '/e/');
+}
+
+function imaxPlaylistUrls(script) {
+  const urls = [];
+  const regex = /:\s*["']([^"']*\.m3u8[^"']*)["']/gi;
+  let match;
+  while ((match = regex.exec(script || '')) != null) urls.push(match[1].replace(/\\\//g, '/'));
+  return urls.filter((url, index) => urls.indexOf(url) === index);
+}
+
+// ImaxStreams commonly wraps `var links` in Dean Edwards' P.A.C.K.E.R.
+// This decodes only that data substitution format; it never evaluates the
+// upstream script. Plain `sources:` pages continue through unchanged.
+function imaxUnpack(script) {
+  const packed = /}\(\s*'((?:\\.|[^'])*)'\s*,\s*(\d+)\s*,\s*\d+\s*,\s*'((?:\\.|[^'])*)'\.split\('\|'\)/i.exec(script || '');
+  if (packed == null) return String(script || '');
+  const payload = packed[1]
+    .replace(/\\'/g, "'")
+    .replace(/\\\\/g, '\\');
+  const radix = Number(packed[2]);
+  const words = packed[3].replace(/\\'/g, "'").split('|');
+  if (!Number.isInteger(radix) || radix < 2 || words.length === 0) return String(script || '');
+  const token = (index) => index < 36
+    ? index.toString(36)
+    : String.fromCharCode(index + 29);
+  let unpacked = payload;
+  for (let index = words.length - 1; index >= 0; index -= 1) {
+    if (!words[index]) continue;
+    unpacked = unpacked.replace(
+      new RegExp(`\\b${token(index)}\\b`, 'g'),
+      words[index],
+    );
+  }
+  return unpacked;
+}
+
+async function indomaxResolveSource(sourceId) {
+  const prefix = `${INDOMAX_PROVIDER_KEY}:`;
+  if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) throw new Error('Invalid Indomax source id');
+  const payload = decodeIndomaxSource(sourceId.slice(prefix.length));
+  if (!payload || typeof payload.u !== 'string' || !/^https?:\/\//i.test(payload.u)) throw new Error('Malformed Indomax source id');
+  const embed = imaxEmbedUrl(payload.u);
+  let response;
+  try { response = await fetch(embed, { headers: indomaxHeaders(payload.r) }); } catch (_) { throw new Error('ImaxStreams embed request failed'); }
+  if (response.status < 200 || response.status >= 300) throw new Error(`ImaxStreams returned HTTP ${response.status}`);
+  const playlist = imaxPlaylistUrls(response.body)[0] || imaxPlaylistUrls(imaxUnpack(response.body))[0];
+  if (!playlist) throw new Error('No HLS playlist in ImaxStreams embed');
+  return { url: playlist, format: 'hls', headers: imaxHeaders() };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: INDOMAX_PROVIDER_KEY,
+  sources: indomaxSources,
+  resolve: (sourceId) => indomaxResolveSource(sourceId),
+});

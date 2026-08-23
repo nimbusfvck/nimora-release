@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "0.6.35",
+  "version": "0.6.36",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -17,6 +17,7 @@
   "providers": [
     {
       "id": "nimora.matches",
+      "name": "FotMob",
       "roles": [
         "catalog"
       ],
@@ -36,21 +37,21 @@
     },
     {
       "id": "nimora.moviebox",
-      "name": "Flux",
+      "name": "MovieBox",
       "roles": [
         "stream"
       ]
     },
     {
       "id": "nimora.kora",
-      "name": "Atlas",
+      "name": "Kora",
       "roles": [
         "stream"
       ]
     },
     {
       "id": "nimora.cricfy",
-      "name": "Boreal",
+      "name": "Cricfy",
       "roles": [
         "stream"
       ]
@@ -87,34 +88,42 @@
     },
     {
       "id": "nimora.vidrock",
-      "name": "Cinder",
+      "name": "Vidrock",
       "roles": [
         "stream"
       ]
     },
     {
       "id": "nimora.videasy",
-      "name": "Drift",
+      "name": "Videasy",
       "roles": [
         "stream"
       ]
     },
     {
       "id": "nimora.vaplayer",
-      "name": "Ember",
+      "name": "VaPlayer",
       "roles": [
         "stream"
       ]
     },
     {
       "id": "nimora.sokuja",
-      "name": "Nova",
+      "name": "Sokuja",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.indomax",
+      "name": "Indomax",
       "roles": [
         "stream"
       ]
     },
     {
       "id": "nimora.shegu",
+      "name": "Shegu",
       "roles": [
         "subtitles"
       ]
@@ -149,7 +158,12 @@
       "x6.sokuja.uk",
       "global.nontony.uk",
       "storages.sokuja.uk",
-      "streamtvapp.top"
+      "streamtvapp.top",
+      "idmxl.ink",
+      "*.indomax21.xyz",
+      "vickylopexnegocios.com",
+      "imaxstreams.net",
+      "*.imaxstreams.net"
     ]
   }
 }
