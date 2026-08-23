@@ -5077,9 +5077,13 @@ async function sokujaSources(args) {
           q: mirror.quality || '',
           s: index,
         })}`;
+        const alias = sourceAlias(id, index);
+        const quality = mirror.quality == null
+          ? ''
+          : String(mirror.quality).trim();
         return {
           id,
-          label: sourceAlias(id, index),
+          label: quality ? `${alias} (${quality})` : alias,
           provider: 'Nimora',
           providerId: SOKUJA_PROVIDER_ID,
         };
