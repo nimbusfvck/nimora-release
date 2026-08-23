@@ -2001,7 +2001,16 @@ function cricfyRelativeToBase(url, base) {
   return path;
 }
 
+// Some links arrive with the `url|Header=value` separator percent-encoded as
+// `%7C`. Splitting on the literal pipe alone leaves `%7CReferer=...` glued to
+// the query string *and* drops the header the origin requires, so the fetch
+// comes back 403 on a link that is otherwise fine. Only an encoded pipe that
+// introduces a header assignment is treated as a separator — an encoded pipe
+// inside an ordinary query value stays part of the URL.
+const CRICFY_ENCODED_PIPE = /%7c(?=[A-Za-z][A-Za-z0-9-]*=)/gi;
+
 function cricfySplitLinkAndHeaders(value) {
+  value = value.replace(CRICFY_ENCODED_PIPE, '|');
   if (value.indexOf('|') === -1) return { url: value.trim(), headers: {} };
   const parts = value.split('|');
   const headers = {};
