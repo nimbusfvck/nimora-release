@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "0.6.39",
+  "version": "0.6.40",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -12,7 +12,9 @@
     "live",
     "sport",
     "movie",
-    "tv"
+    "tv",
+    "nsfw",
+    "anime"
   ],
   "providers": [
     {
@@ -118,7 +120,33 @@
       "id": "nimora.indomax",
       "name": "Indomax",
       "roles": [
-        "stream"
+        "stream",
+        "search",
+        "catalog"
+      ],
+      "catalogs": [
+        {
+          "id": "nsfw",
+          "name": "Indomax 18+",
+          "categories": [
+            "nsfw"
+          ],
+          "kind": "movie",
+          "display": "grid",
+          "expanded": true,
+          "contentRating": "mature"
+        },
+        {
+          "id": "anime",
+          "name": "Indomax Anime",
+          "categories": [
+            "anime"
+          ],
+          "kind": "movie",
+          "display": "grid",
+          "expanded": true,
+          "contentRating": "general"
+        }
       ]
     },
     {

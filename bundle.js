@@ -5074,6 +5074,18 @@ const INDOMAX_DIRECTORY =
   'https://raw.githubusercontent.com/Asm0d3usX/CloudX/builds/Website.json';
 const INDOMAX_PROVIDER_KEY = 'indomax';
 const INDOMAX_PROVIDER_ID = 'nimora.indomax';
+const INDOMAX_NSFW_CATALOG_ID = 'nsfw';
+const INDOMAX_ANIME_CATALOG_ID = 'anime';
+const INDOMAX_NSFW_SUBCATEGORIES = [
+  { id: 'jav', name: 'JAV' },
+  { id: 'asia-m', name: 'Asia M' },
+  { id: 'vivamax', name: 'Vivamax' },
+  { id: 'kelas-bintang', name: 'Kelas Bintang' },
+  { id: 'hentai', name: 'Hentai' },
+  { id: 'semi-barat', name: 'Semi Barat' },
+  { id: 'bokep-indo', name: 'Bokep Indo' },
+  { id: 'bokep-vietnam', name: 'Bokep Vietnam' },
+];
 const IMAX_BASE = globalThis.__imaxStreamsBaseUrl || 'https://imaxstreams.net';
 const INDOMAX_UA =
   'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 ' +
@@ -5164,9 +5176,125 @@ function indomaxSearchResults(html, base) {
     if (titleMatch == null) continue;
     const url = indomaxUrl(indomaxAttribute(titleMatch[1], 'href'), base);
     const title = indomaxText(titleMatch[2]);
-    if (url && title) results.push({ title, url });
+    const imageMatch = /<img\b([^>]*)>/i.exec(match[2]);
+    const poster = imageMatch == null
+      ? null
+      : indomaxAttribute(imageMatch[1], 'src');
+    const ratingMatch = /<div\b[^>]*\bgmr-rating-item\b[^>]*>([\s\S]*?)<\/div>/i.exec(match[2]);
+    const ratingValue = ratingMatch == null
+      ? null
+      : Number(/\d+(?:\.\d+)?/.exec(indomaxText(ratingMatch[1]))?.[0]);
+    if (url && title) {
+      results.push({
+        title,
+        url,
+        ...(poster ? { poster: indomaxUrl(poster, base) } : {}),
+        ...(Number.isFinite(ratingValue) ? { rating: ratingValue } : {}),
+      });
+    }
   }
   return results;
+}
+
+function indomaxNsfwCategory(categoryId) {
+  return INDOMAX_NSFW_SUBCATEGORIES.find((category) => category.id === categoryId)
+    || INDOMAX_NSFW_SUBCATEGORIES[0];
+}
+
+function indomaxCategoryUrl(base, categoryId, page) {
+  const slug = categoryId === INDOMAX_ANIME_CATALOG_ID
+    ? INDOMAX_ANIME_CATALOG_ID
+    : indomaxNsfwCategory(categoryId).id;
+  const path = `/category/${slug}/`;
+  return page > 1 ? `${base}${path}page/${page}/` : `${base}${path}`;
+}
+
+function indomaxHasNextPage(html) {
+  return /<a\b[^>]*\bclass\s*=\s*["'][^"']*\bnext\b[^"']*["'][^>]*>/i.test(html || '');
+}
+
+function indomaxCatalogItem(result, categoryId) {
+  const item = {
+    ref: {
+      extensionId: 'nimora',
+      providerId: INDOMAX_PROVIDER_ID,
+      id: `${INDOMAX_PROVIDER_KEY}:catalog:${encodeIndomaxSource({
+        u: result.url,
+        c: categoryId,
+      })}`,
+    },
+    kind: 'video',
+    title: result.title,
+  };
+  if (result.poster) item.artwork = { portrait: { url: result.poster } };
+  if (Number.isFinite(result.rating)) item.rating = result.rating;
+  return item;
+}
+
+async function indomaxCategoryCatalog(query, categoryId, title, subCategories) {
+  const base = await indomaxActiveBase();
+  const selectedCategoryId = categoryId === INDOMAX_NSFW_CATALOG_ID
+    ? indomaxNsfwCategory(query && query.subCategory).id
+    : categoryId;
+  const requestedPage = Number(query && query.page);
+  const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const url = indomaxCategoryUrl(base, selectedCategoryId, page);
+  const response = await indomaxGet(url, `${base}/`);
+  if (response == null) {
+    return { sections: [], subCategories };
+  }
+  const results = indomaxSearchResults(response.body, base);
+  const result = {
+    sections: [{
+      id: selectedCategoryId,
+      title,
+      items: results.map((item) => indomaxCatalogItem(item, selectedCategoryId)),
+    }],
+    subCategories,
+  };
+  if (indomaxHasNextPage(response.body)) result.nextPage = String(page + 1);
+  return result;
+}
+
+async function indomaxNsfwCatalog(query) {
+  const category = indomaxNsfwCategory(query && query.subCategory);
+  return indomaxCategoryCatalog(
+    query,
+    INDOMAX_NSFW_CATALOG_ID,
+    category.name,
+    INDOMAX_NSFW_SUBCATEGORIES,
+  );
+}
+
+async function indomaxAnimeCatalog(query) {
+  return indomaxCategoryCatalog(query, INDOMAX_ANIME_CATALOG_ID, 'Anime', []);
+}
+
+function indomaxSearchItem(result) {
+  const yearMatch = /^(.*?)(?:\s*\((\d{4})\))?$/.exec(result.title);
+  const title = (yearMatch == null ? result.title : yearMatch[1]).trim();
+  const year = yearMatch == null || yearMatch[2] == null ? null : Number(yearMatch[2]);
+  return {
+    ref: {
+      extensionId: 'nimora',
+      providerId: INDOMAX_PROVIDER_ID,
+      id: `${INDOMAX_PROVIDER_KEY}:search:${encodeIndomaxSource({ u: result.url })}`,
+    },
+    kind: 'video',
+    title: title || result.title,
+    ...(Number.isInteger(year) ? { releaseYear: year } : {}),
+  };
+}
+
+async function indomaxSearch(args) {
+  const query = String(args && args.query || '').trim();
+  if (!query) return { sections: [] };
+  const base = await indomaxActiveBase();
+  const searchUrl = `${base}/?s=${encodeURIComponent(query)}&post_type[]=post&post_type[]=tv`;
+  const response = await indomaxGet(searchUrl, `${base}/`);
+  if (response == null) return { sections: [] };
+  const items = indomaxSearchResults(response.body, base).map(indomaxSearchItem);
+  return { sections: [{ id: 'indomax-results', items }] };
 }
 
 function indomaxPickResult(results, title) {
@@ -5332,3 +5460,39 @@ globalThis.__streamProviders.push({
   sources: indomaxSources,
   resolve: (sourceId) => indomaxResolveSource(sourceId),
 });
+
+globalThis.__catalogProviders = globalThis.__catalogProviders || [];
+globalThis.__catalogProviders.push({
+  catalogId: INDOMAX_NSFW_CATALOG_ID,
+  catalog: indomaxNsfwCatalog,
+});
+globalThis.__catalogProviders.push({
+  catalogId: INDOMAX_ANIME_CATALOG_ID,
+  catalog: indomaxAnimeCatalog,
+});
+
+globalThis.__extension = globalThis.__extension || {};
+const indomaxPreviousSearch = globalThis.__extension.search;
+globalThis.__extension.search = async (args) => {
+  let existing = { sections: [] };
+  try {
+    if (typeof indomaxPreviousSearch === 'function') {
+      existing = await indomaxPreviousSearch(args);
+    }
+  } catch (_) {}
+  const existingSections = Array.isArray(existing.sections) ? existing.sections : [];
+  const hasExistingItems = existingSections.some(
+    (section) => section != null && Array.isArray(section.items) && section.items.length > 0,
+  );
+  if (hasExistingItems) return existing;
+
+  let indomax = { sections: [] };
+  try {
+    indomax = await indomaxSearch(args);
+  } catch (_) {}
+  const indomaxSections = Array.isArray(indomax.sections) ? indomax.sections : [];
+  const hasIndomaxItems = indomaxSections.some(
+    (section) => section != null && Array.isArray(section.items) && section.items.length > 0,
+  );
+  return hasIndomaxItems ? indomax : existing;
+};
