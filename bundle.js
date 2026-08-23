@@ -4825,9 +4825,19 @@ function sokujaEpisodeUrl(html, episodeNumber, availableAt) {
   if (!Number.isInteger(wanted) || wanted < 1) return null;
   const episodes = sokujaEpisodes(html);
   const airedDate = sokujaDateKey(availableAt);
+  const datedEpisodes = episodes.filter(
+    (entry) => sokujaDateKey(entry && entry.createdAt) != null,
+  );
   const dateMatch = airedDate == null
     ? null
-    : episodes.find((entry) => sokujaDateKey(entry && entry.createdAt) === airedDate);
+    : datedEpisodes.find((entry) => sokujaDateKey(entry && entry.createdAt) === airedDate);
+  // A numbered fallback is unsafe when Sokuja exposes dated episodes: a
+  // partial title match can otherwise play episode 1 from another split-cour.
+  if (airedDate != null && datedEpisodes.length > 0) {
+    return dateMatch && typeof dateMatch.slug === 'string'
+      ? sokujaUrl(`/${dateMatch.slug}/`)
+      : null;
+  }
   const numberMatch = episodes.find(
     (entry) => Number(entry && entry.episodeNumber) === wanted,
   );
@@ -5484,13 +5494,37 @@ async function indomaxCategoryCatalog(query, categoryId, title, subCategories) {
 }
 
 async function indomaxNsfwCatalog(query) {
-  const category = indomaxNsfwCategory(query && query.subCategory);
-  return indomaxCategoryCatalog(
-    query,
-    INDOMAX_NSFW_CATALOG_ID,
-    category.name,
-    INDOMAX_NSFW_SUBCATEGORIES,
+  const requestedSubCategory = query && query.subCategory;
+  if (typeof requestedSubCategory === 'string' && requestedSubCategory) {
+    const category = indomaxNsfwCategory(requestedSubCategory);
+    return indomaxCategoryCatalog(
+      query,
+      INDOMAX_NSFW_CATALOG_ID,
+      category.name,
+      INDOMAX_NSFW_SUBCATEGORIES,
+    );
+  }
+
+  const request = query && typeof query === 'object' ? query : {};
+  const pages = await Promise.all(
+    INDOMAX_NSFW_SUBCATEGORIES.map((category) => indomaxCategoryCatalog(
+      { ...request, subCategory: category.id },
+      INDOMAX_NSFW_CATALOG_ID,
+      category.name,
+      [],
+    )),
   );
+  const sections = pages
+    .flatMap((page) => Array.isArray(page.sections) ? page.sections : [])
+    .filter((section) => Array.isArray(section.items) && section.items.length > 0);
+  const result = {
+    sections,
+    subCategories: INDOMAX_NSFW_SUBCATEGORIES,
+  };
+  if (pages.some((page) => page.nextPage != null)) {
+    result.nextPage = String(Number(request.page || 1) + 1);
+  }
+  return result;
 }
 
 async function indomaxAnimeCatalog(query) {
@@ -5647,8 +5681,27 @@ function indomaxItemQuery(item) {
   };
 }
 
-function indomaxEpisodeUrl(html, wanted, base) {
+function indomaxEpisodeUrl(html, wanted, base, season) {
   if (!Number.isInteger(wanted) || wanted < 1) return null;
+  const containers = indomaxDivBlocks(html, /\b(?:vid-episodes|gmr-listseries)\b/i);
+  if (containers.length > 0) {
+    for (const [containerIndex, container] of containers.entries()) {
+      const containerSeason = indomaxSeasonNumber(container) || containerIndex + 1;
+      if (Number.isInteger(season) && containerSeason !== season) continue;
+      const links = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+      let match;
+      while ((match = links.exec(container)) != null) {
+        const href = indomaxAttribute(match[1], 'href');
+        if (!href) continue;
+        const label = `${indomaxAttribute(match[1], 'title') || ''} ${indomaxText(match[2])}`;
+        const number = /episode\s*(\d+)/i.exec(label) || /(?:^|\D)(\d+)(?:\D|$)/.exec(label);
+        if (number != null && Number(number[1]) === wanted) return indomaxUrl(href, base);
+      }
+    }
+    // Do not fall through to another season when the detail page exposes
+    // explicit episode groups but the requested season is unavailable.
+    return null;
+  }
   const links = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
   let match;
   while ((match = links.exec(html || '')) != null) {
@@ -5710,7 +5763,8 @@ async function indomaxSources(args) {
   const base = await indomaxActiveBase();
   const searchUrl = `${base}/?s=${encodeURIComponent(query.title)}&post_type[]=post&post_type[]=tv`;
   const refPayload = indomaxRefPayload(item.ref);
-  const directEpisodeUrl = query.isEpisode && refPayload && refPayload.e === query.episode
+  const directEpisodeUrl = query.isEpisode && refPayload && Number(refPayload.e) === query.episode &&
+      (query.season == null || refPayload.s == null || Number(refPayload.s) === query.season)
     ? refPayload.u
     : null;
   let result = refPayload && typeof refPayload.u === 'string'
@@ -5728,7 +5782,7 @@ async function indomaxSources(args) {
   const detail = await indomaxGet(result.url, detailReferer);
   if (detail == null) return { sources: [] };
   const watchUrl = query.isEpisode
-    ? directEpisodeUrl || indomaxEpisodeUrl(detail.body, query.episode, base)
+    ? directEpisodeUrl || indomaxEpisodeUrl(detail.body, query.episode, base, query.season)
     : result.url;
   if (watchUrl == null) return { sources: [] };
   const watch = watchUrl === result.url ? detail : await indomaxGet(watchUrl, result.url);

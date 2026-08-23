@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.43",
+      "version": "0.6.44",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -58,6 +58,8 @@
         "s1.pyroplayerx15.xyz"
       ],
       "releaseNotes": [
+        "Fixed Indomax NSFW catalogs to expose every subcategory as a separate section.",
+        "Guarded Sokuja and Indomax episode resolution against season and episode mismatches.",
         "Added the exact FirePlayer HLS segment hosts required by Indomax playback permissions.",
         "Fixed Indomax FirePlayer HLS resolution using the current `securedLink` response and title search fallback without release years.",
         "Added rich Indomax detail metadata, recommendations, trailers, and TV episode guides while preserving direct source URLs from catalog items.",
@@ -98,7 +100,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "b42d146a6e6bee74180afc1591eae6da1dee655183940bf2c8d685dd56685ba9"
+      "bundleSha256": "14041d348ad44a32ca63ada65e8215aa090c618f467acd0523e6aa43e8340095"
     }
   ]
 }
