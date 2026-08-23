@@ -5321,8 +5321,9 @@ async function indomaxResolveSource(sourceId) {
   try { response = await fetch(embed, { headers: indomaxHeaders(payload.r) }); } catch (_) { throw new Error('ImaxStreams embed request failed'); }
   if (response.status < 200 || response.status >= 300) throw new Error(`ImaxStreams returned HTTP ${response.status}`);
   const playlist = imaxPlaylistUrls(response.body)[0] || imaxPlaylistUrls(imaxUnpack(response.body))[0];
-  if (!playlist) throw new Error('No HLS playlist in ImaxStreams embed');
-  return { url: playlist, format: 'hls', headers: imaxHeaders() };
+  const playlistUrl = indomaxUrl(playlist, IMAX_BASE);
+  if (!playlistUrl) throw new Error('No HLS playlist in ImaxStreams embed');
+  return { url: playlistUrl, format: 'hls', headers: imaxHeaders() };
 }
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
