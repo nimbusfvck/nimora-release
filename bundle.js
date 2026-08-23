@@ -5074,6 +5074,7 @@ const INDOMAX_DIRECTORY =
   'https://raw.githubusercontent.com/Asm0d3usX/CloudX/builds/Website.json';
 const INDOMAX_PROVIDER_KEY = 'indomax';
 const INDOMAX_PROVIDER_ID = 'nimora.indomax';
+const INDOMAX_FIRE_BASE = 'https://embedpyrox.xyz';
 const INDOMAX_NSFW_CATALOG_ID = 'nsfw';
 const INDOMAX_ANIME_CATALOG_ID = 'anime';
 const INDOMAX_NSFW_SUBCATEGORIES = [
@@ -5120,12 +5121,31 @@ function indomaxUrl(path, base) {
 }
 
 function indomaxText(value) {
+  const namedEntities = {
+    amp: '&',
+    apos: "'",
+    gt: '>',
+    hellip: '…',
+    lt: '<',
+    mdash: '—',
+    nbsp: ' ',
+    ndash: '–',
+    quot: '"',
+  };
   return String(value || '')
     .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(x[0-9a-f]+|[0-9]+);?/gi, (match, value) => {
+      const codePoint = value[0].toLowerCase() === 'x'
+        ? parseInt(value.slice(1), 16)
+        : parseInt(value, 10);
+      return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+        ? String.fromCodePoint(codePoint)
+        : match;
+    })
+    .replace(/&([a-z]+);/gi, (match, name) => {
+      const decoded = namedEntities[name.toLowerCase()];
+      return decoded == null ? match : decoded;
+    })
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -5142,6 +5162,180 @@ function indomaxAttribute(attributes, name) {
   const match = new RegExp(`${name}\\s*=\\s*["']([^"']+)["']`, 'i')
     .exec(attributes || '');
   return match == null ? null : match[1];
+}
+
+function indomaxMetaContent(html, name) {
+  const tag = new RegExp(
+    `<meta\\b[^>]*(?:name|property)\\s*=\\s*["']${name}["'][^>]*>`,
+    'i',
+  ).exec(html || '');
+  return tag == null ? null : indomaxAttribute(tag[0], 'content');
+}
+
+function indomaxDivBlocks(html, classPattern) {
+  const blocks = [];
+  const stack = [];
+  const tags = /<div\b([^>]*)>|<\/div\s*>/gi;
+  let match;
+  while ((match = tags.exec(html || '')) != null) {
+    if (match[1] != null) {
+      stack.push({
+        start: tags.lastIndex,
+        matched: classPattern.test(indomaxAttribute(match[1], 'class') || ''),
+      });
+      continue;
+    }
+    const block = stack.pop();
+    if (block != null && block.matched) {
+      blocks.push((html || '').slice(block.start, match.index));
+    }
+  }
+  return blocks;
+}
+
+function indomaxMetaRows(html) {
+  return indomaxDivBlocks(html, /\bgmr-moviedata\b/i)
+    .map((row) => ({ html: row, text: indomaxText(row) }));
+}
+
+function indomaxMetaRow(html, pattern) {
+  return indomaxMetaRows(html).find((row) => pattern.test(row.text)) || null;
+}
+
+function indomaxRowLinks(row) {
+  if (row == null) return [];
+  const values = [];
+  const links = /<a\b[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = links.exec(row.html || '')) != null) {
+    const value = indomaxText(match[1]);
+    if (value) values.push(value);
+  }
+  return values.filter((value, index) => values.indexOf(value) === index);
+}
+
+function indomaxDetailDescription(html) {
+  const block = /<div\b[^>]*\bitemprop\s*=\s*["']description["'][^>]*>([\s\S]*?)<\/div>/i.exec(html || '');
+  if (block != null) {
+    const paragraph = /<p\b[^>]*>([\s\S]*?)<\/p>/i.exec(block[1]);
+    const value = indomaxText(paragraph == null ? block[1] : paragraph[1]);
+    if (value) return value;
+  }
+  const description = indomaxMetaContent(html, 'description');
+  return description ? indomaxText(description) : null;
+}
+
+function indomaxDetailRating(html) {
+  const bar = /<div\b[^>]*\bgmr-rating-bar\b[^>]*>([\s\S]*?)<\/div>/i.exec(html || '');
+  const width = bar == null
+    ? null
+    : /style\s*=\s*["'][^"']*width\s*:\s*([0-9.]+)%/i.exec(bar[1]);
+  if (width != null) {
+    const value = Number(width[1]) / 10;
+    if (Number.isFinite(value)) return value;
+  }
+  const ratingMatch = /itemprop\s*=\s*["']ratingValue["'][^>]*content\s*=\s*["']([^"']+)/i.exec(html || '')
+    || /gmr-rating-item\b[^>]*>([\s\S]*?)<\/div>/i.exec(html || '');
+  if (ratingMatch == null) return null;
+  const value = Number(/\d+(?:\.\d+)?/.exec(indomaxText(ratingMatch[1]))?.[0]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function indomaxDetailActors(html) {
+  const actors = [];
+  const blocks = /<span\b[^>]*\bitemprop\s*=\s*["']actors?["'][^>]*>([\s\S]*?)<\/span>/gi;
+  let block;
+  while ((block = blocks.exec(html || '')) != null) {
+    const links = /<a\b[^>]*>([\s\S]*?)<\/a>/gi;
+    let link;
+    while ((link = links.exec(block[1])) != null) {
+      const name = indomaxText(link[1]);
+      if (name) actors.push(name);
+    }
+  }
+  return actors.filter((name, index) => actors.indexOf(name) === index);
+}
+
+function indomaxDetailTrailer(html) {
+  const match = /<a\b([^>]*\bgmr-trailer-popup\b[^>]*)>/i.exec(html || '');
+  const url = match == null ? null : indomaxUrl(indomaxAttribute(match[1], 'href'));
+  if (!url) return null;
+  const site = /(?:youtube\.com|youtu\.be)/i.test(url) ? 'YouTube' : null;
+  return { title: 'Trailer', url, ...(site ? { site } : {}) };
+}
+
+function indomaxRecommendationItems(html, currentUrl, base) {
+  const results = [];
+  const articles = /<article\b([^>]*)>([\s\S]*?)<\/article>/gi;
+  let article;
+  while ((article = articles.exec(html || '')) != null) {
+    if (!/\bitem\b/i.test(article[1]) || !/\bcol-md-20\b/i.test(article[1])) continue;
+    const titleMatch = /<h[1-6]\b[^>]*\bentry-title\b[^>]*>\s*<a\b([^>]*)>([\s\S]*?)<\/a>/i.exec(article[2]);
+    if (titleMatch == null) continue;
+    const url = indomaxUrl(indomaxAttribute(titleMatch[1], 'href'), base);
+    const title = indomaxText(titleMatch[2]);
+    if (!url || !title || url === currentUrl) continue;
+    const imageMatch = /<img\b([^>]*)>/i.exec(article[2]);
+    const image = imageMatch == null
+      ? null
+      : indomaxAttribute(imageMatch[1], 'data-src') || indomaxAttribute(imageMatch[1], 'src');
+    const ratingMatch = /gmr-rating-item\b[^>]*>([\s\S]*?)<\/div>/i.exec(article[2]);
+    const rating = ratingMatch == null
+      ? null
+      : Number(/\d+(?:\.\d+)?/.exec(indomaxText(ratingMatch[1]))?.[0]);
+    const item = {
+      ref: {
+        extensionId: 'nimora',
+        providerId: INDOMAX_PROVIDER_ID,
+        id: `${INDOMAX_PROVIDER_KEY}:detail:${encodeIndomaxSource({ u: url })}`,
+      },
+      kind: /\/tv\//i.test(url) ? 'series' : 'video',
+      title,
+    };
+    if (image) item.artwork = { portrait: { url: indomaxUrl(image, base) } };
+    if (Number.isFinite(rating)) item.rating = rating;
+    results.push(item);
+  }
+  return results.filter((item, index) => results.findIndex((other) => other.ref.id === item.ref.id) === index);
+}
+
+function indomaxEpisodeRef(parentRef, url, position) {
+  return {
+    extensionId: parentRef.extensionId,
+    providerId: parentRef.providerId,
+    id: `${INDOMAX_PROVIDER_KEY}:episode:${encodeIndomaxSource({
+      u: url,
+      p: parentRef.id,
+      e: position,
+    })}`,
+  };
+}
+
+function indomaxDetailEpisodes(html, parentRef, poster, base) {
+  const episodes = [];
+  const containers = indomaxDivBlocks(html, /\b(?:vid-episodes|gmr-listseries)\b/i);
+  for (const container of containers) {
+    const links = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+    let link;
+    while ((link = links.exec(container)) != null) {
+      const url = indomaxUrl(indomaxAttribute(link[1], 'href'), base);
+      if (!url) continue;
+      const rawTitle = indomaxAttribute(link[1], 'title') || indomaxText(link[2]);
+      const cleanTitle = indomaxText(rawTitle).replace(/^Permalink ke\s*/i, '').trim();
+      const number = /episode\s*(\d+)/i.exec(cleanTitle)
+        || /(?:^|\D)(\d+)(?:\D|$)/.exec(cleanTitle);
+      const position = number == null ? null : Number(number[1]);
+      if (!Number.isInteger(position) || position < 1) continue;
+      episodes.push({
+        ref: indomaxEpisodeRef(parentRef, url, position),
+        title: `Episode ${position}`,
+        position,
+        ...(poster ? { artwork: { portrait: { url: poster } } } : {}),
+      });
+    }
+  }
+  const unique = episodes.filter((episode, index) => episodes.findIndex((other) => other.ref.id === episode.ref.id) === index);
+  return unique.sort((a, b) => a.position - b.position);
 }
 
 async function indomaxGet(url, referer) {
@@ -5223,7 +5417,7 @@ function indomaxCatalogItem(result, categoryId) {
         c: categoryId,
       })}`,
     },
-    kind: 'video',
+    kind: /\/tv\//i.test(result.url) ? 'series' : 'video',
     title: result.title,
   };
   if (result.poster) item.artwork = { portrait: { url: result.poster } };
@@ -5280,10 +5474,83 @@ function indomaxSearchItem(result) {
       providerId: INDOMAX_PROVIDER_ID,
       id: `${INDOMAX_PROVIDER_KEY}:search:${encodeIndomaxSource({ u: result.url })}`,
     },
-    kind: 'video',
+    kind: /\/tv\//i.test(result.url) ? 'series' : 'video',
     title: title || result.title,
     ...(Number.isInteger(year) ? { releaseYear: year } : {}),
   };
+}
+
+function indomaxRefPayload(ref) {
+  const id = ref && typeof ref.id === 'string' ? ref.id : '';
+  const prefix = `${INDOMAX_PROVIDER_KEY}:`;
+  if (!id.startsWith(prefix)) return null;
+  const encoded = id.slice(prefix.length).replace(/^(?:catalog|search|detail|episode):/, '');
+  return decodeIndomaxSource(encoded);
+}
+
+function indomaxDetailItem(ref, html) {
+  const titleMatch = /<h1\b[^>]*\bentry-title\b[^>]*>([\s\S]*?)<\/h1>/i.exec(html || '');
+  const title = indomaxText(
+    titleMatch == null
+      ? indomaxMetaContent(html, 'og:title') || 'Indomax video'
+      : titleMatch[1],
+  ).replace(/\s+Subtitle Indonesia(?:\s*-\s*INDOMAX21)?$/i, '').trim();
+  const image = indomaxMetaContent(html, 'og:image');
+  const yearRow = indomaxMetaRow(html, /(?:^|\s)(?:tahun|release)\s*:/i);
+  const yearMatch = yearRow == null ? null : /\b(\d{4})\b/.exec(yearRow.text);
+  const year = yearMatch == null ? null : Number(yearMatch[1]);
+  const rating = indomaxDetailRating(html);
+  const item = {
+    ref,
+    kind: /\/tv\//i.test(indomaxRefPayload(ref)?.u || '') ? 'series' : 'video',
+    title,
+  };
+  if (image) item.artwork = { portrait: { url: indomaxUrl(image) } };
+  if (Number.isInteger(year)) item.releaseYear = year;
+  if (Number.isFinite(rating)) item.rating = rating;
+  return item;
+}
+
+async function indomaxMeta(args) {
+  const ref = args && args.ref;
+  const payload = indomaxRefPayload(ref);
+  if (!payload || typeof payload.u !== 'string') {
+    throw new Error('Malformed Indomax media ref');
+  }
+  const base = await indomaxActiveBase();
+  const response = await indomaxGet(payload.u, `${base}/`);
+  if (response == null) throw new Error('Indomax detail request failed');
+  const detail = { item: indomaxDetailItem(ref, response.body) };
+  const description = indomaxDetailDescription(response.body);
+  if (description) detail.description = indomaxText(description);
+  const genreRow = indomaxMetaRow(response.body, /(?:^|\s)genre\s*:/i);
+  const tags = indomaxRowLinks(genreRow);
+  if (tags.length > 0) detail.tags = tags;
+  const yearRow = indomaxMetaRow(response.body, /(?:^|\s)(?:tahun|release)\s*:/i);
+  const year = yearRow == null ? null : /\b(\d{4})\b/.exec(yearRow.text)?.[1];
+  const durationRow = indomaxMetaRow(response.body, /(?:^|\s)(?:durasi|duration)\s*:/i);
+  const duration = durationRow == null ? null : /\b(\d+)\s*(?:min|minutes?)?\b/i.exec(durationRow.text)?.[1];
+  const facts = [];
+  if (year) facts.push({ label: 'Year', value: year });
+  if (duration) facts.push({ label: 'Duration', value: `${duration} min` });
+  if (facts.length > 0) detail.facts = facts;
+  const actors = indomaxDetailActors(response.body);
+  if (actors.length > 0) detail.credits = actors.map((name) => ({ name, role: 'Actor' }));
+  const trailer = indomaxDetailTrailer(response.body);
+  if (trailer != null) detail.trailers = [trailer];
+  const recommendations = indomaxRecommendationItems(response.body, payload.u, base);
+  if (recommendations.length > 0) detail.recommendations = recommendations;
+  if (/\/tv\//i.test(payload.u)) {
+    const poster = detail.item.artwork?.portrait?.url || null;
+    const episodes = indomaxDetailEpisodes(response.body, ref, poster, base);
+    if (episodes.length > 0) {
+      detail.episodeGuide = {
+        groups: [{ id: 'season:1', title: 'Episodes', episodes }],
+        defaultEpisodeRef: episodes[episodes.length - 1].ref,
+      };
+    }
+  }
+  return detail;
 }
 
 async function indomaxSearch(args) {
@@ -5340,6 +5607,7 @@ function indomaxEpisodeUrl(html, wanted, base) {
 function indomaxImaxSourceUrl(value, base) {
   const url = indomaxUrl(value, base);
   if (!url) return null;
+  if (/^https?:\/\/embedpyrox\.xyz\/video\//i.test(url)) return url;
   const isImaxHost = url.startsWith(IMAX_BASE) || /(^|\.)imaxstreams\.net(?:\/|$)/i.test(url.replace(/^https?:\/\//i, ''));
   return isImaxHost && /\/(?:d|download|file|f)\//i.test(url) ? url : null;
 }
@@ -5384,13 +5652,27 @@ async function indomaxSources(args) {
   if (!query.title || (query.isEpisode && !query.episode)) return { sources: [] };
   const base = await indomaxActiveBase();
   const searchUrl = `${base}/?s=${encodeURIComponent(query.title)}&post_type[]=post&post_type[]=tv`;
-  const search = await indomaxGet(searchUrl, `${base}/`);
-  if (search == null) return { sources: [] };
-  const result = indomaxPickResult(indomaxSearchResults(search.body, base), query.title);
-  if (result == null) return { sources: [] };
-  const detail = await indomaxGet(result.url, searchUrl);
+  const refPayload = indomaxRefPayload(item.ref);
+  const directEpisodeUrl = query.isEpisode && refPayload && refPayload.e === query.episode
+    ? refPayload.u
+    : null;
+  let result = refPayload && typeof refPayload.u === 'string'
+    ? { title: query.title, url: refPayload.u }
+    : null;
+  let detailReferer = searchUrl;
+  if (result == null) {
+    const search = await indomaxGet(searchUrl, `${base}/`);
+    if (search == null) return { sources: [] };
+    result = indomaxPickResult(indomaxSearchResults(search.body, base), query.title);
+    if (result == null) return { sources: [] };
+  } else {
+    detailReferer = `${base}/`;
+  }
+  const detail = await indomaxGet(result.url, detailReferer);
   if (detail == null) return { sources: [] };
-  const watchUrl = query.isEpisode ? indomaxEpisodeUrl(detail.body, query.episode, base) : result.url;
+  const watchUrl = query.isEpisode
+    ? directEpisodeUrl || indomaxEpisodeUrl(detail.body, query.episode, base)
+    : result.url;
   if (watchUrl == null) return { sources: [] };
   const watch = watchUrl === result.url ? detail : await indomaxGet(watchUrl, result.url);
   if (watch == null) return { sources: [] };
@@ -5404,6 +5686,42 @@ async function indomaxSources(args) {
 
 function imaxEmbedUrl(url) {
   return url.replace(/\/(?:d|download|file|f)\//i, '/e/');
+}
+
+function indomaxFireId(url) {
+  const match = /^https?:\/\/embedpyrox\.xyz\/video\/([^/?#]+)/i.exec(url || '');
+  return match == null ? null : match[1];
+}
+
+async function indomaxFirePlaylist(url, referer) {
+  const id = indomaxFireId(url);
+  if (id == null) return null;
+  const endpoint = `${INDOMAX_FIRE_BASE}/player/index.php?data=${encodeURIComponent(id)}&do=getVideo`;
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        ...indomaxHeaders(referer),
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: `hash=${encodeURIComponent(id)}&r=${encodeURIComponent(referer || url)}`,
+    });
+  } catch (_) {
+    return null;
+  }
+  if (response.status < 200 || response.status >= 300) return null;
+  try {
+    const data = JSON.parse(response.body);
+    const candidates = Array.isArray(data.videoSources) ? data.videoSources : [];
+    for (const candidate of candidates) {
+      if (candidate && typeof candidate.file === 'string' && /\.m3u8(?:[?#]|$)/i.test(candidate.file)) {
+        return candidate.file.replace(/\\\//g, '/');
+      }
+    }
+  } catch (_) {}
+  return null;
 }
 
 function imaxPlaylistUrls(script) {
@@ -5426,7 +5744,17 @@ function imaxUnpack(script) {
   const radix = Number(packed[2]);
   const words = packed[3].replace(/\\'/g, "'").split('|');
   if (!Number.isInteger(radix) || radix < 2 || words.length === 0) return String(script || '');
-  const token = (index) => index.toString(radix);
+  const digits = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const token = (index) => {
+    if (radix <= 36) return index.toString(radix);
+    let value = index;
+    let result = '';
+    do {
+      result = digits[value % radix] + result;
+      value = Math.floor(value / radix);
+    } while (value > 0);
+    return result;
+  };
   let unpacked = payload;
   for (let index = words.length - 1; index >= 0; index -= 1) {
     if (!words[index]) continue;
@@ -5444,6 +5772,14 @@ async function indomaxResolveSource(sourceId) {
   if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) throw new Error('Invalid Indomax source id');
   const payload = decodeIndomaxSource(sourceId.slice(prefix.length));
   if (!payload || typeof payload.u !== 'string' || !/^https?:\/\//i.test(payload.u)) throw new Error('Malformed Indomax source id');
+  const firePlaylist = await indomaxFirePlaylist(payload.u, payload.r);
+  if (firePlaylist != null) {
+    return {
+      url: indomaxUrl(firePlaylist, INDOMAX_FIRE_BASE),
+      format: 'hls',
+      headers: indomaxHeaders(INDOMAX_FIRE_BASE),
+    };
+  }
   const embed = imaxEmbedUrl(payload.u);
   let response;
   try { response = await fetch(embed, { headers: indomaxHeaders(payload.r) }); } catch (_) { throw new Error('ImaxStreams embed request failed'); }
@@ -5459,6 +5795,12 @@ globalThis.__streamProviders.push({
   providerKey: INDOMAX_PROVIDER_KEY,
   sources: indomaxSources,
   resolve: (sourceId) => indomaxResolveSource(sourceId),
+});
+
+globalThis.__metaProviders = globalThis.__metaProviders || [];
+globalThis.__metaProviders.push({
+  providerId: INDOMAX_PROVIDER_ID,
+  meta: indomaxMeta,
 });
 
 globalThis.__catalogProviders = globalThis.__catalogProviders || [];

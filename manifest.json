@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "0.6.40",
+  "version": "0.6.41",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -13,8 +13,8 @@
     "sport",
     "movie",
     "tv",
-    "nsfw",
-    "anime"
+    "anime",
+    "nsfw"
   ],
   "providers": [
     {
@@ -122,20 +122,10 @@
       "roles": [
         "stream",
         "search",
-        "catalog"
+        "catalog",
+        "meta"
       ],
       "catalogs": [
-        {
-          "id": "nsfw",
-          "name": "Indomax 18+",
-          "categories": [
-            "nsfw"
-          ],
-          "kind": "movie",
-          "display": "grid",
-          "expanded": true,
-          "contentRating": "mature"
-        },
         {
           "id": "anime",
           "name": "Indomax Anime",
@@ -146,6 +136,16 @@
           "display": "grid",
           "expanded": true,
           "contentRating": "general"
+        },
+        {
+          "id": "nsfw",
+          "name": "Indomax 18+",
+          "categories": [
+            "nsfw"
+          ],
+          "kind": "movie",
+          "display": "row",
+          "contentRating": "mature"
         }
       ]
     },
@@ -191,7 +191,8 @@
       "*.indomax21.xyz",
       "vickylopexnegocios.com",
       "imaxstreams.net",
-      "*.imaxstreams.net"
+      "*.imaxstreams.net",
+      "embedpyrox.xyz"
     ]
   }
 }
