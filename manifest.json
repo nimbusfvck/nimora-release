@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "0.6.29",
+  "version": "0.6.30",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -32,13 +32,6 @@
           "kind": "liveEvent",
           "display": "row"
         }
-      ]
-    },
-    {
-      "id": "nimora.moviebox",
-      "name": "Flux",
-      "roles": [
-        "stream"
       ]
     },
     {
@@ -102,6 +95,13 @@
     {
       "id": "nimora.vaplayer",
       "name": "Ember",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.moviebox",
+      "name": "Flux",
       "roles": [
         "stream"
       ]
