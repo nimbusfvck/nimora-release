@@ -733,6 +733,25 @@ function sourceAlias(sourceId, serverKey) {
   return ALIAS_NAMES[aliasHash(identity) % ALIAS_NAMES.length];
 }
 
+// Adds a resolution only when the provider's real source name contains one.
+// Do not infer quality from a server index or alias: `480` in a provider
+// label is useful, while a guessed value would mislead playback selection.
+function sourceAliasWithQuality(sourceId, serverKey, realName) {
+  const alias = sourceAlias(sourceId, serverKey);
+  const quality = sourceQuality(realName);
+  return quality ? `${alias} (${quality})` : alias;
+}
+
+function sourceQuality(value) {
+  const match = /(?:^|[^0-9])((?:2160|1440|1080|720|576|480|360|240)\s*p?|(?:4|2)k)(?=$|[^a-z0-9])/i.exec(
+    String(value ?? ''),
+  );
+  if (match == null) return '';
+  const normalized = match[1].replace(/\s+/g, '').toLowerCase();
+  const numeric = /^(2160|1440|1080|720|576|480|360|240)p?$/.exec(normalized);
+  return numeric == null ? normalized.toUpperCase() : `${numeric[1]}p`;
+}
+
 function getSourceIdentity(sourceId, serverKey) {
   if (serverKey != null) {
     const provider = typeof sourceId === 'string' && sourceId.includes(':')
@@ -2881,7 +2900,11 @@ async function cricfySourcesForEvent(event) {
   for (let i = 0; i < links.length; i++) {
     const id = `s${session}-${i}`;
     const identity = cricfySourceIdentity(links[i]);
-    const alias = sourceAlias(`${CRICFY_PROVIDER_KEY}:${identity}`);
+    const alias = sourceAliasWithQuality(
+      `${CRICFY_PROVIDER_KEY}:${identity}`,
+      null,
+      links[i].name,
+    );
     cricfyLinkCache[id] = { ...links[i], name: alias };
     sources.push({
       id: `${CRICFY_PROVIDER_KEY}:${id}`,
@@ -4085,12 +4108,20 @@ async function vidrockSources(args) {
         episode,
       });
       const lang = server.language ? ` (${server.language})` : '';
+      const realName = [
+        name,
+        server.name,
+        server.quality,
+        server.resolution,
+      ]
+        .filter((value) => value != null && String(value).trim().length > 0)
+        .join(' ');
       const sourceId = `${VIDROCK_PROVIDER_KEY}:${id}`;
       sources.push({
         id: sourceId,
         // The dub language stays: that is about the content, not the
         // upstream. See alias.js.
-        label: `${sourceAlias(sourceId, name)}${lang}`,
+        label: `${sourceAliasWithQuality(sourceId, name, realName)}${lang}`,
         provider: 'Nimora',
         providerId: 'nimora.vidrock',
       });
@@ -4132,12 +4163,20 @@ async function vidrockSources(args) {
       tmdbId,
     });
     const lang = server.language ? ` (${server.language})` : '';
+    const realName = [
+      name,
+      server.name,
+      server.quality,
+      server.resolution,
+    ]
+      .filter((value) => value != null && String(value).trim().length > 0)
+      .join(' ');
     const sourceId = `${VIDROCK_PROVIDER_KEY}:${id}`;
     sources.push({
       id: sourceId,
       // The dub language stays: that is about the content, not the
       // upstream. See alias.js.
-      label: `${sourceAlias(sourceId, name)}${lang}`,
+      label: `${sourceAliasWithQuality(sourceId, name, realName)}${lang}`,
       provider: 'Nimora',
       providerId: 'nimora.vidrock',
     });
@@ -4672,7 +4711,12 @@ async function vaplayerListSources(args) {
       // The upstream distinguishes them in no way at all — they are
       // interchangeable playlists of the same title — so the alias is the
       // whole label. See alias.js.
-      return { id, label: sourceAlias(id, index), provider: 'Nimora', providerId: 'nimora.vaplayer' };
+      return {
+        id,
+        label: sourceAliasWithQuality(id, index, urls[index]),
+        provider: 'Nimora',
+        providerId: 'nimora.vaplayer',
+      };
     }),
   };
 }
@@ -5077,13 +5121,9 @@ async function sokujaSources(args) {
           q: mirror.quality || '',
           s: index,
         })}`;
-        const alias = sourceAlias(id, index);
-        const quality = mirror.quality == null
-          ? ''
-          : String(mirror.quality).trim();
         return {
           id,
-          label: quality ? `${alias} (${quality})` : alias,
+          label: sourceAliasWithQuality(id, index, mirror.quality),
           provider: 'Nimora',
           providerId: SOKUJA_PROVIDER_ID,
         };
