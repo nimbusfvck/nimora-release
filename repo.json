@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.42",
+      "version": "0.6.43",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -40,9 +40,25 @@
         "vickylopexnegocios.com",
         "imaxstreams.net",
         "*.imaxstreams.net",
-        "embedpyrox.xyz"
+        "embedpyrox.xyz",
+        "s1.pyroplayerx1.xyz",
+        "s1.pyroplayerx2.xyz",
+        "s1.pyroplayerx3.xyz",
+        "s1.pyroplayerx4.xyz",
+        "s1.pyroplayerx5.xyz",
+        "s1.pyroplayerx6.xyz",
+        "s1.pyroplayerx7.xyz",
+        "s1.pyroplayerx8.xyz",
+        "s1.pyroplayerx9.xyz",
+        "s1.pyroplayerx10.xyz",
+        "s1.pyroplayerx11.xyz",
+        "s1.pyroplayerx12.xyz",
+        "s1.pyroplayerx13.xyz",
+        "s1.pyroplayerx14.xyz",
+        "s1.pyroplayerx15.xyz"
       ],
       "releaseNotes": [
+        "Added the exact FirePlayer HLS segment hosts required by Indomax playback permissions.",
         "Fixed Indomax FirePlayer HLS resolution using the current `securedLink` response and title search fallback without release years.",
         "Added rich Indomax detail metadata, recommendations, trailers, and TV episode guides while preserving direct source URLs from catalog items.",
         "Added Indomax search fallback plus separate NSFW and Anime catalogs with pagination and content-rating filtering.",
