@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.31",
+      "version": "0.6.32",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -37,6 +37,7 @@
         "streamtvapp.top"
       ],
       "releaseNotes": [
+        "Fixed Sokuja split-cour anime episodes by matching provider episodes to their TMDB air dates.",
         "Prioritized the Flux movie source so it appears first in default source selection.",
         "Reverted Flux/MovieBox source priority so the default order follows configured provider ordering again.",
         "Fixed MovieBox playlist format detection and forwarded the player-specific referer required by its streams.",
@@ -65,7 +66,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "3f6d7f1cea9469c392a37a538e457619793133be77b2fbf274ac3a708e6aee5e"
+      "bundleSha256": "052ca1c7fd790822cbc3da7c82ae0347740b0b2c7bd8881fa9ef7113cb330b01"
     }
   ]
 }

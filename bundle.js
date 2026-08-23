@@ -4750,6 +4750,9 @@ globalThis.__streamProviders.push({
 // that already contain a direct media URL.
 
 const SOKUJA_BASE = globalThis.__sokujaBaseUrl || 'https://x6.sokuja.uk';
+const SOKUJA_TMDB_BASE =
+  globalThis.__sokujaTmdbBaseUrl || 'https://api.themoviedb.org/3';
+const SOKUJA_TMDB_API_KEY = '8476a7ab80ad76f0936744df0430e67c';
 const SOKUJA_PROVIDER_KEY = 'sokuja';
 const SOKUJA_PROVIDER_ID = 'nimora.sokuja';
 const SOKUJA_USER_AGENT =
@@ -4851,6 +4854,13 @@ function sokujaSearchPick(results, title, season) {
   return candidates.length === 0 ? null : candidates[0].result;
 }
 
+function sokujaDateKey(value) {
+  const match = /(?:^|[^0-9])(\d{4}-\d{2}-\d{2})(?:[^0-9]|$)/.exec(
+    String(value || ''),
+  );
+  return match == null ? null : match[1];
+}
+
 async function sokujaGet(url, options) {
   try {
     const response = await fetch(url, options);
@@ -4885,13 +4895,18 @@ function sokujaEpisodes(html) {
   }
 }
 
-function sokujaEpisodeUrl(html, episodeNumber) {
+function sokujaEpisodeUrl(html, episodeNumber, availableAt) {
   const wanted = Number(episodeNumber);
   if (!Number.isInteger(wanted) || wanted < 1) return null;
   const episodes = sokujaEpisodes(html);
-  const episode = episodes.find(
+  const airedDate = sokujaDateKey(availableAt);
+  const dateMatch = airedDate == null
+    ? null
+    : episodes.find((entry) => sokujaDateKey(entry && entry.createdAt) === airedDate);
+  const numberMatch = episodes.find(
     (entry) => Number(entry && entry.episodeNumber) === wanted,
   );
+  const episode = dateMatch || numberMatch;
   if (episode && typeof episode.slug === 'string') return sokujaUrl(`/${episode.slug}/`);
 
   const pattern = new RegExp(
@@ -4930,6 +4945,44 @@ function decodeSokujaSource(encoded) {
   if (remainder !== 0) base64 += '='.repeat(4 - remainder);
   try {
     return JSON.parse(host.codec.base64ToText(base64));
+  } catch (_) {
+    return null;
+  }
+}
+
+function sokujaTmdbEpisodeRef(item) {
+  const refId = item && item.ref && item.ref.id;
+  if (typeof refId !== 'string') return null;
+  const match = /^(?:v1-episode:)?series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(
+    refId,
+  );
+  return match == null
+    ? null
+    : { tmdbId: match[1], season: match[2], episode: match[3] };
+}
+
+async function sokujaEpisodeAvailableAt(item) {
+  const direct = item && item.availableAt;
+  const directDate = sokujaDateKey(direct);
+  if (directDate != null) return directDate;
+
+  const parsed = sokujaTmdbEpisodeRef(item);
+  if (parsed == null) return null;
+
+  const query = [
+    `api_key=${encodeURIComponent(SOKUJA_TMDB_API_KEY)}`,
+    'language=en-US',
+  ].join('&');
+  const response = await sokujaGet(
+    `${SOKUJA_TMDB_BASE}/tv/${encodeURIComponent(parsed.tmdbId)}` +
+      `/season/${encodeURIComponent(parsed.season)}` +
+      `/episode/${encodeURIComponent(parsed.episode)}?${query}`,
+    { headers: sokujaHeaders(SOKUJA_TMDB_BASE) },
+  );
+  if (response == null) return null;
+  try {
+    const payload = JSON.parse(response.body);
+    return sokujaDateKey(payload && payload.air_date);
   } catch (_) {
     return null;
   }
@@ -4986,8 +5039,9 @@ async function sokujaSources(args) {
     { headers: sokujaHeaders(`${SOKUJA_BASE}/`) },
   );
   if (detailResponse == null) return { sources: [] };
+  const availableAt = await sokujaEpisodeAvailableAt(item);
   const watchUrl = query.isEpisode
-    ? sokujaEpisodeUrl(detailResponse.body, query.episode)
+    ? sokujaEpisodeUrl(detailResponse.body, query.episode, availableAt)
     : sokujaMovieUrl(detailResponse.body) || result.url;
   if (watchUrl == null) return { sources: [] };
 
