@@ -3,7 +3,7 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.44",
+      "version": "0.6.45",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
@@ -40,6 +40,8 @@
         "vickylopexnegocios.com",
         "imaxstreams.net",
         "*.imaxstreams.net",
+        "p16-ad-site-sign-sg.tiktokcdn.com",
+        "p19-ad-site-sign-sg.tiktokcdn.com",
         "embedpyrox.xyz",
         "s1.pyroplayerx1.xyz",
         "s1.pyroplayerx2.xyz",
@@ -58,6 +60,7 @@
         "s1.pyroplayerx15.xyz"
       ],
       "releaseNotes": [
+        "Added the exact ImaxStreams TikTok CDN hosts required by Indomax HLS segments.",
         "Fixed Indomax NSFW catalogs to expose every subcategory as a separate section.",
         "Guarded Sokuja and Indomax episode resolution against season and episode mismatches.",
         "Added the exact FirePlayer HLS segment hosts required by Indomax playback permissions.",
