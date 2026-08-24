@@ -226,15 +226,19 @@ function filterPopularMatches(matches, popularLeagues) {
       .filter((league) => league != null && league.id != null)
       .map((league) => String(league.id)),
   );
+  const allowedNames = new Set(
+    popularLeagues
+      .filter((league) => league != null && league.name != null)
+      .map((league) => String(league.name).trim().toLowerCase()),
+  );
   return matches.filter((match) => {
-    // A live-only by433 event may not carry the same FotMob league id, but
-    // it is still valuable in the Live section and should not be discarded.
-    if (match.liveSource === 'by433') return true;
     if (isFriendlyMatch(match) || isImportantFootballCompetition(match)) return true;
     const leagueId = match.primaryLeagueId != null
       ? match.primaryLeagueId
       : match.leagueId;
-    return leagueId != null && allowedIds.has(String(leagueId));
+    if (leagueId != null && allowedIds.has(String(leagueId))) return true;
+    return match.leagueName != null &&
+      allowedNames.has(String(match.leagueName).trim().toLowerCase());
   });
 }
 
