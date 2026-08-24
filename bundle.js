@@ -581,6 +581,11 @@ function isExcludedSportCategory(category) {
   );
 }
 
+function cricfyArtworkUrl(value) {
+  const url = `${value || ''}`.trim();
+  return /^https?:\/\/[^\s/?#]+(?:[/?#][^\s]*)?$/i.test(url) ? url : null;
+}
+
 function cricfyEventItem(event, status) {
   let title = `${event.eventName || ''}`.trim();
   const teamA = `${event.teamAName || ''}`.trim();
@@ -591,6 +596,9 @@ function cricfyEventItem(event, status) {
 
   const startsAt = cricfyParseEventDateTime(event.date, event.time);
   if (startsAt === null) return null;
+  const eventLogo = cricfyArtworkUrl(event.eventLogo);
+  const teamALogo = cricfyArtworkUrl(event.teamALogo);
+  const teamBLogo = cricfyArtworkUrl(event.teamBLogo);
   const item = {
     ref: {
       extensionId: EXTENSION_ID,
@@ -605,18 +613,18 @@ function cricfyEventItem(event, status) {
       state: status === 'live' ? 'live' : 'scheduled',
     },
   };
-  if (event.eventLogo) {
-    item.artwork = { landscape: { url: event.eventLogo } };
+  if (eventLogo !== null) {
+    item.artwork = { landscape: { url: eventLogo } };
   }
   if (versus) {
     item.participants = [
       {
         name: teamA,
-        ...(event.teamALogo ? { logo: { url: event.teamALogo } } : {}),
+        ...(teamALogo !== null ? { logo: { url: teamALogo } } : {}),
       },
       {
         name: teamB,
-        ...(event.teamBLogo ? { logo: { url: event.teamBLogo } } : {}),
+        ...(teamBLogo !== null ? { logo: { url: teamBLogo } } : {}),
       },
     ];
   }

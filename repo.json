@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.56",
+      "version": "0.6.57",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Ignored invalid Cricfy event and participant artwork URLs so malformed upstream images no longer break sports catalogs.",
         "Filtered live football events to popular leagues, including by433 live matches matched by league name, while preserving friendly and Super Cup exceptions.",
         "Kept provider-native subtitles on resolved sources and moved Shegu lookups to the explicit external-subtitles flow.",
         "Split football schedule and live status: FotMob TV guide supplies the seven-day schedule, while by433's live feed drives the refreshed live section.",
@@ -67,7 +68,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "17e1da2e85ffb49cf5e3e53346dd48a077e39166b3fd552671e863f71e58285a"
+      "bundleSha256": "4a1d0872d23995250032cc58c4514afcdc5bb3a6fe43d878c563a40b15d92c2e"
     }
   ]
 }
