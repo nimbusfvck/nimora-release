@@ -1,10 +1,8 @@
 // Football fixtures catalog, as a JS extension.
 //
-// Sourced from FotMob's TV guide plus its complete match lists for today and
-// tomorrow. The guide keeps the useful forward schedule; the daily lists fill
-// gaps and provide the same stable team ids used by FotMob's crest service.
-// Stream providers only resolve a selected event and never create catalog
-// metadata.
+// Sourced from FotMob's forward TV guide for schedule metadata and by433's
+// live-only feed for current status. Stream providers only resolve a selected
+// event and never create catalog metadata.
 //
 // The host provides: `fetch(url, options)` -> Promise<{status, headers, url,
 // body}>. Nothing else — no fs, no process, no ambient network.
@@ -24,17 +22,15 @@ const FOTMOB_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
   '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
 const TIME_ZONE = 'Asia/Jakarta';
+const BY433_BASE = globalThis.__by433BaseUrl || 'https://matchdata.prod.by433.com';
 
 const EXTENSION_ID = 'nimora';
 const PROVIDER_ID = 'nimora.matches';
 
 // The one catalog this extension declares, and the categories inside it.
-// `live` is status-scoped (whatever is in play right now, derived from a
-// kickoff time-window — see isMatchLive), `sport` is upcoming-scoped (see
-// UPCOMING_WINDOW_MS) — the same items can legitimately appear under both,
-// which is why one catalog serves the two. `all` (shared with the
-// catalog, so it becomes one cross-vertical Home tab) needs no branch of its
-// own below: it isn't `live`, so it falls into the same fetch `sport` uses.
+// `live` is presence-scoped to by433's live feed; `sport` is the forward
+// FotMob TV-guide schedule. `all` includes the live football items alongside
+// the other live sports catalog entries.
 const CATALOG_ID = 'fixtures';
 const LIVE_CATEGORY = 'live';
 const ALL_CATEGORY = 'all';
@@ -43,14 +39,15 @@ const ALL_CATEGORY = 'all';
 const UNGROUPED = 'Other';
 
 // A fixture that's over has nothing left to show, and "upcoming" means
-// within a week of now — fotmob's own tvguide response covers exactly a
-// week forward, so this uses the whole range rather than cutting it short.
-// Live is always relevant regardless of kickoff.
+// within a week of now. FotMob's TV guide covers the forward schedule; by433
+// supplies the live exception when a match is already in play.
 const UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const TV_GUIDE_TTL_MS = 15 * 60 * 1000;
+const BY433_LIVE_TTL_MS = 60 * 1000;
 
 // Editorial ranking for globally recognisable clubs. FotMob ids are the
-// primary key; aliases cover alternate names returned by different daily
-// feeds. This belongs to the extension because the shell must not know what
+// primary key; aliases cover alternate names returned by football feeds. This
+// belongs to the extension because the shell must not know what
 // counts as a top football club.
 const TOP_CLUBS = [
   { id: '8633', aliases: ['real madrid', 'real madrid cf'] },
@@ -77,10 +74,9 @@ const TOP_CLUB_BY_NAME = new Map(
   ),
 );
 
-// fotmob's tvguide is a forward listing, not a live tracker — `isLive` was
-// `false` on every match sampled while building this, live or not, so a
-// kickoff time-window is the reliable signal. ~130 minutes covers a normal
-// 90 minutes plus stoppage/halftime/extra time with room to spare.
+// FotMob's TV guide is a forward listing, not a live tracker. The kickoff
+// window remains a defensive fallback for schedule-only entries; the live
+// catalog itself is driven by by433 presence.
 const ASSUMED_MATCH_DURATION_MS = 130 * 60 * 1000;
 
 // --- fetch ---
@@ -101,37 +97,6 @@ async function fetchFotmobTvGuide() {
   const data = JSON.parse(response.body);
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     throw new Error('tvguide response is not an object');
-  }
-  return data;
-}
-
-// Jakarta does not observe daylight saving time, so shifting the timestamp
-// before reading its UTC calendar fields gives the local YYYYMMDD without
-// depending on Intl support in the JS runtime.
-function jakartaDateKey(nowMs, dayOffset) {
-  const jakartaMs = nowMs + 7 * 60 * 60 * 1000 + dayOffset * 24 * 60 * 60 * 1000;
-  const date = new Date(jakartaMs);
-  const two = (value) => String(value).padStart(2, '0');
-  return `${date.getUTCFullYear()}${two(date.getUTCMonth() + 1)}${two(date.getUTCDate())}`;
-}
-
-async function fetchFotmobMatches(dateKey) {
-  const url =
-    `${FOTMOB_BASE}/api/data/matches?date=${encodeURIComponent(dateKey)}` +
-    `&timezone=${encodeURIComponent(TIME_ZONE)}` +
-    `&ccode3=${encodeURIComponent(FOTMOB_CCODE3)}`;
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': FOTMOB_USER_AGENT,
-      Referer: `${FOTMOB_BASE}/`,
-    },
-  });
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`Request to matches failed: ${response.status}`);
-  }
-  const data = JSON.parse(response.body);
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    throw new Error('matches response is not an object');
   }
   return data;
 }
@@ -159,35 +124,57 @@ async function fetchFotmobPopularLeagues() {
   return data.popular;
 }
 
-// Fetched once per engine lifetime and memoized — one call already covers
-// the whole week, no per-category re-fetch needed. Mirrors cricfy.js's own
-// `cricfyFetchEventsMemo`, cleared on failure so a later call can retry.
+// TV guide is a forward schedule, so it can be cached much longer than the
+// live feed while still refreshing during a long-running app session.
 let fixturesMemo = null;
 
-function fetchFixturesMemo() {
-  if (fixturesMemo === null) {
-    fixturesMemo = fetchFotmobTvGuide().catch((e) => {
+function fetchFixturesMemo(nowMs) {
+  if (
+    fixturesMemo === null ||
+    nowMs - fixturesMemo.fetchedAt >= TV_GUIDE_TTL_MS
+  ) {
+    const promise = fetchFotmobTvGuide().catch((e) => {
       fixturesMemo = null;
       throw e;
     });
+    fixturesMemo = { promise, fetchedAt: nowMs };
   }
-  return fixturesMemo;
+  return fixturesMemo.promise;
 }
 
-let dailyMatchesMemo = null;
 let popularLeaguesMemo = null;
 
-function fetchDailyMatchesMemo(nowMs) {
-  const today = jakartaDateKey(nowMs, 0);
-  const tomorrow = jakartaDateKey(nowMs, 1);
-  const key = `${today}:${tomorrow}`;
-  if (dailyMatchesMemo === null || dailyMatchesMemo.key !== key) {
-    const promise = Promise.all(
-      [today, tomorrow].map((date) => fetchFotmobMatches(date).catch(() => null)),
-    );
-    dailyMatchesMemo = { key, promise };
+let by433LiveMemo = null;
+
+async function fetchBy433Live() {
+  const response = await fetch(`${BY433_BASE}/events/live`, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': FOTMOB_USER_AGENT,
+    },
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Request to by433 live failed: ${response.status}`);
   }
-  return dailyMatchesMemo.promise;
+  const data = JSON.parse(response.body);
+  if (Array.isArray(data)) return data;
+  if (data != null && typeof data === 'object') {
+    for (const key of ['events', 'data', 'items', 'results']) {
+      if (Array.isArray(data[key])) return data[key];
+    }
+  }
+  throw new Error('by433 live response has no event list');
+}
+
+function fetchBy433LiveMemo(nowMs) {
+  if (
+    by433LiveMemo === null ||
+    nowMs - by433LiveMemo.fetchedAt >= BY433_LIVE_TTL_MS
+  ) {
+    const promise = fetchBy433Live().catch(() => []);
+    by433LiveMemo = { promise, fetchedAt: nowMs };
+  }
+  return by433LiveMemo.promise;
 }
 
 function fetchPopularLeaguesMemo() {
@@ -222,29 +209,6 @@ function flattenTvGuide(data) {
   return matches;
 }
 
-function flattenDailyMatches(responses) {
-  const matches = [];
-  for (const data of responses) {
-    if (data == null || !Array.isArray(data.leagues)) continue;
-    for (const league of data.leagues) {
-      const leagueMatches = Array.isArray(league.matches) ? league.matches : [];
-      for (const match of leagueMatches) {
-        matches.push({
-          ...match,
-          utcTime: match.utcTime || (match.status && match.status.utcTime),
-          isLive: match.status && match.status.started === true &&
-            match.status.finished !== true,
-          isFinished: match.status && match.status.finished,
-          leagueName: match.leagueName || league.name,
-          leagueId: match.leagueId != null ? match.leagueId : league.id,
-          primaryLeagueId: league.primaryId != null ? league.primaryId : league.id,
-        });
-      }
-    }
-  }
-  return matches;
-}
-
 function isFriendlyMatch(match) {
   return /friendl/i.test(`${match.leagueName || ''}`);
 }
@@ -254,7 +218,7 @@ function isImportantFootballCompetition(match) {
 }
 
 // Filtering never sorts: matches that survive retain their exact position in
-// the daily matches response. Friendly fixtures remain available even though
+// the TV guide response. Friendly fixtures remain available even though
 // FotMob does not include them in its account-localized popular league list.
 function filterPopularMatches(matches, popularLeagues) {
   const allowedIds = new Set(
@@ -263,6 +227,9 @@ function filterPopularMatches(matches, popularLeagues) {
       .map((league) => String(league.id)),
   );
   return matches.filter((match) => {
+    // A live-only by433 event may not carry the same FotMob league id, but
+    // it is still valuable in the Live section and should not be discarded.
+    if (match.liveSource === 'by433') return true;
     if (isFriendlyMatch(match) || isImportantFootballCompetition(match)) return true;
     const leagueId = match.primaryLeagueId != null
       ? match.primaryLeagueId
@@ -271,31 +238,150 @@ function filterPopularMatches(matches, popularLeagues) {
   });
 }
 
-function fotmobMatchKey(match) {
-  if (match.id != null) return `id:${match.id}`;
-  const homeId = match.home && match.home.id;
-  const awayId = match.away && match.away.id;
-  return `teams:${homeId || ''}:${awayId || ''}:${match.utcTime || ''}`;
+function by433ObjectValue(event, keys) {
+  for (const key of keys) {
+    if (event != null && event[key] != null) return event[key];
+  }
+  return null;
 }
 
-function mergeFotmobMatches(tvGuideMatches, dailyMatches) {
-  const merged = new Map();
-  for (const match of dailyMatches) merged.set(fotmobMatchKey(match), match);
-  for (const match of tvGuideMatches) {
-    const key = fotmobMatchKey(match);
-    const daily = merged.get(key);
-    merged.set(key, daily == null ? match : {
-      ...daily,
+function by433TeamOf(event, side) {
+  const home = side === 'home';
+  const object = by433ObjectValue(
+    event,
+    home
+      ? ['homeTeam', 'home', 'teamA', 'team1', 'home_team']
+      : ['awayTeam', 'away', 'teamB', 'team2', 'away_team'],
+  );
+  const prefix = home ? ['home', 'teamA', 'team1'] : ['away', 'teamB', 'team2'];
+  if (object != null && typeof object === 'object') return object;
+  if (typeof object === 'string') return { name: object };
+  const name = by433ObjectValue(
+    event,
+    prefix.flatMap((value) => [`${value}Name`, `${value}_name`]),
+  );
+  return name == null ? null : { name };
+}
+
+function by433EventTimeOf(event) {
+  const value = by433ObjectValue(event, [
+    'utcTime',
+    'startTime',
+    'startsAt',
+    'startAt',
+    'kickoff',
+    'matchTime',
+  ]);
+  if (value == null) return null;
+  if (typeof value === 'number') {
+    const milliseconds = value < 10000000000 ? value * 1000 : value;
+    const date = new Date(milliseconds);
+    return isNaN(date.getTime()) ? null : date.toISOString();
+  }
+  const date = new Date(value);
+  return isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function by433EventIsFootball(event) {
+  const sport = by433ObjectValue(event, [
+    'sportName',
+    'sport',
+    'category',
+    'sportType',
+  ]);
+  if (sport == null) return true;
+  const name = typeof sport === 'object' ? sport.name || sport.title : sport;
+  return /football|soccer/i.test(`${name || ''}`) &&
+    !/american football/i.test(`${name || ''}`);
+}
+
+function normalizeBy433LiveEvents(data) {
+  const events = Array.isArray(data) ? data : [];
+  return events
+    .filter((event) => event != null && typeof event === 'object')
+    .filter(by433EventIsFootball)
+    .map((event) => {
+      const home = by433TeamOf(event, 'home');
+      const away = by433TeamOf(event, 'away');
+      if (home == null || away == null) return null;
+      const homeName = home.name || home.longName || home.shortName || home.teamName;
+      const awayName = away.name || away.longName || away.shortName || away.teamName;
+      if (homeName == null || awayName == null) return null;
+      const league = by433ObjectValue(event, ['league', 'competition', 'tournament']);
+      return {
+        id: by433ObjectValue(event, ['id', 'eventId', 'matchId', 'event_id']),
+        home: { ...home, name: homeName },
+        away: { ...away, name: awayName },
+        utcTime: by433EventTimeOf(event),
+        leagueName: league != null && typeof league === 'object'
+          ? league.name || league.title
+          : league || by433ObjectValue(event, ['leagueName', 'competitionName']),
+        leagueId: league != null && typeof league === 'object'
+          ? league.id
+          : by433ObjectValue(event, ['leagueId', 'competitionId']),
+      };
+    })
+    .filter((event) => event != null);
+}
+
+function teamNameKeys(team) {
+  if (team == null) return [];
+  return [team.name, team.longName, team.shortName]
+    .filter((name) => name != null && `${name}`.trim().length > 0)
+    .map((name) => normalizedClubName({ name }));
+}
+
+function matchTeamKeys(match) {
+  const homeNames = teamNameKeys(match.home);
+  const awayNames = teamNameKeys(match.away);
+  const keys = [];
+  for (const home of homeNames) {
+    for (const away of awayNames) keys.push(`${home}::${away}`);
+  }
+  return keys;
+}
+
+function mergeBy433LiveStatus(scheduleMatches, liveEvents, nowMs) {
+  const liveByTeamKey = new Map();
+  for (const event of liveEvents) {
+    for (const key of matchTeamKeys(event)) liveByTeamKey.set(key, event);
+  }
+
+  const merged = [];
+  const seenScheduleKeys = new Set();
+  for (const match of scheduleMatches) {
+    const scheduleKeys = matchTeamKeys(match);
+    const live = scheduleKeys
+      .map((key) => liveByTeamKey.get(key))
+      .find((event) => event != null);
+    const key = scheduleKeys[0] || `schedule:${match.id || merged.length}`;
+    if (seenScheduleKeys.has(key)) continue;
+    seenScheduleKeys.add(key);
+    merged.push({
       ...match,
-      home: { ...(daily.home || {}), ...(match.home || {}) },
-      away: { ...(daily.away || {}), ...(match.away || {}) },
-      isLive: daily.isLive === true || match.isLive === true,
-      isFinished: typeof daily.isFinished === 'boolean'
-        ? daily.isFinished
-        : match.isFinished,
+      isLive: live != null,
+      liveChecked: true,
+      liveSource: live == null ? undefined : 'by433',
+      ...(live != null && match.utcTime == null && live.utcTime != null
+        ? { utcTime: live.utcTime }
+        : {}),
     });
   }
-  return Array.from(merged.values());
+
+  const scheduledKeys = new Set(scheduleMatches.flatMap(matchTeamKeys));
+  for (const event of liveEvents) {
+    if (matchTeamKeys(event).some((key) => scheduledKeys.has(key))) continue;
+    merged.push({
+      ...event,
+      source: 'by433',
+      id: event.id == null ? `live:${matchTeamKeys(event)[0]}` : `live:${event.id}`,
+      utcTime: event.utcTime || new Date(nowMs).toISOString(),
+      isLive: true,
+      liveChecked: true,
+      liveSource: 'by433',
+    });
+  }
+  return merged;
 }
 
 function isWomenMatch(match) {
@@ -369,16 +455,14 @@ function kickoffMs(match) {
 }
 
 function isMatchLive(match, nowMs) {
+  if (match.liveChecked === true) return match.isLive === true;
   if (match.isLive === true) return true;
-  if (match.isFinished === true) return false;
   const start = kickoffMs(match);
   if (start == null) return false;
   return nowMs >= start && nowMs <= start + ASSUMED_MATCH_DURATION_MS;
 }
 
 function isMatchFinished(match, nowMs) {
-  if (match.isFinished === true) return true;
-  if (match.isFinished === false) return false;
   if (match.isLive === true) return false;
   const start = kickoffMs(match);
   if (start == null) return false;
@@ -399,6 +483,12 @@ function isRelevantMatch(match, nowMs) {
 
 function fotmobRefId(matchId) {
   return `fotmob:${matchId}`;
+}
+
+function footballRefId(match) {
+  return match.source === 'by433'
+    ? `by433:${match.id}`
+    : fotmobRefId(match.id);
 }
 
 function teamLogoUrl(teamId) {
@@ -427,7 +517,7 @@ function toMediaItem(match, nowMs) {
     ref: {
       extensionId: EXTENSION_ID,
       providerId: PROVIDER_ID,
-      id: fotmobRefId(match.id),
+      id: footballRefId(match),
     },
     kind: 'event',
     title: `${home.name == null ? 'Unknown' : home.name} vs ${
@@ -639,22 +729,16 @@ async function fixturesCatalog(query) {
   // and its cricfy-sourced counterparts are judged against the same "now".
   const nowMs = Date.now();
 
-  const [rawGuide, rawDaily, popularLeagues] = await Promise.all([
-    fetchFixturesMemo(),
-    fetchDailyMatchesMemo(nowMs),
+  const [rawGuide, popularLeagues, rawBy433Live] = await Promise.all([
+    fetchFixturesMemo(nowMs),
     fetchPopularLeaguesMemo(),
+    fetchBy433LiveMemo(nowMs),
   ]);
-  const allowedDates = new Set([
-    jakartaDateKey(nowMs, -1),
-    jakartaDateKey(nowMs, 0),
-    jakartaDateKey(nowMs, 1),
-  ]);
-  const guideMatches = flattenTvGuide(rawGuide).filter(
-    (match) => allowedDates.has(match.dateKey),
-  );
-  let matches = mergeFotmobMatches(
+  const guideMatches = flattenTvGuide(rawGuide);
+  let matches = mergeBy433LiveStatus(
     guideMatches,
-    flattenDailyMatches(rawDaily),
+    normalizeBy433LiveEvents(rawBy433Live),
+    nowMs,
   ).filter((match) => !isWomenMatch(match) && isRelevantMatch(match, nowMs));
   matches = filterPopularMatches(matches, popularLeagues);
   matches = prioritizeTopClubMatches(matches);
