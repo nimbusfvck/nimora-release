@@ -1692,11 +1692,10 @@ async function movieboxResolveSource(sourceId) {
   // the native player selects the playlist extractor.
   const format = movieboxStreamFormat(chosen);
 
-  // MovieBox's own captions when it has them, shegu.st only when it doesn't.
-  let subtitles = movieboxCaptions(downloadData);
-  if (subtitles.length === 0) {
-    subtitles = await movieboxSheguSubtitles(tmdbId, season, episode);
-  }
+  // Only captions advertised by MovieBox belong to this resolved source.
+  // Shegu is an independent external-subtitles provider and is fetched by
+  // the app only after the viewer asks for external subtitles.
+  const subtitles = movieboxCaptions(downloadData);
 
   return {
     url: chosen.url,
@@ -1708,24 +1707,6 @@ async function movieboxResolveSource(sourceId) {
     },
     subtitles,
   };
-}
-
-// shegu.st is keyed by tmdbId, which MovieBox matched nothing by — it found
-// its subject on a name. The id is carried through from the item when it had
-// one; without it there are no subtitles, rather than a lookup on a
-// subjectId shegu would not recognize.
-async function movieboxSheguSubtitles(tmdbId, season, episode) {
-  if (typeof globalThis.sheguSubtitles === 'undefined') return [];
-  if (!tmdbId) return [];
-  try {
-    return await globalThis.sheguSubtitles.fetchMovieSubtitles(
-      tmdbId,
-      season != null ? season : null,
-      episode != null ? episode : null,
-    );
-  } catch (_) {
-    return [];
-  }
 }
 
 // ---- registration — see kora.js's tail for the shared aggregator ----
@@ -3961,13 +3942,10 @@ async function fetchMovieSubtitles(tmdbId, season, episode) {
 
 globalThis.sheguSubtitles = { fetchMovieSubtitles };
 
-// ---- externalSubtitles role — a manual fallback, independent of any source ----
+// ---- externalSubtitles role — a manual lookup, independent of any source ----
 //
-// vaplayer.js/vidrock.js/moviebox.js already call fetchMovieSubtitles
-// themselves, but only when a source's own subtitle list comes back empty —
-// so a source whose subtitles are just wrong or out of sync never gets
-// this. The player's own "fetch external subtitles" button asks for it
-// directly, keyed only on the item's `movie:<tmdbId>` /
+// The player's "fetch external subtitles" button asks for this role directly,
+// keyed only on the item's `movie:<tmdbId>` /
 // `series:<tmdbId>` ref, same convention every other provider file in this
 // bundle re-parses for itself — see e.g. vaplayer.js's parseVaplayerRef).
 function parseSheguRef(refId) {
@@ -4035,11 +4013,9 @@ if (!globalThis.__extension.subtitles) {
 //
 // Matches TMDB-backed items through their `movie:<tmdbId>` reference.
 //
-// `resolve()` also attaches subtitles (shegu.js, loaded alongside this file
-// — see its own header comment) to the `PlayableStream` it returns. Not
-// Vidrock's own concern, but `resolve(sourceId)` is the only place in this
-// protocol that both has a tmdbId (baked into the source id, see below) and
-// produces the object subtitles ride on.
+// Vidrock only returns subtitles that belong to its resolved stream. Shegu is
+// a separate external-subtitles provider and is intentionally not consulted
+// from this resolver.
 
 const VIDROCK_BASE = globalThis.__vidrockBaseUrl || 'https://vidrock.ru';
 
@@ -4107,9 +4083,8 @@ function base64ToBase64Url(b64) {
 //
 // Bakes the still-encrypted url straight in, so `resolve()` needs no second
 // fetch for the stream itself — same shape as kora.js's `encodeKoraSourceId`.
-// The tmdbId rides along too, not because decrypting needs it, but because
-// `resolve()` otherwise has no way back to it for the shegu.st subtitle
-// lookup — `resolve(sourceId)` gets only the opaque id, never the item.
+// The tmdbId rides along because the upstream API response and source label
+// are TMDB-keyed; `resolve(sourceId)` receives only this opaque id.
 
 function encodeVidrockSourceId(payload) {
   const json = JSON.stringify({
@@ -4268,21 +4243,6 @@ async function vidrockSources(args) {
   return { sources };
 }
 
-// Subtitles are shegu.st's, not Vidrock's — see shegu.js's header comment
-// for why this rides inside `resolve()` rather than being a role of its
-// own. Tolerant of shegu.js not being loaded at all (every js_*_test.dart
-// file hand-concatenates its own subset of sources, and plenty of them load
-// vidrock.js without shegu.js), and of the lookup itself failing: either way
-// the stream still resolves, just without subtitles.
-async function vidrockSubtitles(tmdbId, season, episode) {
-  if (typeof globalThis.sheguSubtitles === 'undefined') return [];
-  try {
-    return await globalThis.sheguSubtitles.fetchMovieSubtitles(tmdbId, season, episode);
-  } catch (_) {
-    return [];
-  }
-}
-
 async function resolveVidrockSource(sourceId) {
   const prefix = `${VIDROCK_PROVIDER_KEY}:`;
   const inner = sourceId.startsWith(prefix) ? sourceId.slice(prefix.length) : sourceId;
@@ -4293,9 +4253,6 @@ async function resolveVidrockSource(sourceId) {
 
   const format = decoded.type === 'hls' || url.indexOf('.m3u8') !== -1 ? 'hls' : 'other';
   const result = { url, headers: vidrockHeaders(), format };
-
-  const subtitles = await vidrockSubtitles(decoded.m, decoded.s, decoded.e);
-  if (subtitles.length > 0) result.subtitles = subtitles;
 
   return result;
 }
@@ -4598,20 +4555,6 @@ async function videasyResolveSource(sourceId) {
       label: t.label || t.language || t.lang || '',
     }));
 
-  // Attach shegu.st subtitles if none were bundled.
-  let sheguTracks = [];
-  if (subtitles.length === 0 && globalThis.sheguSubtitles) {
-    try {
-      sheguTracks = await globalThis.sheguSubtitles.fetchMovieSubtitles(
-        tmdbId,
-        season != null ? season : null,
-        episode != null ? episode : null,
-      );
-    } catch (_) {
-      sheguTracks = [];
-    }
-  }
-
   return {
     url: entry.url,
     // These come back as both .m3u8 and .mp4 depending on the server.
@@ -4621,7 +4564,7 @@ async function videasyResolveSource(sourceId) {
       Referer: 'https://player.videasy.to/',
       'User-Agent': VIDEASY_UA,
     },
-    subtitles: subtitles.length > 0 ? subtitles : sheguTracks,
+    subtitles,
   };
 }
 
@@ -4823,15 +4766,6 @@ async function vaplayerResolveSource(sourceId) {
     throw new Error('VaPlayer: stream no longer offered');
   }
 
-  // The upstream's own subtitles when it has any, shegu.st only when it
-  // doesn't — asking shegu regardless would spend a request to produce a
-  // second list nobody reads. It does happen: a film came back with none
-  // here while shegu had 150 for the same tmdbId.
-  let subtitles = vaplayerSubtitles(payload);
-  if (subtitles.length === 0) {
-    subtitles = await vaplayerSheguSubtitles(tmdbId, season, episode);
-  }
-
   return {
     url: urls[index],
     format: 'hls',
@@ -4839,25 +4773,8 @@ async function vaplayerResolveSource(sourceId) {
       Referer: VAPLAYER_REFERER,
       'User-Agent': VAPLAYER_UA,
     },
-    subtitles,
+    subtitles: vaplayerSubtitles(payload),
   };
-}
-
-// Tolerant of shegu.js not being loaded at all — the js_*_test.dart files
-// hand-concatenate their own subsets — and of the lookup failing: either way
-// the stream still resolves, just without subtitles. Same shape vidrock.js
-// uses.
-async function vaplayerSheguSubtitles(tmdbId, season, episode) {
-  if (typeof globalThis.sheguSubtitles === 'undefined') return [];
-  try {
-    return await globalThis.sheguSubtitles.fetchMovieSubtitles(
-      tmdbId,
-      season != null ? season : null,
-      episode != null ? episode : null,
-    );
-  } catch (_) {
-    return [];
-  }
 }
 
 // ---- registration — see kora.js's tail for the shared aggregator ----
