@@ -3468,7 +3468,7 @@ async function fetchGroup(label, fetchFn) {
   }
 }
 
-// --- "highlights" catalog: the `all` category — six horizontal-row
+// --- "highlights" catalog: the `all` category — horizontal-row
 // sections, movie and tv mixed, exactly the shape originally asked for.
 // Separate from the `movie`/`tv` grid catalog below: same provider, second
 // catalog, own catalogId, so it can keep `display: "row"` while the other
@@ -3483,6 +3483,7 @@ const HIGHLIGHT_GROUPS = [
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
   { id: 'popular_today', name: 'Popular Today', fetch: fetchPopularStreaming },
   { id: 'trending_anime', name: 'Trending Anime', fetch: () => anilistHighlightItems() },
+  { id: 'popular_anime_season', name: 'Popular Anime This Season', fetch: () => anilistPopularSeasonItems() },
   { id: 'top_rated_movie', name: 'Top Rated Movie', fetch: () => fetchTopRated('movie') },
   { id: 'top_rated_tv', name: 'Top Rated TV', fetch: () => fetchTopRated('tv') },
   { id: 'oscar_nominees', name: 'Oscar Nominees', fetch: () => fetchSheguList('oscar-nominees-best-picture') },
@@ -6570,10 +6571,10 @@ const ANILIST_MEDIA_FIELDS = `
 `;
 
 const ANILIST_LIST_QUERY = `
-  query ($page: Int, $perPage: Int, $sort: [MediaSort], $status: MediaStatus, $search: String) {
+  query ($page: Int, $perPage: Int, $sort: [MediaSort], $status: MediaStatus, $search: String, $season: MediaSeason, $seasonYear: Int) {
     Page(page: $page, perPage: $perPage) {
       pageInfo { currentPage hasNextPage }
-      media(type: ANIME, isAdult: false, sort: $sort, status: $status, search: $search) {
+      media(type: ANIME, isAdult: false, sort: $sort, status: $status, search: $search, season: $season, seasonYear: $seasonYear) {
         ${ANILIST_MEDIA_FIELDS}
       }
     }
@@ -6718,11 +6719,38 @@ async function anilistCatalog(query) {
 // streamer's licence returned barely thirty titles.
 const ANILIST_HIGHLIGHT_LIMIT = 25;
 
+function anilistSeasonForDate(date) {
+  const month = date.getUTCMonth() + 1;
+  let season;
+  if (month <= 3) {
+    season = 'WINTER';
+  } else if (month <= 6) {
+    season = 'SPRING';
+  } else if (month <= 9) {
+    season = 'SUMMER';
+  } else {
+    season = 'FALL';
+  }
+  return { season, seasonYear: date.getUTCFullYear() };
+}
+
 async function anilistHighlightItems() {
   const data = await anilistQuery(ANILIST_LIST_QUERY, {
     page: 1,
     perPage: ANILIST_HIGHLIGHT_LIMIT,
     sort: ['TRENDING_DESC'],
+  });
+  return data == null ? [] : anilistItemsOf(data);
+}
+
+async function anilistPopularSeasonItems(now) {
+  const current = anilistSeasonForDate(now || new Date());
+  const data = await anilistQuery(ANILIST_LIST_QUERY, {
+    page: 1,
+    perPage: ANILIST_HIGHLIGHT_LIMIT,
+    sort: ['POPULARITY_DESC'],
+    season: current.season,
+    seasonYear: current.seasonYear,
   });
   return data == null ? [] : anilistItemsOf(data);
 }

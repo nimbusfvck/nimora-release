@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.59",
+      "version": "0.6.60",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added a Popular Anime This Season row to Home, sourced from AniList's current season and sorted by popularity.",
         "The anime grid no longer repeats the shelf name as a section heading.",
         "Anime no longer appears twice on Home: TMDB's trending rows leave Japanese animation to the Trending Anime row.",
         "Moved anime to AniList: the anime category, anime search when the Search screen is scoped to it, and Home's anime row, now called Trending Anime. AniList lists each cour as its own entry, numbered the way Sokuja and Indomax number them, so more episodes find a source. The separate Indomax Anime catalog is gone; Indomax still supplies streams.",
@@ -73,7 +74,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "53b0d50e31ed6f4eaada4631289f331ec216b02c55278ca72976bd06c38c90b8"
+      "bundleSha256": "da7ed0168cb02eb3591c63d0d97e2cd097ac3867906f0cabed9d47eabf24b1bf"
     }
   ]
 }
