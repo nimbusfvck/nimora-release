@@ -3425,43 +3425,9 @@ async function fetchPopularStreaming() {
     .map((entry) => entry.item);
 }
 
-async function fetchTopAnimeMediaType(mediaType) {
-  const data = await tmdbGetJson(`/discover/${mediaType}`, {
-    include_adult: 'false',
-    watch_region: TMDB_WATCH_REGION,
-    with_watch_providers: WATCH_PROVIDER.crunchyroll,
-    with_watch_monetization_types: TMDB_STREAMING_TYPES,
-    with_genres: '16',
-    with_origin_country: 'JP',
-    sort_by: 'popularity.desc',
-    page: 1,
-  });
-  const results = Array.isArray(data.results) ? data.results : [];
-  return results.map((result) => ({
-    item: tmdbToMediaItem(result, mediaType),
-    popularity: typeof result.popularity === 'number' ? result.popularity : 0,
-  }));
-}
-
-// Keep anime in the same TMDB-backed catalog as the other Home shelves. The
-// Japanese origin and Crunchyroll availability filters avoid mixing general
-// animation into this section, while the source provider remains responsible
-// for playback.
-async function fetchTopAnime() {
-  const [movies, tv] = await Promise.all([
-    fetchTopAnimeMediaType('movie'),
-    fetchTopAnimeMediaType('tv'),
-  ]);
-  return [...movies, ...tv]
-    .sort((a, b) => b.popularity - a.popularity)
-    .slice(0, 25)
-    .map((entry) => entry.item);
-}
-
 // TMDB's `watch_providers` catalog ids — stable across regions, used with
 // `with_watch_providers` to narrow discover to one streamer's US catalog.
 const WATCH_PROVIDER = {
-  crunchyroll: 283,
   netflix: 8,
   hulu: 15,
   disneyPlus: 337,
@@ -3502,7 +3468,7 @@ const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
   { id: 'popular_today', name: 'Popular Today', fetch: fetchPopularStreaming },
-  { id: 'top_anime', name: 'Top Anime', fetch: fetchTopAnime },
+  { id: 'trending_anime', name: 'Trending Anime', fetch: () => anilistHighlightItems() },
   { id: 'top_rated_movie', name: 'Top Rated Movie', fetch: () => fetchTopRated('movie') },
   { id: 'top_rated_tv', name: 'Top Rated TV', fetch: () => fetchTopRated('tv') },
   { id: 'oscar_nominees', name: 'Oscar Nominees', fetch: () => fetchSheguList('oscar-nominees-best-picture') },
@@ -3840,13 +3806,26 @@ async function tmdbSearchType(mediaType, query, page, extraParams) {
   }
 }
 
+// TMDB backs the film and television scopes and nothing else here: anime has
+// its own catalog, counted the way the streaming sites count, and NSFW is
+// Indomax's. Answering those scopes would put the wrong database in front of
+// a user who just told us which one they wanted. An unscoped search still
+// searches both of TMDB's kinds, as it always has.
+const TMDB_SEARCH_CATEGORIES = ['movie', 'tv'];
+
 async function tmdbSearch(args) {
   const query = args.query;
   if (!query) return { sections: [] };
+  const category = args.category;
+  if (category != null && TMDB_SEARCH_CATEGORIES.indexOf(category) === -1) {
+    return { sections: [] };
+  }
   const page = args.page ? Number(args.page) : 1;
   const [movies, tv] = await Promise.all([
-    tmdbSearchType('movie', query, page, { region: 'US' }),
-    tmdbSearchType('tv', query, page),
+    category === 'tv'
+      ? []
+      : tmdbSearchType('movie', query, page, { region: 'US' }),
+    category === 'movie' ? [] : tmdbSearchType('tv', query, page),
   ]);
   const merged = [...movies, ...tv].sort(
     (a, b) => (b.result.popularity || 0) - (a.result.popularity || 0),
@@ -4805,7 +4784,44 @@ globalThis.__streamProviders.push({
 // provider follows Sokuja's own JSON mirror endpoint and only returns mirrors
 // that already contain a direct media URL.
 
-const SOKUJA_BASE = globalThis.__sokujaBaseUrl || 'https://x6.sokuja.uk';
+// Sokuja rotates its streaming domain every few weeks. Two landing hosts
+// announce the current one and have stayed put across rotations: sokuja.net
+// 302s straight to the live mirror, and sokuja.id links it behind its primary
+// button. A mirror pinned in the bundle means the provider dies silently on
+// every rotation, so the base is discovered at runtime and the pin below is
+// only the last resort.
+const SOKUJA_FALLBACK_BASE = 'https://x6.sokuja.uk';
+const SOKUJA_LANDING_URLS =
+  Array.isArray(globalThis.__sokujaLandingUrls) &&
+    globalThis.__sokujaLandingUrls.length > 0
+    ? globalThis.__sokujaLandingUrls.map(String)
+    : ['https://sokuja.net/', 'https://sokuja.id/'];
+// Links the landing page carries that are never the mirror.
+const SOKUJA_LINK_DENYLIST = [
+  't.me',
+  'telegram.me',
+  'telegram.org',
+  'facebook.com',
+  'youtube.com',
+  'youtu.be',
+  'instagram.com',
+  'twitter.com',
+  'x.com',
+  'discord.gg',
+  'discord.com',
+  'schema.org',
+];
+// An explicit base opts out of discovery entirely, with no request spent on
+// it: that is what the tests pin, and what a host override would mean.
+const SOKUJA_BASE_OVERRIDE =
+  typeof globalThis.__sokujaBaseUrl === 'string' && globalThis.__sokujaBaseUrl
+    ? globalThis.__sokujaBaseUrl
+    : null;
+let sokujaActiveBase = SOKUJA_BASE_OVERRIDE || SOKUJA_FALLBACK_BASE;
+let sokujaBasePending = null;
+// Distinguishes "the mirror did not answer" from "the mirror has no such
+// anime". Only the former is worth re-running discovery for.
+const SOKUJA_UNREACHABLE = { unreachable: true };
 const SOKUJA_TMDB_BASE =
   globalThis.__sokujaTmdbBaseUrl || 'https://api.themoviedb.org/3';
 const SOKUJA_TMDB_API_KEY = '8476a7ab80ad76f0936744df0430e67c';
@@ -4818,7 +4834,7 @@ const SOKUJA_USER_AGENT =
 function sokujaHeaders(referer) {
   return {
     Accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
-    Referer: referer || `${SOKUJA_BASE}/`,
+    Referer: referer || `${sokujaActiveBase}/`,
     'User-Agent': SOKUJA_USER_AGENT,
   };
 }
@@ -4826,8 +4842,8 @@ function sokujaHeaders(referer) {
 function sokujaUrl(path) {
   if (typeof path !== 'string' || path.length === 0) return null;
   if (/^https?:\/\//i.test(path)) return path;
-  if (path.startsWith('/')) return `${SOKUJA_BASE}${path}`;
-  return `${SOKUJA_BASE}/${path}`;
+  if (path.startsWith('/')) return `${sokujaActiveBase}${path}`;
+  return `${sokujaActiveBase}/${path}`;
 }
 
 function sokujaDecodeHtml(value) {
@@ -4932,19 +4948,106 @@ async function sokujaGet(url, options) {
   }
 }
 
+function sokujaHostOf(url) {
+  const match = /^https?:\/\/([^/?#]+)/i.exec(String(url || ''));
+  if (match == null) return null;
+  const host = match[1].toLowerCase().replace(/:\d+$/, '');
+  return host.startsWith('www.') ? host.slice(4) : host;
+}
+
+function sokujaOriginOf(url) {
+  const match = /^(https?:\/\/[^/?#]+)/i.exec(String(url || ''));
+  return match == null ? null : match[1];
+}
+
+// A landing host names the mirror; it is never the mirror itself, and neither
+// is any of the social links it sits next to. Excluding by origin rather than
+// by host keeps the check honest when two origins share a host.
+function sokujaIsMirrorOrigin(origin) {
+  if (origin == null) return false;
+  if (SOKUJA_LANDING_URLS.some((url) => sokujaOriginOf(url) === origin)) {
+    return false;
+  }
+  const host = sokujaHostOf(origin);
+  if (host == null || host.indexOf('.') === -1) return false;
+  return !SOKUJA_LINK_DENYLIST.some(
+    (denied) => host === denied || host.endsWith(`.${denied}`),
+  );
+}
+
+// The landing page marks the mirror with `button-default` and every other
+// button is a social link. Falling back to the first non-social absolute link
+// keeps this working if that class is renamed, which is the part of the page
+// most likely to change.
+function sokujaMirrorLink(html) {
+  const anchors = /<a\b([^>]*)>/gi;
+  let fallback = null;
+  let match;
+  while ((match = anchors.exec(html || '')) != null) {
+    const origin = sokujaOriginOf(sokujaAttribute(match[1], 'href'));
+    if (!sokujaIsMirrorOrigin(origin)) continue;
+    if (/button-default/i.test(match[1])) return origin;
+    if (fallback == null) fallback = origin;
+  }
+  return fallback;
+}
+
+async function sokujaProbeLanding(landingUrl) {
+  const response = await sokujaGet(
+    landingUrl,
+    { headers: sokujaHeaders(landingUrl) },
+  );
+  if (response == null) return null;
+  // `fetch` follows the Location chain itself and reports where it landed, so
+  // a redirecting landing host has already named the mirror.
+  const redirected = sokujaOriginOf(response.url);
+  if (sokujaIsMirrorOrigin(redirected)) return redirected;
+  return sokujaMirrorLink(response.body);
+}
+
+async function sokujaResolveBase() {
+  for (const landing of SOKUJA_LANDING_URLS) {
+    const base = await sokujaProbeLanding(landing);
+    if (base != null) {
+      sokujaActiveBase = base;
+      return base;
+    }
+  }
+  // Both landing hosts unreachable — an outage, or an ISP block on them
+  // specifically. Keep the base we already have rather than giving up: it is
+  // stale at worst, and often still serving.
+  return sokujaActiveBase;
+}
+
+// Memoised on the promise rather than the value: one `sources()` fan-out can
+// issue several Sokuja lookups at once, and they must share one discovery.
+function sokujaEnsureBase() {
+  if (SOKUJA_BASE_OVERRIDE != null) return Promise.resolve(SOKUJA_BASE_OVERRIDE);
+  if (sokujaBasePending == null) {
+    sokujaBasePending = sokujaResolveBase().catch(() => sokujaActiveBase);
+  }
+  return sokujaBasePending;
+}
+
+function sokujaForgetBase() {
+  if (SOKUJA_BASE_OVERRIDE == null) sokujaBasePending = null;
+}
+
 async function sokujaFindAnime(title, season, availableAt) {
   const searchUrl =
-    `${SOKUJA_BASE}/?s=${encodeURIComponent(title)}&page=1`;
+    `${sokujaActiveBase}/?s=${encodeURIComponent(title)}&page=1`;
   const response = await sokujaGet(searchUrl, { headers: sokujaHeaders(searchUrl) });
-  if (response == null) return null;
+  if (response == null) return SOKUJA_UNREACHABLE;
   const candidates = sokujaSearchCandidates(
     sokujaSearchResults(response.body),
     title,
     season,
   );
   if (candidates.length === 0) return null;
+  const wanted = sokujaNormalizeTitle(title);
   const wantedDate = sokujaDateKey(availableAt);
   if (wantedDate != null) {
+    let exactMatch = null;
     for (const candidate of candidates) {
       const detail = await sokujaGet(
         candidate.result.url,
@@ -4959,10 +5062,22 @@ async function sokujaFindAnime(title, season, availableAt) {
           result: candidate.result,
           detailBody: detail.body,
           episodeNumber: Number(episode.episodeNumber),
+          matchedByDate: true,
         };
       }
+      if (
+        exactMatch == null &&
+        sokujaNormalizeTitle(candidate.result.title) === wanted
+      ) {
+        exactMatch = { result: candidate.result, detailBody: detail.body };
+      }
     }
-    return null;
+    // `createdAt` is when Sokuja uploaded the episode, not when it aired, so a
+    // series it posted years after broadcast can never match by date — One
+    // Piece episode 1 aired in 1999 and was uploaded in 2017. Only a loose
+    // title match is a split-cour risk worth refusing; an exact one is the
+    // series itself, and falls back to matching by episode number.
+    return exactMatch;
   }
   const selected = candidates[0];
   const detail = await sokujaGet(
@@ -4975,7 +5090,7 @@ async function sokujaFindAnime(title, season, availableAt) {
   const hasDatedEpisodes = sokujaEpisodes(detail.body).some(
     (entry) => sokujaDateKey(entry && entry.createdAt) != null,
   );
-  const exact = sokujaNormalizeTitle(selected.result.title) === sokujaNormalizeTitle(title);
+  const exact = sokujaNormalizeTitle(selected.result.title) === wanted;
   if (!exact && hasDatedEpisodes) return null;
   return { result: selected.result, detailBody: detail.body };
 }
@@ -5026,6 +5141,28 @@ function sokujaEpisodeUrl(html, episodeNumber, availableAt) {
   );
   const fallback = pattern.exec(html || '');
   return fallback == null ? null : sokujaUrl(fallback[1]);
+}
+
+function sokujaHighestEpisodeNumber(html) {
+  return sokujaEpisodes(html).reduce((highest, entry) => {
+    const number = Number(entry && entry.episodeNumber);
+    return Number.isInteger(number) && number > highest ? number : highest;
+  }, 0);
+}
+
+// TMDB splits a long-running anime into arc-sized seasons while Sokuja numbers
+// the whole run straight through: One Piece season 2 episode 1 is episode 62
+// there. Asking such a page for episode 1 would quietly play the wrong episode
+// — worse than offering no source — so the season-relative number is used only
+// for entries whose own list never reaches the absolute one. Those are the
+// per-cour pages, which start counting from 1 again.
+async function sokujaNumberedEpisodeUrl(item, query, detailBody) {
+  const relative = sokujaEpisodeUrl(detailBody, query.episode, null);
+  if (!Number.isInteger(query.season) || query.season <= 1) return relative;
+  const absolute = await sokujaAbsoluteEpisode(item, query.season, query.episode);
+  if (absolute == null) return null;
+  if (sokujaHighestEpisodeNumber(detailBody) < absolute) return relative;
+  return sokujaEpisodeUrl(detailBody, absolute, null);
 }
 
 function sokujaMovieUrl(html) {
@@ -5099,6 +5236,43 @@ async function sokujaEpisodeAvailableAt(item) {
   }
 }
 
+// Counts the episodes TMDB places before [season] to turn a season-relative
+// number into the absolute one Sokuja indexes by.
+async function sokujaAbsoluteEpisode(item, season, episode) {
+  if (!Number.isInteger(episode) || episode < 1) return null;
+  const parsed = sokujaTmdbEpisodeRef(item);
+  if (parsed == null) return null;
+
+  const query = [
+    `api_key=${encodeURIComponent(SOKUJA_TMDB_API_KEY)}`,
+    'language=en-US',
+  ].join('&');
+  const response = await sokujaGet(
+    `${SOKUJA_TMDB_BASE}/tv/${encodeURIComponent(parsed.tmdbId)}?${query}`,
+    { headers: sokujaHeaders(SOKUJA_TMDB_BASE) },
+  );
+  if (response == null) return null;
+  let seasons;
+  try {
+    const payload = JSON.parse(response.body);
+    seasons = Array.isArray(payload && payload.seasons) ? payload.seasons : [];
+  } catch (_) {
+    return null;
+  }
+
+  let offset = 0;
+  for (const entry of seasons) {
+    const number = Number(entry && entry.season_number);
+    // Season 0 is specials: not part of the run Sokuja numbers through.
+    if (!Number.isInteger(number) || number < 1 || number >= season) continue;
+    const count = Number(entry && entry.episode_count);
+    // One unknown count makes the whole sum wrong, so refuse rather than guess.
+    if (!Number.isInteger(count) || count < 1) return null;
+    offset += count;
+  }
+  return offset === 0 ? null : offset + episode;
+}
+
 function sokujaItemQuery(item) {
   const extra = item && item.extra && typeof item.extra === 'object'
     ? item.extra
@@ -5142,19 +5316,40 @@ async function sokujaSources(args) {
 
   const query = sokujaItemQuery(item);
   if (!query.title) return { sources: [] };
+  await sokujaEnsureBase();
   const availableAt = await sokujaEpisodeAvailableAt(item);
-  const found = await sokujaFindAnime(query.title, query.season, availableAt);
-  if (found == null) return { sources: [] };
+  let found = await sokujaFindAnime(query.title, query.season, availableAt);
+  if (found === SOKUJA_UNREACHABLE) {
+    // A mirror that stops answering mid-session is the usual sign it rotated.
+    // Re-run discovery once and retry, but only if it named a different host:
+    // otherwise this is an outage and the second request buys nothing.
+    const stale = sokujaActiveBase;
+    sokujaForgetBase();
+    const refreshed = await sokujaEnsureBase();
+    found = refreshed === stale
+      ? null
+      : await sokujaFindAnime(query.title, query.season, availableAt);
+  }
+  if (found == null || found === SOKUJA_UNREACHABLE) return { sources: [] };
   const result = found.result;
 
   const detailBody = found.detailBody || (await sokujaGet(
     result.url,
-    { headers: sokujaHeaders(`${SOKUJA_BASE}/`) },
+    { headers: sokujaHeaders(`${sokujaActiveBase}/`) },
   ))?.body;
   if (detailBody == null) return { sources: [] };
-  const watchUrl = query.isEpisode
-    ? sokujaEpisodeUrl(detailBody, found.episodeNumber || query.episode, availableAt)
-    : sokujaMovieUrl(detailBody) || result.url;
+  let watchUrl;
+  if (!query.isEpisode) {
+    watchUrl = sokujaMovieUrl(detailBody) || result.url;
+  } else if (found.matchedByDate) {
+    watchUrl = sokujaEpisodeUrl(
+      detailBody,
+      found.episodeNumber || query.episode,
+      availableAt,
+    );
+  } else {
+    watchUrl = await sokujaNumberedEpisodeUrl(item, query, detailBody);
+  }
   if (watchUrl == null) return { sources: [] };
 
   const episodeResponse = await sokujaGet(
@@ -5165,7 +5360,7 @@ async function sokujaSources(args) {
   const episodeId = sokujaEpisodeId(episodeResponse.body);
   if (episodeId == null) return { sources: [] };
 
-  const mirrorsUrl = `${SOKUJA_BASE}/api/video-mirrors/?e=${encodeURIComponent(episodeId)}`;
+  const mirrorsUrl = `${sokujaActiveBase}/api/video-mirrors/?e=${encodeURIComponent(episodeId)}`;
   const mirrorsResponse = await sokujaGet(
     mirrorsUrl,
     { headers: sokujaHeaders(watchUrl) },
@@ -5212,11 +5407,14 @@ async function sokujaResolveSource(sourceId) {
   if (!payload || typeof payload.u !== 'string' || !/^https?:\/\//i.test(payload.u)) {
     throw new Error('Malformed Sokuja source id');
   }
+  // Playback can resume from a stored source id in a session where nothing
+  // searched Sokuja yet, so the Referer needs its own guarantee of a base.
+  await sokujaEnsureBase();
   const format = /\.m3u8(?:$|\?)/i.test(payload.u) ? 'hls' : 'other';
   return {
     url: payload.u,
     format,
-    headers: sokujaHeaders(`${SOKUJA_BASE}/`),
+    headers: sokujaHeaders(`${sokujaActiveBase}/`),
     ...(payload.q ? { label: `Sokuja ${payload.q}` } : {}),
   };
 }
@@ -5264,7 +5462,6 @@ const INDOMAX_PROVIDER_ID = 'nimora.indomax';
 const INDOMAX_FIRE_BASE =
   globalThis.__indomaxFireBaseUrl || 'https://embedpyrox.xyz';
 const INDOMAX_NSFW_CATALOG_ID = 'nsfw';
-const INDOMAX_ANIME_CATALOG_ID = 'anime';
 const INDOMAX_NSFW_SUBCATEGORIES = [
   { id: 'jav', name: 'JAV' },
   { id: 'asia-m', name: 'Asia M' },
@@ -5622,10 +5819,7 @@ function indomaxNsfwCategory(categoryId) {
 }
 
 function indomaxCategoryUrl(base, categoryId, page) {
-  const slug = categoryId === INDOMAX_ANIME_CATALOG_ID
-    ? INDOMAX_ANIME_CATALOG_ID
-    : indomaxNsfwCategory(categoryId).id;
-  const path = `/category/${slug}/`;
+  const path = `/category/${indomaxNsfwCategory(categoryId).id}/`;
   return page > 1 ? `${base}${path}page/${page}/` : `${base}${path}`;
 }
 
@@ -5708,10 +5902,6 @@ async function indomaxNsfwCatalog(query) {
     result.nextPage = String(Number(request.page || 1) + 1);
   }
   return result;
-}
-
-async function indomaxAnimeCatalog(query) {
-  return indomaxCategoryCatalog(query, INDOMAX_ANIME_CATALOG_ID, 'Anime', []);
 }
 
 function indomaxSearchItem(result) {
@@ -6300,10 +6490,6 @@ globalThis.__catalogProviders.push({
   catalogId: INDOMAX_NSFW_CATALOG_ID,
   catalog: indomaxNsfwCatalog,
 });
-globalThis.__catalogProviders.push({
-  catalogId: INDOMAX_ANIME_CATALOG_ID,
-  catalog: indomaxAnimeCatalog,
-});
 
 globalThis.__extension = globalThis.__extension || {};
 const indomaxPreviousSearch = globalThis.__extension.search;
@@ -6329,4 +6515,355 @@ globalThis.__extension.search = async (args) => {
     (section) => section != null && Array.isArray(section.items) && section.items.length > 0,
   );
   return hasIndomaxItems ? indomax : existing;
+};
+
+// AniList anime catalog, search, and meta.
+//
+// TMDB backs everything else here, and deliberately does not back anime. The
+// two databases disagree about what an anime *is*: TMDB folds Bleach's four
+// Thousand-Year Blood War cours into one 50-episode "Season 2", while AniList
+// lists each cour as its own entry numbered from 1 — which is exactly how
+// Sokuja and Indomax list them. Matching a catalog item to a stream is a
+// title-and-number game, so the catalog that counts the way the sources count
+// wins more sources.
+//
+// The cost is deliberate and worth stating: an AniList ref carries no TMDB id,
+// so the tmdbId-keyed providers (Vidrock, Videasy, MovieBox, and Shegu
+// subtitles) cannot serve these items. Anime plays from the providers that
+// match on title — which are the ones that carry Indonesian subtitles anyway.
+
+const ANILIST_API_URL = globalThis.__anilistApiUrl || 'https://graphql.anilist.co';
+const ANILIST_PROVIDER_ID = 'nimora.anilist';
+const ANILIST_CATALOG_ID = 'anilist';
+const ANILIST_CATEGORY = 'anime';
+const ANILIST_PER_PAGE = 30;
+// One page of aired episodes is enough to date a running cour, which is the
+// case that needs dates at all: a stream provider stamps its uploads with the
+// broadcast day. A long-runner's early episodes fall outside this window and
+// carry no date, and are matched by number instead.
+const ANILIST_SCHEDULE_PER_PAGE = 100;
+
+const ANILIST_MEDIA_FIELDS = `
+  id
+  format
+  status
+  episodes
+  averageScore
+  startDate { year }
+  title { romaji english }
+  coverImage { extraLarge large }
+  bannerImage
+`;
+
+const ANILIST_LIST_QUERY = `
+  query ($page: Int, $perPage: Int, $sort: [MediaSort], $status: MediaStatus, $search: String) {
+    Page(page: $page, perPage: $perPage) {
+      pageInfo { currentPage hasNextPage }
+      media(type: ANIME, isAdult: false, sort: $sort, status: $status, search: $search) {
+        ${ANILIST_MEDIA_FIELDS}
+      }
+    }
+  }
+`;
+
+const ANILIST_MEDIA_QUERY = `
+  query ($id: Int, $schedulePerPage: Int) {
+    Media(id: $id, type: ANIME) {
+      ${ANILIST_MEDIA_FIELDS}
+      genres
+      description(asHtml: false)
+      nextAiringEpisode { episode }
+      airingSchedule(notYetAired: false, page: 1, perPage: $schedulePerPage) {
+        nodes { episode airingAt }
+      }
+    }
+  }
+`;
+
+// Sorted shelves rather than genre shelves: AniList's genre list is long and
+// uneven, while these four answer the questions a browsing user actually has.
+const ANILIST_SHELVES = [
+  { id: 'trending', name: 'Trending', sort: ['TRENDING_DESC'] },
+  { id: 'popular', name: 'Popular', sort: ['POPULARITY_DESC'] },
+  { id: 'airing', name: 'Airing Now', sort: ['POPULARITY_DESC'], status: 'RELEASING' },
+  { id: 'top', name: 'Top Rated', sort: ['SCORE_DESC'] },
+];
+
+async function anilistQuery(query, variables) {
+  try {
+    const response = await fetch(ANILIST_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+    if (response.status < 200 || response.status >= 300) return null;
+    const payload = JSON.parse(response.body);
+    // GraphQL reports failure in the body with a 200, so a present `data` is
+    // the only signal worth trusting.
+    return payload && payload.data ? payload.data : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Romaji first, not English: the Indonesian fansub sites this catalog feeds
+// list titles in romaji, and the item's title is what the stream providers
+// match on.
+function anilistTitle(media) {
+  const title = media && media.title ? media.title : {};
+  return title.romaji || title.english || 'Untitled';
+}
+
+function anilistRefId(mediaId) {
+  return `anilist:media:${mediaId}`;
+}
+
+function anilistEpisodeRefId(mediaId, episode) {
+  return `anilist:episode:${mediaId}:${episode}`;
+}
+
+function anilistParseRefId(refId) {
+  const match = /^anilist:media:(\d+)$/.exec(String(refId || ''));
+  return match == null ? null : match[1];
+}
+
+function anilistToMediaItem(media) {
+  const item = {
+    ref: {
+      extensionId: EXTENSION_ID,
+      providerId: ANILIST_PROVIDER_ID,
+      id: anilistRefId(media.id),
+    },
+    kind: media.format === 'MOVIE' ? 'video' : 'series',
+    title: anilistTitle(media),
+  };
+  const year = media.startDate && media.startDate.year;
+  if (Number.isInteger(year) && year > 0) item.releaseYear = year;
+  // AniList scores out of 100; the protocol's rating is the 0–10 scale the
+  // rest of the catalog uses.
+  if (Number.isFinite(media.averageScore) && media.averageScore > 0) {
+    item.rating = media.averageScore / 10;
+  }
+  const artwork = {};
+  const cover = media.coverImage || {};
+  const portrait = cover.extraLarge || cover.large;
+  if (portrait) artwork.portrait = { url: portrait };
+  if (media.bannerImage) artwork.landscape = { url: media.bannerImage };
+  if (Object.keys(artwork).length > 0) item.artwork = artwork;
+  return item;
+}
+
+function anilistItemsOf(data) {
+  const page = data && data.Page;
+  const media = page && Array.isArray(page.media) ? page.media : [];
+  return media.filter((entry) => entry != null).map(anilistToMediaItem);
+}
+
+function anilistShelf(subCategory) {
+  if (subCategory == null) return ANILIST_SHELVES[0];
+  return ANILIST_SHELVES.find((shelf) => shelf.id === subCategory) || null;
+}
+
+async function anilistCatalog(query) {
+  if (query.category !== ANILIST_CATEGORY) return { sections: [] };
+  const subCategories = ANILIST_SHELVES.map((shelf) => ({
+    id: shelf.id,
+    name: shelf.name,
+  }));
+  const shelf = anilistShelf(query.subCategory);
+  if (shelf == null) return { sections: [], subCategories };
+
+  const requested = Number(query.page);
+  const page = Number.isInteger(requested) && requested > 0 ? requested : 1;
+  const data = await anilistQuery(ANILIST_LIST_QUERY, {
+    page,
+    perPage: ANILIST_PER_PAGE,
+    sort: shelf.sort,
+    status: shelf.status,
+  });
+  if (data == null) return { sections: [], subCategories };
+
+  const result = {
+    sections: [{ id: shelf.id, title: shelf.name, items: anilistItemsOf(data) }],
+    subCategories,
+  };
+  const pageInfo = data.Page && data.Page.pageInfo;
+  if (pageInfo && pageInfo.hasNextPage) result.nextPage = String(page + 1);
+  return result;
+}
+
+// The Home "Trending Anime" row. It lives in the TMDB-backed highlights
+// catalog with the other rows, but its data comes from here: TMDB has no
+// anime genre, and narrowing `discover` to Japanese animation on one
+// streamer's licence returned barely thirty titles.
+const ANILIST_HIGHLIGHT_LIMIT = 25;
+
+async function anilistHighlightItems() {
+  const data = await anilistQuery(ANILIST_LIST_QUERY, {
+    page: 1,
+    perPage: ANILIST_HIGHLIGHT_LIMIT,
+    sort: ['TRENDING_DESC'],
+  });
+  return data == null ? [] : anilistItemsOf(data);
+}
+
+async function anilistSearch(args) {
+  const search = args && args.query;
+  if (!search) return { sections: [] };
+  const requested = Number(args.page);
+  const page = Number.isInteger(requested) && requested > 0 ? requested : 1;
+  const data = await anilistQuery(ANILIST_LIST_QUERY, {
+    page,
+    perPage: ANILIST_PER_PAGE,
+    search,
+    sort: ['SEARCH_MATCH'],
+  });
+  if (data == null) return { sections: [] };
+  const result = { sections: [{ id: 'anilist-results', items: anilistItemsOf(data) }] };
+  const pageInfo = data.Page && data.Page.pageInfo;
+  if (pageInfo && pageInfo.hasNextPage) result.nextPage = String(page + 1);
+  return result;
+}
+
+// AniList's plain-text description still carries the site's own line breaks
+// and the occasional inline tag.
+function anilistDescription(value) {
+  return String(value || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function anilistHighestScheduled(schedule) {
+  let highest = 0;
+  for (const episode of schedule.keys()) {
+    if (episode > highest) highest = episode;
+  }
+  return highest;
+}
+
+// The guide lists every episode announced, aired or not — the app hides the
+// unaired ones by their date. `episodes` is null while a series is running,
+// so an announced total is not always available and the schedule stands in.
+function anilistEpisodeCount(media, schedule) {
+  if (Number.isInteger(media.episodes) && media.episodes > 0) {
+    return media.episodes;
+  }
+  return Math.max(anilistLastAired(media, schedule), anilistHighestScheduled(schedule));
+}
+
+// Where a series that has never been played should start. Not the last
+// episode in the guide: a running cour announces its full episode count from
+// the first week, so the guide's tail is months away from airing.
+function anilistLastAired(media, schedule) {
+  const next = media.nextAiringEpisode && media.nextAiringEpisode.episode;
+  if (Number.isInteger(next) && next > 0) return next - 1;
+  const scheduled = anilistHighestScheduled(schedule);
+  if (scheduled > 0) return scheduled;
+  // Nothing airing and nothing scheduled: a finished series, all of it out.
+  return Number.isInteger(media.episodes) && media.episodes > 0
+    ? media.episodes
+    : 0;
+}
+
+function anilistSchedule(media) {
+  const nodes = media.airingSchedule && Array.isArray(media.airingSchedule.nodes)
+    ? media.airingSchedule.nodes
+    : [];
+  const byEpisode = new Map();
+  for (const node of nodes) {
+    const episode = node && Number(node.episode);
+    const airingAt = node && Number(node.airingAt);
+    if (!Number.isInteger(episode) || !Number.isFinite(airingAt)) continue;
+    byEpisode.set(episode, new Date(airingAt * 1000).toISOString());
+  }
+  return byEpisode;
+}
+
+// One group, always: an AniList entry *is* one cour, numbered from 1, so a
+// season axis on top of it would be invented. The id still says `season:1`
+// because stream providers read the season out of it.
+function anilistEpisodeGuide(media, schedule, total) {
+  if (total < 1) return null;
+  const episodes = [];
+  for (let position = 1; position <= total; position++) {
+    const episode = {
+      ref: {
+        extensionId: EXTENSION_ID,
+        providerId: ANILIST_PROVIDER_ID,
+        id: anilistEpisodeRefId(media.id, position),
+      },
+      title: `Episode ${position}`,
+      position,
+    };
+    const availableAt = schedule.get(position);
+    if (availableAt != null) episode.availableAt = availableAt;
+    episodes.push(episode);
+  }
+  return { groups: [{ id: 'season:1', title: 'Episodes', episodes }] };
+}
+
+async function anilistMeta(args) {
+  const mediaId = anilistParseRefId(args && args.ref && args.ref.id);
+  if (mediaId == null) {
+    throw new Error(`Not an AniList ref id: ${args && args.ref && args.ref.id}`);
+  }
+  const data = await anilistQuery(ANILIST_MEDIA_QUERY, {
+    id: Number(mediaId),
+    schedulePerPage: ANILIST_SCHEDULE_PER_PAGE,
+  });
+  const media = data && data.Media;
+  if (media == null) throw new Error(`AniList has no media ${mediaId}`);
+
+  const detail = { item: anilistToMediaItem(media) };
+  const description = anilistDescription(media.description);
+  if (description) detail.description = description;
+  if (Array.isArray(media.genres) && media.genres.length > 0) {
+    detail.tags = media.genres.filter((genre) => typeof genre === 'string');
+  }
+  if (media.format === 'MOVIE') return detail;
+
+  const schedule = anilistSchedule(media);
+  const total = anilistEpisodeCount(media, schedule);
+  const guide = anilistEpisodeGuide(media, schedule, total);
+  if (guide != null) {
+    detail.episodeGuide = guide;
+    const lastAired = Math.min(anilistLastAired(media, schedule), total);
+    if (lastAired >= 1) {
+      detail.episodeGuide.defaultEpisodeRef = {
+        extensionId: EXTENSION_ID,
+        providerId: ANILIST_PROVIDER_ID,
+        id: anilistEpisodeRefId(media.id, lastAired),
+      };
+    }
+  }
+  return detail;
+}
+
+globalThis.__catalogProviders = globalThis.__catalogProviders || [];
+globalThis.__catalogProviders.push({
+  catalogId: ANILIST_CATALOG_ID,
+  catalog: anilistCatalog,
+});
+
+globalThis.__metaProviders = globalThis.__metaProviders || [];
+globalThis.__metaProviders.push({
+  providerId: ANILIST_PROVIDER_ID,
+  meta: anilistMeta,
+});
+
+// Search is one call per extension, so the providers in this bundle form a
+// chain rather than a fan-out. AniList takes the `anime` scope outright and
+// hands everything else — including an unscoped search, where TMDB's results
+// would only be duplicated — to whoever was already installed.
+globalThis.__extension = globalThis.__extension || {};
+const anilistPreviousSearch = globalThis.__extension.search;
+globalThis.__extension.search = async (args) => {
+  if (args && args.category === ANILIST_CATEGORY) return anilistSearch(args);
+  if (typeof anilistPreviousSearch !== 'function') return { sections: [] };
+  return anilistPreviousSearch(args);
 };

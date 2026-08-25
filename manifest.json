@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "0.6.57",
+  "version": "0.6.58",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -89,6 +89,28 @@
       ]
     },
     {
+      "id": "nimora.anilist",
+      "name": "AniList",
+      "roles": [
+        "catalog",
+        "meta",
+        "search"
+      ],
+      "catalogs": [
+        {
+          "id": "anilist",
+          "name": "AniList Anime",
+          "categories": [
+            "anime"
+          ],
+          "kind": "movie",
+          "display": "grid",
+          "expanded": true,
+          "contentRating": "general"
+        }
+      ]
+    },
+    {
       "id": "nimora.vidrock",
       "name": "Vidrock",
       "roles": [
@@ -126,17 +148,6 @@
         "meta"
       ],
       "catalogs": [
-        {
-          "id": "anime",
-          "name": "Indomax Anime",
-          "categories": [
-            "anime"
-          ],
-          "kind": "movie",
-          "display": "grid",
-          "expanded": true,
-          "contentRating": "general"
-        },
         {
           "id": "nsfw",
           "name": "Indomax 18+",

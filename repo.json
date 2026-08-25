@@ -3,13 +3,16 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.57",
+      "version": "0.6.58",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Moved anime to AniList: the anime category, anime search when the Search screen is scoped to it, and Home's anime row, now called Trending Anime. AniList lists each cour as its own entry, numbered the way Sokuja and Indomax number them, so more episodes find a source. The separate Indomax Anime catalog is gone; Indomax still supplies streams.",
+        "Fixed Sokuja returning no sources for series older than the site, such as One Piece: episode matching no longer requires the site's upload date to equal the TMDB air date, and TMDB's arc-sized seasons are mapped onto Sokuja's absolute episode numbering.",
+        "Sokuja now discovers its current streaming domain at runtime from its landing hosts, so anime sources keep working when the mirror rotates instead of failing until the next release.",
         "Ignored invalid Cricfy event and participant artwork URLs so malformed upstream images no longer break sports catalogs.",
         "Filtered live football events to popular leagues, including by433 live matches matched by league name, while preserving friendly and Super Cup exceptions.",
         "Kept provider-native subtitles on resolved sources and moved Shegu lookups to the explicit external-subtitles flow.",
@@ -68,7 +71,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "4a1d0872d23995250032cc58c4514afcdc5bb3a6fe43d878c563a40b15d92c2e"
+      "bundleSha256": "d35fd667bf0dd08cf4bd52559e3b7b88989412be9de13a64cf721962ca3e028a"
     }
   ]
 }
