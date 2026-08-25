@@ -3335,9 +3335,23 @@ function sheguToMediaItem(item, group) {
 // --- section fetches (each returns MediaItems with no group set yet —
 // fetchGroup below tags them) ---
 
+// TMDB has no anime genre, so Japanese animation is the closest honest test:
+// genre 16 plus a Japanese origin. Both signals are required — genre 16 alone
+// sweeps up Western cartoons, and Japanese origin alone sweeps up live action.
+function tmdbIsAnime(result) {
+  const genres = Array.isArray(result && result.genre_ids) ? result.genre_ids : [];
+  if (genres.indexOf(16) === -1) return false;
+  const origin = Array.isArray(result.origin_country) ? result.origin_country : [];
+  return result.original_language === 'ja' || origin.indexOf('JP') !== -1;
+}
+
 async function fetchTrending(mediaType) {
   const data = await tmdbGetJson(`/trending/${mediaType}/day`, { include_adult: 'false' });
-  const results = Array.isArray(data.results) ? data.results : [];
+  // Anime has its own row now, from a database that counts cours the way the
+  // streaming sites do. Leaving it here as well would put the same title on
+  // Home twice, under two ids that resolve through different providers.
+  const results = (Array.isArray(data.results) ? data.results : [])
+    .filter((result) => !tmdbIsAnime(result));
   const items = results.map((r) => tmdbToMediaItem(r, mediaType));
   if (results.length === 0) return items;
 
@@ -6686,8 +6700,11 @@ async function anilistCatalog(query) {
   });
   if (data == null) return { sections: [], subCategories };
 
+  // No section title: the shelf is chosen by chip and the grid is one flat,
+  // paginated list, so a heading would name what the chip already says and put
+  // it between pages as the user scrolls.
   const result = {
-    sections: [{ id: shelf.id, title: shelf.name, items: anilistItemsOf(data) }],
+    sections: [{ id: shelf.id, items: anilistItemsOf(data) }],
     subCategories,
   };
   const pageInfo = data.Page && data.Page.pageInfo;
