@@ -35,10 +35,12 @@ const CATALOG_ID = 'fixtures';
 const LIVE_CATEGORY = 'live';
 const ALL_CATEGORY = 'all';
 
-// A fixture that's over has nothing left to show, and "upcoming" means
-// within a week of now. FotMob's TV guide covers the forward schedule; by433
-// supplies the live exception when a match is already in play.
+// A fixture stays relevant for a day after kickoff so yesterday's results
+// still have a date section, and "upcoming" means within a week of now.
+// FotMob's TV guide covers the forward schedule; by433 supplies the live
+// exception when a match is already in play.
 const UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const TV_GUIDE_TTL_MS = 15 * 60 * 1000;
 const BY433_LIVE_TTL_MS = 60 * 1000;
 
@@ -71,9 +73,10 @@ const TOP_CLUB_BY_NAME = new Map(
   ),
 );
 
-// FotMob's TV guide is a forward listing, not a live tracker. The kickoff
-// window remains a defensive fallback for schedule-only entries; the live
-// catalog itself is driven by by433 presence.
+// How long a match is assumed to still be in play after kickoff: bounds
+// FotMob's own `isLive` flag to a plausible window (mergeBy433LiveStatus)
+// and is the fallback live check for schedule-only entries that carry no
+// `isLive` at all.
 const ASSUMED_MATCH_DURATION_MS = 130 * 60 * 1000;
 
 // --- fetch ---
@@ -210,8 +213,14 @@ function isFriendlyMatch(match) {
   return /friendl/i.test(`${match.leagueName || ''}`);
 }
 
+// Domestic cup competitions FotMob's account-localized "popular" league list
+// doesn't carry for every country, kept anyway because they're widely
+// followed regardless of locale. England's league cup has gone by all three
+// names below depending on the current title sponsor.
 function isImportantFootballCompetition(match) {
-  return /super\s+cup/i.test(`${match.leagueName || ''}`);
+  return /super\s+cup|efl\s+cup|carabao\s+cup|league\s+cup/i.test(
+    `${match.leagueName || ''}`,
+  );
 }
 
 // Filtering never sorts: matches that survive retain their exact position in
@@ -358,9 +367,23 @@ function mergeBy433LiveStatus(scheduleMatches, liveEvents, nowMs) {
     const key = scheduleKeys[0] || `schedule:${match.id || merged.length}`;
     if (seenScheduleKeys.has(key)) continue;
     seenScheduleKeys.add(key);
+    // FotMob's own `isLive` is trusted on its own as long as kickoff is
+    // still within a plausible match window — by433 only needs to confirm
+    // status once the guide's flag could plausibly be stale (a match that
+    // kicked off long enough ago that "still live" might just be an
+    // unrefreshed cache entry, e.g. TV_GUIDE_TTL_MS hasn't turned over yet).
+    // Requiring by433 for every match, regardless of freshness, previously
+    // meant a live fixture from any league/team by433 doesn't happen to
+    // cover was silently downgraded to not-live no matter how current
+    // FotMob's own guide fetch was.
+    const kickoff = kickoffMs(match);
+    const fotmobLiveIsPlausible =
+      match.isLive === true &&
+      kickoff != null &&
+      nowMs - kickoff <= ASSUMED_MATCH_DURATION_MS;
     merged.push({
       ...match,
-      isLive: live != null,
+      isLive: fotmobLiveIsPlausible || live != null,
       liveChecked: true,
       liveSource: live == null ? undefined : 'by433',
       ...(live != null && match.utcTime == null && live.utcTime != null
@@ -463,21 +486,14 @@ function isMatchLive(match, nowMs) {
   return nowMs >= start && nowMs <= start + ASSUMED_MATCH_DURATION_MS;
 }
 
-function isMatchFinished(match, nowMs) {
-  if (match.isLive === true) return false;
-  const start = kickoffMs(match);
-  if (start == null) return false;
-  return nowMs > start + ASSUMED_MATCH_DURATION_MS;
-}
-
 function isRelevantMatch(match, nowMs) {
-  if (isMatchFinished(match, nowMs)) return false;
   if (isMatchLive(match, nowMs)) return true;
   const start = kickoffMs(match);
   // No kickoff to judge by — keep it rather than discard data this can't
   // evaluate.
   if (start == null) return true;
-  return start - nowMs <= UPCOMING_WINDOW_MS;
+  const untilStart = start - nowMs;
+  return untilStart <= UPCOMING_WINDOW_MS && untilStart >= -RECENT_WINDOW_MS;
 }
 
 // --- mapping ---
@@ -588,6 +604,7 @@ function byDate(matches, nowMs) {
     const title =
       offset === 0 ? 'Today'
       : offset === 1 ? 'Tomorrow'
+      : offset === -1 ? 'Yesterday'
       : jakartaDateLabel(entries[0].kickoff);
     sections.push({ id: `date:${dayIndex}`, title, items });
   }

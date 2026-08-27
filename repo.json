@@ -3,13 +3,16 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.61",
+      "version": "0.6.62",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed live football matches disappearing from the Live category and Featured Hero whenever by433's live feed didn't happen to cover them: FotMob's own `isLive` flag is now trusted on its own within a plausible match window, instead of always requiring by433 confirmation.",
+        "Kept a match relevant for a day after kickoff instead of dropping it the moment it finished, so yesterday's results still show under their own \"Yesterday\" date section.",
+        "Treated England's EFL Cup (Carabao Cup / League Cup) as an important competition, like the existing Super Cup exception, since FotMob's account-localized \"popular\" league list leaves it out for most countries.",
         "Fixed Cricfy events being memoized for the entire app session with no expiry: a fixture added to Cricfy's events list after the first fetch never got sources and never appeared under Live, no matter how many times the app was refreshed.",
         "Added an alias for Athletic Club (Athletic Bilbao) so its official name no longer collapses to the bare, ambiguous \"athletic\" and fails to match Cricfy's own spelling of the team.",
         "Grouped the Football section by kickoff day (Today, Tomorrow, then date) instead of by league, so a fixture kicking off soon no longer trails one still days away just because of league order in the feed.",
@@ -77,7 +80,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "9a2fb03c7ee7c68a22cc53f5855deb816c652fbd7e8a21e4cc98f6f6d9066aa7"
+      "bundleSha256": "6a5cd8804b652cb4540b491b1bcdfb688729d26c2cdc8fe12a072efdcb164671"
     }
   ]
 }
