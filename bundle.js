@@ -35,9 +35,6 @@ const CATALOG_ID = 'fixtures';
 const LIVE_CATEGORY = 'live';
 const ALL_CATEGORY = 'all';
 
-// Heading for a fixture whose league fotmob didn't name.
-const UNGROUPED = 'Other';
-
 // A fixture that's over has nothing left to show, and "upcoming" means
 // within a week of now. FotMob's TV guide covers the forward schedule; by433
 // supplies the live exception when a match is already in play.
@@ -540,20 +537,61 @@ function toMediaItem(match, nowMs) {
   return item;
 }
 
-function byCompetition(matches, nowMs) {
-  const sections = [];
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Indonesia observes no daylight saving, so a fixed UTC+7 offset gives the
+// exact Asia/Jakarta calendar day (see TIME_ZONE, already the timezone
+// FotMob's own TV guide is fetched in) with no Intl/timezone database needed
+// in this engine.
+const JAKARTA_OFFSET_MS = 7 * 60 * 60 * 1000;
+const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+function jakartaDayIndex(ms) {
+  return Math.floor((ms + JAKARTA_OFFSET_MS) / DAY_MS);
+}
+
+function jakartaDateLabel(ms) {
+  const shifted = new Date(ms + JAKARTA_OFFSET_MS);
+  return `${WEEKDAY_NAMES[shifted.getUTCDay()]}, ${shifted.getUTCDate()} ` +
+    MONTH_NAMES[shifted.getUTCMonth()];
+}
+
+// Groups by kickoff day rather than league: league order says nothing about
+// when a fixture kicks off, so a distant match from a league that happens to
+// come first in the feed could otherwise show ahead of one kicking off soon.
+function byDate(matches, nowMs) {
+  const todayIndex = jakartaDayIndex(nowMs);
+  const buckets = new Map();
   for (const match of matches) {
-    const title = match.leagueName == null ? UNGROUPED : match.leagueName;
-    const sectionId = `league:${match.leagueId == null ? sportIdOf(title) : match.leagueId}`;
-    let section = sections.find((candidate) => candidate.id === sectionId);
-    if (section == null) {
-      section = { id: sectionId, title, items: [] };
-      sections.push(section);
+    const kickoff = kickoffMs(match);
+    if (kickoff == null) continue;
+    const dayIndex = jakartaDayIndex(kickoff);
+    let bucket = buckets.get(dayIndex);
+    if (bucket == null) {
+      bucket = [];
+      buckets.set(dayIndex, bucket);
     }
-    const item = toMediaItem(match, nowMs);
-    if (item != null) section.items.push(item);
+    bucket.push({ match, kickoff });
   }
-  return sections.filter((section) => section.items.length > 0);
+
+  const sections = [];
+  for (const dayIndex of [...buckets.keys()].sort((a, b) => a - b)) {
+    const entries = buckets.get(dayIndex).sort((a, b) => a.kickoff - b.kickoff);
+    const items = entries
+      .map((entry) => toMediaItem(entry.match, nowMs))
+      .filter((item) => item != null);
+    if (items.length === 0) continue;
+    const offset = dayIndex - todayIndex;
+    const title =
+      offset === 0 ? 'Today'
+      : offset === 1 ? 'Tomorrow'
+      : jakartaDateLabel(entries[0].kickoff);
+    sections.push({ id: `date:${dayIndex}`, title, items });
+  }
+  return sections;
 }
 
 // --- catalog navigation ---
@@ -634,7 +672,7 @@ function cricfyEventItem(event, status) {
 async function getCricfySportEntries(nowMs) {
   if (typeof cricfyFetchEventsMemo !== 'function') return [];
   try {
-    const events = await cricfyFetchEventsMemo();
+    const events = await cricfyFetchEventsMemo(nowMs);
     const entries = [];
     for (const event of events) {
       if (!event.visible) continue;
@@ -683,7 +721,7 @@ function buildPage(query, matches, cricfyEntries, nowMs) {
   const subCategories = sportsOf(matches, cricfyEntries);
 
   if (selected === FOOTBALL.id) {
-    return { sections: byCompetition(matches, nowMs), subCategories };
+    return { sections: byDate(matches, nowMs), subCategories };
   }
 
   if (selected != null) {
@@ -857,6 +895,10 @@ const FOOTBALL_PROFILE = {
     inter: 'internazionale',
     juve: 'juventus',
     atleti: 'atletico madrid',
+    // Athletic Bilbao's official name is "Athletic Club" — the "club" stop
+    // token would otherwise strip it down to the bare "athletic", which is
+    // an ambiguousAlone token and can never clear minTeamScore on its own.
+    'athletic club': 'athletic bilbao',
     wolves: 'wolverhampton wanderers',
     'west brom': 'west bromwich albion',
     'west bromwich': 'west bromwich albion',
@@ -2921,19 +2963,30 @@ function cricfyCandidatesFrom(events) {
   return out;
 }
 
-// Events fetched once per engine lifetime and memoized — mirrors
-// CricfyBroadcastSource's `_eventsMemo`, cleared on failure so a later call
-// can retry rather than being stuck with a rejected promise forever.
+// Events list is a forward schedule, same shape as fixtures.js's own TV
+// guide memo — cached for CRICFY_EVENTS_TTL_MS, not the engine's whole
+// lifetime. A plain never-expiring memo (the original shape here) meant a
+// fixture added to Cricfy's events.txt after the first fetch of a session
+// never appeared — no source, and never showing under the "live" category —
+// no matter how many times the app was refreshed, since the catalog protocol
+// has no refresh signal for an extension to key off. Cleared on failure so a
+// later call can retry rather than being stuck with a rejected promise.
+const CRICFY_EVENTS_TTL_MS = 15 * 60 * 1000;
 let cricfyEventsMemo = null;
 
-function cricfyFetchEventsMemo() {
-  if (cricfyEventsMemo === null) {
-    cricfyEventsMemo = cricfyEvents().catch((e) => {
+function cricfyFetchEventsMemo(nowMs) {
+  const now = nowMs != null ? nowMs : Date.now();
+  if (
+    cricfyEventsMemo === null ||
+    now - cricfyEventsMemo.fetchedAt >= CRICFY_EVENTS_TTL_MS
+  ) {
+    const promise = cricfyEvents().catch((e) => {
       cricfyEventsMemo = null;
       throw e;
     });
+    cricfyEventsMemo = { promise, fetchedAt: now };
   }
-  return cricfyEventsMemo;
+  return cricfyEventsMemo.promise;
 }
 
 // Resolved links cached by a per-call session token, same as Dart's

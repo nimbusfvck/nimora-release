@@ -3,13 +3,16 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.60",
+      "version": "0.6.61",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Cricfy events being memoized for the entire app session with no expiry: a fixture added to Cricfy's events list after the first fetch never got sources and never appeared under Live, no matter how many times the app was refreshed.",
+        "Added an alias for Athletic Club (Athletic Bilbao) so its official name no longer collapses to the bare, ambiguous \"athletic\" and fails to match Cricfy's own spelling of the team.",
+        "Grouped the Football section by kickoff day (Today, Tomorrow, then date) instead of by league, so a fixture kicking off soon no longer trails one still days away just because of league order in the feed.",
         "Added a Popular Anime This Season row to Home, sourced from AniList's current season and sorted by popularity.",
         "The anime grid no longer repeats the shelf name as a section heading.",
         "Anime no longer appears twice on Home: TMDB's trending rows leave Japanese animation to the Trending Anime row.",
@@ -74,7 +77,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "da7ed0168cb02eb3591c63d0d97e2cd097ac3867906f0cabed9d47eabf24b1bf"
+      "bundleSha256": "9a2fb03c7ee7c68a22cc53f5855deb816c652fbd7e8a21e4cc98f6f6d9066aa7"
     }
   ]
 }
