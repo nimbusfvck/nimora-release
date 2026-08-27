@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.62",
+      "version": "0.6.63",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Home's Sport category still showing the Football shelf in editorial/league order (e.g. Real Madrid leading regardless of kickoff) even though the dedicated Football subcategory page (\"See more\") was already chronological — every football listing now sorts by kickoff, not just the one reached by drilling in.",
         "Fixed live football matches disappearing from the Live category and Featured Hero whenever by433's live feed didn't happen to cover them: FotMob's own `isLive` flag is now trusted on its own within a plausible match window, instead of always requiring by433 confirmation.",
         "Kept a match relevant for a day after kickoff instead of dropping it the moment it finished, so yesterday's results still show under their own \"Yesterday\" date section.",
         "Treated England's EFL Cup (Carabao Cup / League Cup) as an important competition, like the existing Super Cup exception, since FotMob's account-localized \"popular\" league list leaves it out for most countries.",
@@ -80,7 +81,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "6a5cd8804b652cb4540b491b1bcdfb688729d26c2cdc8fe12a072efdcb164671"
+      "bundleSha256": "7aeadc5bac0074e3f0323d359364450ac0430755df96bd24053dabfd0c728531"
     }
   ]
 }

@@ -575,27 +575,38 @@ function jakartaDateLabel(ms) {
     MONTH_NAMES[shifted.getUTCMonth()];
 }
 
+// Chronological order, editorial ranking (prioritizeTopClubMatches) and
+// league order set aside: a viewer expects the same "what's on soonest"
+// order everywhere football is shown, not just inside the dedicated Football
+// subcategory page. Drops entries with no usable kickoff, same as byDate.
+function sortedByKickoff(matches) {
+  return matches
+    .map((match) => ({ match, kickoff: kickoffMs(match) }))
+    .filter((entry) => entry.kickoff != null)
+    .sort((a, b) => a.kickoff - b.kickoff);
+}
+
 // Groups by kickoff day rather than league: league order says nothing about
 // when a fixture kicks off, so a distant match from a league that happens to
 // come first in the feed could otherwise show ahead of one kicking off soon.
 function byDate(matches, nowMs) {
   const todayIndex = jakartaDayIndex(nowMs);
   const buckets = new Map();
-  for (const match of matches) {
-    const kickoff = kickoffMs(match);
-    if (kickoff == null) continue;
-    const dayIndex = jakartaDayIndex(kickoff);
+  for (const entry of sortedByKickoff(matches)) {
+    const dayIndex = jakartaDayIndex(entry.kickoff);
     let bucket = buckets.get(dayIndex);
     if (bucket == null) {
       bucket = [];
       buckets.set(dayIndex, bucket);
     }
-    bucket.push({ match, kickoff });
+    bucket.push(entry);
   }
 
   const sections = [];
   for (const dayIndex of [...buckets.keys()].sort((a, b) => a - b)) {
-    const entries = buckets.get(dayIndex).sort((a, b) => a.kickoff - b.kickoff);
+    // sortedByKickoff already put these in kickoff order; the Map bucket
+    // preserves that insertion order, so no second sort is needed here.
+    const entries = buckets.get(dayIndex);
     const items = entries
       .map((entry) => toMediaItem(entry.match, nowMs))
       .filter((item) => item != null);
@@ -752,7 +763,9 @@ function buildPage(query, matches, cricfyEntries, nowMs) {
   }
 
   if (query.category === ALL_CATEGORY) {
-    const liveFootballMatches = matches.filter((match) => isMatchLive(match, nowMs));
+    const liveFootballMatches = sortedByKickoff(
+      matches.filter((match) => isMatchLive(match, nowMs)),
+    ).map((entry) => entry.match);
     const footballItems = liveFootballMatches
       .map((match) => toMediaItem(match, nowMs))
       .filter((item) => item != null);
@@ -770,8 +783,8 @@ function buildPage(query, matches, cricfyEntries, nowMs) {
   }
 
   const sections = [];
-  const footballItems = matches
-    .map((match) => toMediaItem(match, nowMs))
+  const footballItems = sortedByKickoff(matches)
+    .map((entry) => toMediaItem(entry.match, nowMs))
     .filter((item) => item != null);
   if (footballItems.length > 0) {
     sections.push({ id: `sport:${FOOTBALL.id}`, title: FOOTBALL.name, items: footballItems });
