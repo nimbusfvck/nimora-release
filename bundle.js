@@ -3466,6 +3466,62 @@ async function fetchTrending(mediaType) {
   return items;
 }
 
+// A future-dated result isn't guaranteed to actually be one — TMDB's flat
+// `release_date`/`first_air_date` field can carry a stale, long-past date
+// (region rerelease quirks and the like) even when a feed calls the title
+// "upcoming". Trust our own read of that date, not the endpoint's label.
+function tmdbIsNotYetReleased(item) {
+  return typeof item.releaseDate === 'string' && Date.parse(item.releaseDate) > Date.now();
+}
+
+// TMDB's own `/movie/upcoming` only covers the near-term theatrical window
+// (the next month or two) and misses tentpoles releasing further out — a
+// Dune or Avengers sequel a year away won't be in it. Discover or every
+// title with a future primary release date instead, ranked by popularity so
+// the shelf leads with titles people actually anticipate rather than
+// whichever small/indie release happens to land soonest.
+async function fetchUpcomingMovies() {
+  const today = new Date().toISOString().slice(0, 10);
+  const data = await tmdbGetJson('/discover/movie', {
+    page: 1,
+    include_adult: 'false',
+    'primary_release_date.gte': today,
+    sort_by: 'popularity.desc',
+  });
+  const results = (Array.isArray(data.results) ? data.results : [])
+    .filter((result) => !tmdbIsAnime(result));
+  return results.map((r) => tmdbToMediaItem(r, 'movie')).filter(tmdbIsNotYetReleased);
+}
+
+// TMDB has no dedicated "upcoming" endpoint for TV at all — discover series
+// whose first air date hasn't happened yet, same popularity ranking as movies.
+async function fetchUpcomingTv() {
+  const today = new Date().toISOString().slice(0, 10);
+  const data = await tmdbGetJson('/discover/tv', {
+    page: 1,
+    include_adult: 'false',
+    'first_air_date.gte': today,
+    sort_by: 'popularity.desc',
+  });
+  const results = (Array.isArray(data.results) ? data.results : [])
+    .filter((result) => !tmdbIsAnime(result));
+  return results.map((r) => tmdbToMediaItem(r, 'tv')).filter(tmdbIsNotYetReleased);
+}
+
+// Movie and TV releases not out yet, combined into one shelf. The source
+// pool is already ranked by popularity; re-sorting it by how soon each one
+// releases keeps the shelf feeling like a countdown rather than a popularity
+// chart, without losing the anticipated titles that ranking surfaced.
+async function fetchComingSoon() {
+  const [movies, series] = await Promise.all([
+    fetchUpcomingMovies().catch(() => []),
+    fetchUpcomingTv().catch(() => []),
+  ]);
+  return [...movies, ...series]
+    .sort((a, b) => Date.parse(a.releaseDate) - Date.parse(b.releaseDate))
+    .slice(0, 25);
+}
+
 async function fetchTopRated(mediaType) {
   const data = await tmdbGetJson(`/${mediaType}/top_rated`, { page: 1, include_adult: 'false' });
   const results = Array.isArray(data.results) ? data.results : [];
@@ -3574,6 +3630,7 @@ const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
   { id: 'popular_today', name: 'Popular Today', fetch: fetchPopularStreaming },
+  { id: 'coming_soon', name: 'Coming Soon', fetch: () => fetchComingSoon() },
   { id: 'trending_anime', name: 'Trending Anime', fetch: () => anilistHighlightItems() },
   { id: 'popular_anime_season', name: 'Popular Anime This Season', fetch: () => anilistPopularSeasonItems() },
   { id: 'top_rated_movie', name: 'Top Rated Movie', fetch: () => fetchTopRated('movie') },
