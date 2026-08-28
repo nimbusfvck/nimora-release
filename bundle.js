@@ -3476,10 +3476,13 @@ function tmdbIsNotYetReleased(item) {
 
 // TMDB's own `/movie/upcoming` only covers the near-term theatrical window
 // (the next month or two) and misses tentpoles releasing further out — a
-// Dune or Avengers sequel a year away won't be in it. Discover or every
-// title with a future primary release date instead, ranked by popularity so
-// the shelf leads with titles people actually anticipate rather than
-// whichever small/indie release happens to land soonest.
+// Dune or Avengers sequel a year away won't be in it. Discover every title
+// with a future primary release date instead. Popularity, kept alongside
+// each item rather than baked into the API's own ordering, is what
+// `fetchComingSoon` below uses to pick winners once movies and TV are merged
+// — sorting this single list by release date and cutting it to 25 would
+// otherwise let a page of near-term small releases bury a tentpole that's
+// simply further out (this happened: Dune/Avengers sequels dropped off).
 async function fetchUpcomingMovies() {
   const today = new Date().toISOString().slice(0, 10);
   const data = await tmdbGetJson('/discover/movie', {
@@ -3490,7 +3493,9 @@ async function fetchUpcomingMovies() {
   });
   const results = (Array.isArray(data.results) ? data.results : [])
     .filter((result) => !tmdbIsAnime(result));
-  return results.map((r) => tmdbToMediaItem(r, 'movie')).filter(tmdbIsNotYetReleased);
+  return results
+    .map((r) => ({ item: tmdbToMediaItem(r, 'movie'), popularity: typeof r.popularity === 'number' ? r.popularity : 0 }))
+    .filter((entry) => tmdbIsNotYetReleased(entry.item));
 }
 
 // TMDB has no dedicated "upcoming" endpoint for TV at all — discover series
@@ -3505,21 +3510,25 @@ async function fetchUpcomingTv() {
   });
   const results = (Array.isArray(data.results) ? data.results : [])
     .filter((result) => !tmdbIsAnime(result));
-  return results.map((r) => tmdbToMediaItem(r, 'tv')).filter(tmdbIsNotYetReleased);
+  return results
+    .map((r) => ({ item: tmdbToMediaItem(r, 'tv'), popularity: typeof r.popularity === 'number' ? r.popularity : 0 }))
+    .filter((entry) => tmdbIsNotYetReleased(entry.item));
 }
 
-// Movie and TV releases not out yet, combined into one shelf. The source
-// pool is already ranked by popularity; re-sorting it by how soon each one
-// releases keeps the shelf feeling like a countdown rather than a popularity
-// chart, without losing the anticipated titles that ranking surfaced.
+// Movie and TV releases not out yet, combined into one shelf and ranked by
+// popularity — not by how soon each one releases. A tentpole several months
+// out (Dune, an Avengers sequel) is exactly the kind of title this shelf
+// should lead with; sorting by nearest date instead buries it under an
+// entire page of small/indie titles that just happen to release sooner.
 async function fetchComingSoon() {
   const [movies, series] = await Promise.all([
     fetchUpcomingMovies().catch(() => []),
     fetchUpcomingTv().catch(() => []),
   ]);
   return [...movies, ...series]
-    .sort((a, b) => Date.parse(a.releaseDate) - Date.parse(b.releaseDate))
-    .slice(0, 25);
+    .sort((a, b) => b.popularity - a.popularity)
+    .slice(0, 25)
+    .map((entry) => entry.item);
 }
 
 async function fetchTopRated(mediaType) {

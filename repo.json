@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.67",
+      "version": "0.6.68",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Coming Soon still missing far-out tentpoles like Dune: Part Three and Avengers: Doomsday even after 0.6.67 started discovering them: the shelf re-sorted the combined movie/TV pool by nearest release date and cut it to 25, which buried a title releasing months out under an entire page of smaller titles releasing sooner. Coming Soon now ranks the merged pool by popularity, matching what each source query already used to decide who's in it.",
         "Brought back Coming Soon, sourced properly this time: `/movie/upcoming` only covers the next month or two of theatrical releases, so a tentpole releasing later in the year (e.g. Dune: Part Three, Avengers: Doomsday) never appeared even though it's clearly upcoming. Movies and TV are now discovered by future release date and ranked by popularity instead, so the shelf leads with titles people actually anticipate rather than whichever small release happens to land soonest — while still dropping anything whose date turns out not to be genuinely in the future.",
         "Removed the Coming Soon row: after filtering out titles TMDB misclassifies as upcoming (0.6.65), the region's genuinely future-dated catalog was thin enough on most days that the shelf wasn't worth a permanent spot on Home. Movie and TV items still carry their release date individually, so a title that isn't out yet still shows as upcoming wherever it appears (e.g. Trending) with the same Remind Me behavior.",
         "Fixed Coming Soon showing titles that already released, such as Terminator and Avengers: Endgame: TMDB can list a title in `/movie/upcoming` (or `/discover/tv`) for reasons other than a genuine future release — e.g. a theatrical rerelease window — while the release date field we read and display still carries the original, long-past date. Coming Soon now re-checks that date itself and drops anything that isn't actually in the future, instead of trusting TMDB's own classification.",
@@ -85,7 +86,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "39fd54caf5540c23938c2d9b60662261c3955c4628ff5873f1a52307d4cafdc4"
+      "bundleSha256": "4e949da9fc2059ecb354d205acdeadbd5aecc71bae5b178c69a84c81abef8715"
     }
   ]
 }
