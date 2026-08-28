@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.64",
+      "version": "0.6.65",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Coming Soon showing titles that already released, such as Terminator and Avengers: Endgame: TMDB can list a title in `/movie/upcoming` (or `/discover/tv`) for reasons other than a genuine future release — e.g. a theatrical rerelease window — while the release date field we read and display still carries the original, long-past date. Coming Soon now re-checks that date itself and drops anything that isn't actually in the future, instead of trusting TMDB's own classification.",
         "Added a release date to movie and TV catalog items and a new Coming Soon row (movies from `/movie/upcoming`, TV series from `/discover/tv` filtered to future air dates, both merged and ordered by how soon each one releases), so the app can flag titles that aren't out yet and let you get reminded before they are.",
         "Fixed Home's Sport category still showing the Football shelf in editorial/league order (e.g. Real Madrid leading regardless of kickoff) even though the dedicated Football subcategory page (\"See more\") was already chronological — every football listing now sorts by kickoff, not just the one reached by drilling in.",
         "Fixed live football matches disappearing from the Live category and Featured Hero whenever by433's live feed didn't happen to cover them: FotMob's own `isLive` flag is now trusted on its own within a plausible match window, instead of always requiring by433 confirmation.",
@@ -82,7 +83,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "4b62e9cc89af2808b0c8027d120e4aa730df21e0a5714fd8c1c2fa413ee750fd"
+      "bundleSha256": "f0715980e9bbd840064b56eb1c2567a20a5cebbc6ed651e8351c33ca5af397df"
     }
   ]
 }

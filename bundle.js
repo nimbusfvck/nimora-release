@@ -3466,11 +3466,21 @@ async function fetchTrending(mediaType) {
   return items;
 }
 
+// TMDB's flat `release_date`/`first_air_date` field on a result can lag a
+// title's actual availability — a "Now in theatres" region window or a
+// re-release entry can land it in these feeds while the field we read (and
+// show) still carries the original, long-past date (e.g. a Terminator or
+// Avengers rerelease). Trust our own read of that date over the endpoint's
+// classification, not the other way around.
+function tmdbIsNotYetReleased(item) {
+  return typeof item.releaseDate === 'string' && Date.parse(item.releaseDate) > Date.now();
+}
+
 async function fetchUpcomingMovies() {
   const data = await tmdbGetJson('/movie/upcoming', { page: 1, include_adult: 'false' });
   const results = (Array.isArray(data.results) ? data.results : [])
     .filter((result) => !tmdbIsAnime(result));
-  return results.map((r) => tmdbToMediaItem(r, 'movie'));
+  return results.map((r) => tmdbToMediaItem(r, 'movie')).filter(tmdbIsNotYetReleased);
 }
 
 // TMDB has no dedicated "upcoming" endpoint for TV, unlike movies — discover
@@ -3485,7 +3495,7 @@ async function fetchUpcomingTv() {
   });
   const results = (Array.isArray(data.results) ? data.results : [])
     .filter((result) => !tmdbIsAnime(result));
-  return results.map((r) => tmdbToMediaItem(r, 'tv'));
+  return results.map((r) => tmdbToMediaItem(r, 'tv')).filter(tmdbIsNotYetReleased);
 }
 
 // Movie and TV releases not out yet, combined into one shelf and ordered by
@@ -3496,7 +3506,6 @@ async function fetchComingSoon() {
     fetchUpcomingTv().catch(() => []),
   ]);
   return [...movies, ...series]
-    .filter((item) => item.releaseDate != null)
     .sort((a, b) => Date.parse(a.releaseDate) - Date.parse(b.releaseDate))
     .slice(0, 25);
 }
