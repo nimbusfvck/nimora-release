@@ -3312,6 +3312,8 @@ function tmdbToMediaItem(result, mediaType) {
   if (Number.isInteger(releaseYear) && releaseYear > 0) {
     mediaItem.releaseYear = releaseYear;
   }
+  const releaseDate = tmdbReleaseDateIso(dateStr);
+  if (releaseDate) mediaItem.releaseDate = releaseDate;
   if (rating != null) mediaItem.rating = rating;
   const artwork = {};
   if (result.poster_path) artwork.portrait = { url: `${TMDB_IMAGE_BASE}/w500${result.poster_path}` };
@@ -3320,6 +3322,13 @@ function tmdbToMediaItem(result, mediaType) {
   if (titleLogo) artwork.logo = { url: `${TMDB_IMAGE_BASE}/w300${titleLogo.file_path}` };
   if (Object.keys(artwork).length > 0) mediaItem.artwork = artwork;
   return mediaItem;
+}
+
+// TMDB dates are plain calendar days (no timezone); the app requires a full
+// ISO-8601 UTC instant, so anchor them at midnight UTC.
+function tmdbReleaseDateIso(dateStr) {
+  if (typeof dateStr !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  return `${dateStr}T00:00:00Z`;
 }
 
 // TMDB returns logos in popularity order. Prefer an English title treatment,
@@ -3457,6 +3466,41 @@ async function fetchTrending(mediaType) {
   return items;
 }
 
+async function fetchUpcomingMovies() {
+  const data = await tmdbGetJson('/movie/upcoming', { page: 1, include_adult: 'false' });
+  const results = (Array.isArray(data.results) ? data.results : [])
+    .filter((result) => !tmdbIsAnime(result));
+  return results.map((r) => tmdbToMediaItem(r, 'movie'));
+}
+
+// TMDB has no dedicated "upcoming" endpoint for TV, unlike movies — discover
+// series whose first air date hasn't happened yet instead, soonest first.
+async function fetchUpcomingTv() {
+  const today = new Date().toISOString().slice(0, 10);
+  const data = await tmdbGetJson('/discover/tv', {
+    page: 1,
+    include_adult: 'false',
+    'first_air_date.gte': today,
+    sort_by: 'first_air_date.asc',
+  });
+  const results = (Array.isArray(data.results) ? data.results : [])
+    .filter((result) => !tmdbIsAnime(result));
+  return results.map((r) => tmdbToMediaItem(r, 'tv'));
+}
+
+// Movie and TV releases not out yet, combined into one shelf and ordered by
+// how soon each one releases — the point of a "Coming Soon" row.
+async function fetchComingSoon() {
+  const [movies, series] = await Promise.all([
+    fetchUpcomingMovies().catch(() => []),
+    fetchUpcomingTv().catch(() => []),
+  ]);
+  return [...movies, ...series]
+    .filter((item) => item.releaseDate != null)
+    .sort((a, b) => Date.parse(a.releaseDate) - Date.parse(b.releaseDate))
+    .slice(0, 25);
+}
+
 async function fetchTopRated(mediaType) {
   const data = await tmdbGetJson(`/${mediaType}/top_rated`, { page: 1, include_adult: 'false' });
   const results = Array.isArray(data.results) ? data.results : [];
@@ -3565,6 +3609,7 @@ const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
   { id: 'popular_today', name: 'Popular Today', fetch: fetchPopularStreaming },
+  { id: 'coming_soon', name: 'Coming Soon', fetch: () => fetchComingSoon() },
   { id: 'trending_anime', name: 'Trending Anime', fetch: () => anilistHighlightItems() },
   { id: 'popular_anime_season', name: 'Popular Anime This Season', fetch: () => anilistPopularSeasonItems() },
   { id: 'top_rated_movie', name: 'Top Rated Movie', fetch: () => fetchTopRated('movie') },
