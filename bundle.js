@@ -18,6 +18,8 @@ const FOTMOB_BASE = globalThis.__fotmobBaseUrl || 'https://www.fotmob.com';
 const FOTMOB_COUNTRY = 'gb';
 const FOTMOB_CCODE3 = 'IDN';
 const FOTMOB_IMAGE_BASE = 'https://images.fotmob.com/image_resources/logo/teamlogo';
+const BY433_LEAGUE_IMAGE_BASE =
+  'https://media.prod.by433.com/media/logos/league';
 const FOTMOB_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
   '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
@@ -43,6 +45,7 @@ const UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const TV_GUIDE_TTL_MS = 15 * 60 * 1000;
 const BY433_LIVE_TTL_MS = 60 * 1000;
+const LEAGUE_BRANDING_TTL_MS = 24 * 60 * 60 * 1000;
 
 // Editorial ranking for globally recognisable clubs. FotMob ids are the
 // primary key; aliases cover alternate names returned by football feeds. This
@@ -146,6 +149,8 @@ let popularLeaguesMemo = null;
 
 let by433LiveMemo = null;
 
+const leagueBrandingMemo = new Map();
+
 async function fetchBy433Live() {
   const response = await fetch(`${BY433_BASE}/events/live`, {
     headers: {
@@ -185,6 +190,70 @@ function fetchPopularLeaguesMemo() {
     });
   }
   return popularLeaguesMemo;
+}
+
+function validFotmobColor(value) {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
+    ? value
+    : null;
+}
+
+function leagueIdKey(value) {
+  if (value == null) return null;
+  const key = `${value}`.trim();
+  return /^\d+$/.test(key) ? key : null;
+}
+
+function fetchFotmobLeagueBranding(leagueId) {
+  const key = leagueIdKey(leagueId);
+  if (key == null) return Promise.resolve(null);
+
+  const nowMs = Date.now();
+  const cached = leagueBrandingMemo.get(key);
+  if (cached != null && nowMs - cached.fetchedAt < LEAGUE_BRANDING_TTL_MS) {
+    return cached.promise;
+  }
+
+  const logo = {
+    url: `${BY433_LEAGUE_IMAGE_BASE}/${key}.png`,
+  };
+  const promise = fetch(
+    `${FOTMOB_BASE}/api/data/leagues?id=${encodeURIComponent(key)}`,
+    {
+      headers: {
+        'User-Agent': FOTMOB_USER_AGENT,
+        Accept: 'application/json, text/plain, */*',
+        Referer: `${FOTMOB_BASE}/leagues/${key}`,
+      },
+    },
+  )
+    .then((response) => {
+      if (response.status < 200 || response.status >= 300) return { logo };
+      const data = JSON.parse(response.body);
+      const color = validFotmobColor(data?.details?.leagueColor);
+      return {
+        logo,
+        ...(color == null ? {} : { primaryColor: color }),
+      };
+    })
+    .catch(() => ({ logo }));
+
+  leagueBrandingMemo.set(key, { promise, fetchedAt: nowMs });
+  return promise;
+}
+
+async function leagueBrandingFor(matches) {
+  const keys = [
+    ...new Set(
+      matches
+        .map((match) => leagueIdKey(match.leagueId))
+        .filter((key) => key != null),
+    ),
+  ];
+  const entries = await Promise.all(
+    keys.map(async (key) => [key, await fetchFotmobLeagueBranding(key)]),
+  );
+  return new Map(entries.filter((entry) => entry[1] != null));
 }
 
 // The response is `{ "<YYYYMMDD>": [ { leagueId, leagueName, matches: [...] }, ... ], ... }`
@@ -526,7 +595,7 @@ function fotmobParticipantsOf(match) {
   return [side(home), side(away)];
 }
 
-function toMediaItem(match, nowMs) {
+function toMediaItem(match, nowMs, brandingByLeague) {
   const home = match.home || {};
   const away = match.away || {};
   if (match.utcTime == null || kickoffMs(match) == null) return null;
@@ -547,6 +616,8 @@ function toMediaItem(match, nowMs) {
   };
 
   if (match.leagueName != null) item.subtitle = match.leagueName;
+  const branding = brandingByLeague?.get(leagueIdKey(match.leagueId));
+  if (branding != null) item.branding = branding;
   const participants = fotmobParticipantsOf(match);
   if (participants.length > 0) item.participants = participants;
 
@@ -589,7 +660,7 @@ function sortedByKickoff(matches) {
 // Groups by kickoff day rather than league: league order says nothing about
 // when a fixture kicks off, so a distant match from a league that happens to
 // come first in the feed could otherwise show ahead of one kicking off soon.
-function byDate(matches, nowMs) {
+function byDate(matches, nowMs, brandingByLeague) {
   const todayIndex = jakartaDayIndex(nowMs);
   const buckets = new Map();
   for (const entry of sortedByKickoff(matches)) {
@@ -608,7 +679,7 @@ function byDate(matches, nowMs) {
     // preserves that insertion order, so no second sort is needed here.
     const entries = buckets.get(dayIndex);
     const items = entries
-      .map((entry) => toMediaItem(entry.match, nowMs))
+      .map((entry) => toMediaItem(entry.match, nowMs, brandingByLeague))
       .filter((item) => item != null);
     if (items.length === 0) continue;
     const offset = dayIndex - todayIndex;
@@ -744,12 +815,15 @@ function sportsOf(matches, cricfyEntries) {
   return sports;
 }
 
-function buildPage(query, matches, cricfyEntries, nowMs) {
+function buildPage(query, matches, cricfyEntries, nowMs, brandingByLeague) {
   const selected = query.subCategory == null ? null : query.subCategory;
   const subCategories = sportsOf(matches, cricfyEntries);
 
   if (selected === FOOTBALL.id) {
-    return { sections: byDate(matches, nowMs), subCategories };
+    return {
+      sections: byDate(matches, nowMs, brandingByLeague),
+      subCategories,
+    };
   }
 
   if (selected != null) {
@@ -767,7 +841,7 @@ function buildPage(query, matches, cricfyEntries, nowMs) {
       matches.filter((match) => isMatchLive(match, nowMs)),
     ).map((entry) => entry.match);
     const footballItems = liveFootballMatches
-      .map((match) => toMediaItem(match, nowMs))
+      .map((match) => toMediaItem(match, nowMs, brandingByLeague))
       .filter((item) => item != null);
 
     const items = [
@@ -784,7 +858,7 @@ function buildPage(query, matches, cricfyEntries, nowMs) {
 
   const sections = [];
   const footballItems = sortedByKickoff(matches)
-    .map((entry) => toMediaItem(entry.match, nowMs))
+    .map((entry) => toMediaItem(entry.match, nowMs, brandingByLeague))
     .filter((item) => item != null);
   if (footballItems.length > 0) {
     sections.push({ id: `sport:${FOOTBALL.id}`, title: FOOTBALL.name, items: footballItems });
@@ -826,12 +900,14 @@ async function fixturesCatalog(query) {
     matches = matches.filter((match) => isMatchLive(match, nowMs));
   }
 
+  const brandingByLeague = await leagueBrandingFor(matches);
+
   let cricfyEntries = await getCricfySportEntries(nowMs);
   if (live) {
     cricfyEntries = cricfyEntries.filter((entry) => entry.live);
   }
 
-  return buildPage(query, matches, cricfyEntries, nowMs);
+  return buildPage(query, matches, cricfyEntries, nowMs, brandingByLeague);
 }
 
 // Registers into `__catalogProviders` rather than assigning

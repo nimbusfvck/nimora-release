@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.74",
+      "version": "0.6.75",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added competition branding to football event payloads: FotMob league colors and logos now reach the app so match banners can use the competition's visual identity.",
         "Fixed Time Soccer highlights loading slowly and stalling on every quality switch: resolution (post, embed, playlist validation) spoofed a browser User-Agent throughout, but the resolved stream handed to the player carried no headers at all, so its own segment fetches fell back to the platform default UA — a mismatch a CDN that treats non-browser clients differently wouldn't show until real playback started. Playback now sends the same User-Agent resolution already used successfully.",
         "Removed Football Highlights from the Shorts previews feed (added in 0.6.72): landscape recap footage doesn't fit Shorts' vertical format, and the clip a viewer would preview there is already the whole thing, not a lead-in to watch something bigger. The Football Highlights row on Home/Sport is unaffected.",
         "Added a Football Highlights row to Home's Highlights shelf, sourced from Time Soccer alongside Trending Movie/TV and Popular Today.",
@@ -93,7 +94,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "6da00e63131af1e258f8e2de5ae5b85ee489bbd518296b2c6d575496973782f8"
+      "bundleSha256": "c36c92338249b0b50229234a4fd8648fc1bc9419214c4b0c1583eea7134c022b"
     }
   ]
 }
