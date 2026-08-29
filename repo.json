@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.72",
+      "version": "0.6.73",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Removed Football Highlights from the Shorts previews feed (added in 0.6.72): landscape recap footage doesn't fit Shorts' vertical format, and the clip a viewer would preview there is already the whole thing, not a lead-in to watch something bigger. The Football Highlights row on Home/Sport is unaffected.",
         "Added a Football Highlights row to Home's Highlights shelf, sourced from Time Soccer alongside Trending Movie/TV and Popular Today.",
         "Added Football Highlights to the Shorts previews feed: a highlight clip is already short-form, so its preview is the same Videa HLS stream full playback resolves, not a separate trailer lookup.",
         "The `previews` catalog now checks every candidate for a resolvable YouTube trailer before including it, instead of leaving that to the app's own lazy per-item resolution — a title TMDB has no trailer for used to make it into the Shorts feed anyway, only to get skipped the instant the viewer swiped to it. The per-item trailer lookup this uses is cached, so resolving playback for the same title later doesn't repeat the fetch.",
@@ -91,7 +92,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "ed0aef0f4a2977c800359c551c5de0b0a5fbb25b17cf958ae0524e41c6dfb7a5"
+      "bundleSha256": "5638f4e6ec8a401bc8fc07bc0c85f1f85c9dc182b7ed53645cc2cc02faf336ab"
     }
   ]
 }

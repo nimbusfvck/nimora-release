@@ -7296,7 +7296,6 @@ const TIMESOCCER_BASE =
 const TIMESOCCER_PROVIDER_ID = 'nimora.timesoccer';
 const TIMESOCCER_PROVIDER_KEY = 'timesoccer';
 const TIMESOCCER_CATALOG_ID = 'timesoccer';
-const TIMESOCCER_PREVIEW_CATALOG_ID = 'timesoccer-previews';
 const TIMESOCCER_VIDEO_CATEGORY = 4;
 const TIMESOCCER_PAGE_SIZE = 20;
 const TIMESOCCER_USER_AGENT =
@@ -7455,7 +7454,14 @@ function timesoccerHasNextPage(response, page, rawPosts) {
   return Array.isArray(rawPosts) && rawPosts.length >= TIMESOCCER_PAGE_SIZE;
 }
 
-async function timesoccerFetchPage(page) {
+async function timesoccerCatalog(query) {
+  if (query.category !== 'all' && query.category !== 'sport') {
+    return { sections: [] };
+  }
+  const requestedPage = query.page == null ? 1 : Number(query.page);
+  const page = Number.isFinite(requestedPage) && requestedPage > 0
+    ? Math.floor(requestedPage)
+    : 1;
   const url = timesoccerWithQuery(
     `${TIMESOCCER_BASE}/wp-json/wp/v2/posts`,
     {
@@ -7468,96 +7474,25 @@ async function timesoccerFetchPage(page) {
       _fields: 'id,date,modified,slug,link,title,content,featured_media,_embedded,_links',
     },
   );
+
   let posts;
   let response;
   try {
     response = await timesoccerFetchJson(url);
     posts = response.data;
   } catch (_) {
-    return { items: [], response: null, posts: [] };
-  }
-  return { items: timesoccerPostsToItems(posts), response, posts };
-}
-
-async function timesoccerCatalog(query) {
-  if (query.category !== 'all' && query.category !== 'sport') {
     return { sections: [] };
   }
-  const requestedPage = query.page == null ? 1 : Number(query.page);
-  const page = Number.isFinite(requestedPage) && requestedPage > 0
-    ? Math.floor(requestedPage)
-    : 1;
-  const { items, response, posts } = await timesoccerFetchPage(page);
+  const items = timesoccerPostsToItems(posts);
   const result = {
     sections: items.length === 0
       ? []
       : [{ id: 'timesoccer-latest', title: 'Football Highlights', items }],
   };
-  if (response != null && timesoccerHasNextPage(response, page, posts)) {
+  if (timesoccerHasNextPage(response, page, posts)) {
     result.nextPage = String(page + 1);
   }
   return result;
-}
-
-globalThis.__timesoccerHighlightPage = async (page) => {
-  const result = await timesoccerCatalog({
-    category: 'sport',
-    page,
-  });
-  const section = Array.isArray(result.sections) ? result.sections[0] : null;
-  return {
-    items: section && Array.isArray(section.items) ? section.items : [],
-    ...(result.nextPage != null ? { nextPage: result.nextPage } : {}),
-  };
-};
-
-// --- Shorts preview surface ---
-//
-// A highlight clip is already short-form — unlike a movie/show trailer,
-// there is no separate short preview to look up; the preview is the exact
-// same Videa HLS stream full playback resolves. Only the latest page is
-// offered here (no pagination — Shorts loads the whole preview catalog
-// once, per source plan §5).
-
-async function timesoccerPreviewCatalog() {
-  const { items } = await timesoccerFetchPage(1);
-  return { sections: [{ id: 'timesoccer-previews', items }] };
-}
-
-async function timesoccerPreview(args) {
-  const item = args && args.item;
-  const itemId = item && item.ref ? String(item.ref.id || '') : '';
-  if (
-    item == null ||
-    item.ref == null ||
-    item.ref.providerId !== TIMESOCCER_PROVIDER_ID ||
-    !/^post:\d+$/.test(itemId)
-  ) {
-    return { sources: [] };
-  }
-  try {
-    const stream = await timesoccerResolveSource(
-      `${TIMESOCCER_PROVIDER_KEY}:${itemId.slice('post:'.length)}`,
-    );
-    return {
-      sources: [
-        {
-          id: `${TIMESOCCER_PROVIDER_KEY}:${itemId}`,
-          type: 'direct',
-          stream: {
-            url: stream.url,
-            headers: stream.headers,
-            format: stream.format,
-            label: stream.label,
-          },
-        },
-      ],
-    };
-  } catch (_) {
-    // A candidate whose Videa embed can't be resolved right now is skipped
-    // by the Shorts workflow, not surfaced as an error.
-    return { sources: [] };
-  }
 }
 
 async function timesoccerSources(args) {
@@ -7644,22 +7579,12 @@ globalThis.__catalogProviders.push({
   catalogId: TIMESOCCER_CATALOG_ID,
   catalog: timesoccerCatalog,
 });
-globalThis.__catalogProviders.push({
-  catalogId: TIMESOCCER_PREVIEW_CATALOG_ID,
-  catalog: timesoccerPreviewCatalog,
-});
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
 globalThis.__streamProviders.push({
   providerKey: TIMESOCCER_PROVIDER_KEY,
   sources: timesoccerSources,
   resolve: (sourceId) => timesoccerResolveSource(sourceId),
-});
-
-globalThis.__previewProviders = globalThis.__previewProviders || [];
-globalThis.__previewProviders.push({
-  providerId: TIMESOCCER_PROVIDER_ID,
-  preview: timesoccerPreview,
 });
 
 globalThis.__extension = globalThis.__extension || {};
@@ -7672,16 +7597,6 @@ if (!globalThis.__extension.catalog) {
       throw new Error(`No catalog provider registered for "${query.catalogId}"`);
     }
     return provider.catalog(query);
-  };
-}
-if (!globalThis.__extension.preview) {
-  globalThis.__extension.preview = async (args) => {
-    const providerId = args && args.item && args.item.ref ? args.item.ref.providerId : null;
-    const provider = globalThis.__previewProviders.find((p) => p.providerId === providerId);
-    if (!provider) {
-      throw new Error(`No preview provider registered for "${providerId}"`);
-    }
-    return provider.preview(args);
   };
 }
 if (!globalThis.__extension.sources) {
