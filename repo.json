@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.79",
+      "version": "0.6.80",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed the women-only exclusion to detect women's competitions from the league name, including FotMob's `UEFA Women's Europa Cup`, even when club names do not carry a `(W)` suffix.",
         "Fixed popular and international football curation to match league IDs only, preventing unrelated competitions with the same display name (such as Liviy Bereh vs Karpaty) from appearing.",
         "Refined football fixture visibility using FotMob's `popular` and `international` league lists, removing noisy unlisted competitions while keeping the daily `/matches` feed, large club crests, and 433 league branding.",
         "Switched football fixtures to FotMob's daily matches endpoint for schedule and live status, restoring matches missing from the TV guide such as Bournemouth vs Everton and Elversberg vs Leverkusen; all leagues are now shown, with large FotMob club crests and 433 league logos.",
@@ -98,7 +99,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "736b0e55940c65a83fa89322e788b73e35c991010b9cad66f12b9c032a031611"
+      "bundleSha256": "c626a66ae9c8c7cfc68da7011da9764357030d32d4c710ea331baad8378198df"
     }
   ]
 }

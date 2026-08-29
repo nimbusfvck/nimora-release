@@ -290,9 +290,12 @@ function filterPopularMatches(matches, popularLeagues) {
 
 function isWomenMatch(match) {
   const womenSuffix = /\s\(W\)$/i;
+  const womenLeague = /\b(women|woman|female|ladies|girls)\b/i;
   const homeName = match.home && (match.home.longName || match.home.name);
   const awayName = match.away && (match.away.longName || match.away.name);
-  return womenSuffix.test(`${homeName || ''}`) || womenSuffix.test(`${awayName || ''}`);
+  return womenLeague.test(`${match.leagueName || ''}`) ||
+    womenSuffix.test(`${homeName || ''}`) ||
+    womenSuffix.test(`${awayName || ''}`);
 }
 
 // FotMob abbreviates some club names in its daily response. Keep verified
