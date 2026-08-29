@@ -34,8 +34,8 @@ const CATALOG_ID = 'fixtures';
 const LIVE_CATEGORY = 'live';
 const ALL_CATEGORY = 'all';
 
-// A fixture stays relevant for a day after kickoff so yesterday's results
-// still have a date section, and "upcoming" means within a week of now.
+// Unfinished fixtures remain relevant while live and up to a week before
+// kickoff. Finished fixtures are removed at catalog takeout below.
 const UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const FIXTURES_TTL_MS = 15 * 60 * 1000;
@@ -296,6 +296,10 @@ function isWomenMatch(match) {
   return womenLeague.test(`${match.leagueName || ''}`) ||
     womenSuffix.test(`${homeName || ''}`) ||
     womenSuffix.test(`${awayName || ''}`);
+}
+
+function isFinishedMatch(match) {
+  return match.isFinished === true || match.status?.finished === true;
 }
 
 // FotMob abbreviates some club names in its daily response. Keep verified
@@ -719,7 +723,12 @@ async function fixturesCatalog(query) {
     fetchPopularLeaguesMemo(),
   ]);
   matches = matches
-    .filter((match) => !isWomenMatch(match) && isRelevantMatch(match, nowMs));
+    .filter(
+      (match) =>
+        !isFinishedMatch(match) &&
+        !isWomenMatch(match) &&
+        isRelevantMatch(match, nowMs),
+    );
   matches = filterPopularMatches(matches, popularLeagues);
   matches = prioritizeTopClubMatches(matches);
   if (live) {

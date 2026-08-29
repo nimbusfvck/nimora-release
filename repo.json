@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.80",
+      "version": "0.6.81",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Removed finished football matches from the schedule takeout so completed fixtures no longer appear in `Today` or the upcoming Football shelf.",
         "Fixed the women-only exclusion to detect women's competitions from the league name, including FotMob's `UEFA Women's Europa Cup`, even when club names do not carry a `(W)` suffix.",
         "Fixed popular and international football curation to match league IDs only, preventing unrelated competitions with the same display name (such as Liviy Bereh vs Karpaty) from appearing.",
         "Refined football fixture visibility using FotMob's `popular` and `international` league lists, removing noisy unlisted competitions while keeping the daily `/matches` feed, large club crests, and 433 league branding.",
@@ -99,7 +100,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "c626a66ae9c8c7cfc68da7011da9764357030d32d4c710ea331baad8378198df"
+      "bundleSha256": "77fc3578e863bbef417fe509fa2bd566286a6111f17923fc42793282e4c6d595"
     }
   ]
 }
