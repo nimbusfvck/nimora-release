@@ -109,9 +109,45 @@ async function fetchFotmobMatchesForDate(dateKey) {
   return data;
 }
 
+async function fetchFotmobPopularLeagues() {
+  const url =
+    `${FOTMOB_BASE}/api/data/allLeagues?locale=en` +
+    `&country=${encodeURIComponent(FOTMOB_CCODE3)}`;
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': FOTMOB_USER_AGENT,
+      Accept: 'application/json, text/plain, */*',
+      Referer: `${FOTMOB_BASE}/`,
+    },
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Request to league list failed: ${response.status}`);
+  }
+  const data = JSON.parse(response.body);
+  if (
+    typeof data !== 'object' ||
+    data === null ||
+    !Array.isArray(data.popular)
+  ) {
+    throw new Error('league list response has no popular leagues');
+  }
+  return flattenFotmobLeagueList(data);
+}
+
+function flattenFotmobLeagueList(data) {
+  const popular = Array.isArray(data?.popular) ? data.popular : [];
+  const international = Array.isArray(data?.international)
+    ? data.international.flatMap((group) =>
+      Array.isArray(group?.leagues) ? group.leagues : [],
+    )
+    : [];
+  return [...popular, ...international];
+}
+
 // The daily match feed is fetched for today plus the next seven Jakarta dates.
 // Deduplication below handles the endpoint's next-day late-night overlap.
 let fixturesMemo = null;
+let popularLeaguesMemo = null;
 
 function fetchFixturesMemo(nowMs) {
   if (
@@ -125,6 +161,16 @@ function fetchFixturesMemo(nowMs) {
     fixturesMemo = { promise, fetchedAt: nowMs };
   }
   return fixturesMemo.promise;
+}
+
+function fetchPopularLeaguesMemo() {
+  if (popularLeaguesMemo === null) {
+    popularLeaguesMemo = fetchFotmobPopularLeagues().catch((e) => {
+      popularLeaguesMemo = null;
+      throw e;
+    });
+  }
+  return popularLeaguesMemo;
 }
 
 async function fetchFotmobMatches(nowMs) {
@@ -165,6 +211,29 @@ function flattenFotmobMatches(data) {
     }
   }
   return matches;
+}
+
+// Filter the complete daily match feed by FotMob's popular and international
+// league lists. This filters visibility only; all match metadata still comes
+// from `/api/data/matches`.
+function filterPopularMatches(matches, popularLeagues) {
+  const allowedIds = new Set(
+    popularLeagues
+      .filter((league) => league != null && league.id != null)
+      .map((league) => String(league.id)),
+  );
+  const allowedNames = new Set(
+    popularLeagues
+      .filter((league) => league != null && league.name != null)
+      .map((league) => String(league.name).trim().toLowerCase()),
+  );
+  return matches.filter((match) => {
+    if (match.leagueId != null && allowedIds.has(String(match.leagueId))) {
+      return true;
+    }
+    return match.leagueName != null &&
+      allowedNames.has(String(match.leagueName).trim().toLowerCase());
+  });
 }
 
 function isWomenMatch(match) {
@@ -329,7 +398,7 @@ function toMediaItem(match, nowMs) {
   const participants = fotmobParticipantsOf(match);
   if (participants.length > 0) item.participants = participants;
   const leagueLogo = leagueLogoUrl(match.leagueId);
-  if (leagueLogo != null) item.artwork = { logo: { url: leagueLogo } };
+  if (leagueLogo != null) item.branding = { logo: { url: leagueLogo } };
 
   return item;
 }
@@ -590,9 +659,13 @@ async function fixturesCatalog(query) {
   // and the other catalog entries are judged against the same "now".
   const nowMs = Date.now();
 
-  let matches = await fetchFixturesMemo(nowMs);
+  let [matches, popularLeagues] = await Promise.all([
+    fetchFixturesMemo(nowMs),
+    fetchPopularLeaguesMemo(),
+  ]);
   matches = matches
     .filter((match) => !isWomenMatch(match) && isRelevantMatch(match, nowMs));
+  matches = filterPopularMatches(matches, popularLeagues);
   matches = prioritizeTopClubMatches(matches);
   if (live) {
     matches = matches.filter((match) => isMatchLive(match, nowMs));
