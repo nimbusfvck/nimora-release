@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.78",
+      "version": "0.6.79",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed popular and international football curation to match league IDs only, preventing unrelated competitions with the same display name (such as Liviy Bereh vs Karpaty) from appearing.",
         "Refined football fixture visibility using FotMob's `popular` and `international` league lists, removing noisy unlisted competitions while keeping the daily `/matches` feed, large club crests, and 433 league branding.",
         "Switched football fixtures to FotMob's daily matches endpoint for schedule and live status, restoring matches missing from the TV guide such as Bournemouth vs Everton and Elversberg vs Leverkusen; all leagues are now shown, with large FotMob club crests and 433 league logos.",
         "Fixed a live match staying marked as scheduled no matter how many times the app refreshed, e.g. Liverpool vs Nottingham Forest: FotMob spells some clubs differently in its schedule feed than by433 does in its live feed (e.g. \"Nottm Forest\" vs \"Nottingham Forest\"), so by433's live confirmation silently failed to match, and FotMob's own schedule fetch — which often carries no `isLive` flag at all — is cached for 15 minutes regardless of how often the app asks. Reconciles the known abbreviation variants.",
@@ -97,7 +98,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "c13b80ac91114c40c6c6716ce5b87ae40f15dd474db54e47aa9337ce84616350"
+      "bundleSha256": "736b0e55940c65a83fa89322e788b73e35c991010b9cad66f12b9c032a031611"
     }
   ]
 }

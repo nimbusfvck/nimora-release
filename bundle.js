@@ -39,6 +39,7 @@ const ALL_CATEGORY = 'all';
 const UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const FIXTURES_TTL_MS = 15 * 60 * 1000;
+const LEAGUE_BRANDING_TTL_MS = 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const JAKARTA_OFFSET_MS = 7 * 60 * 60 * 1000;
 
@@ -144,10 +145,70 @@ function flattenFotmobLeagueList(data) {
   return [...popular, ...international];
 }
 
+function validFotmobColor(value) {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
+    ? value
+    : null;
+}
+
+function leagueIdKey(value) {
+  if (value == null) return null;
+  const key = String(value).trim();
+  return /^\d+$/.test(key) ? key : null;
+}
+
+function fetchFotmobLeagueBranding(leagueId) {
+  const key = leagueIdKey(leagueId);
+  if (key == null) return Promise.resolve(null);
+
+  const nowMs = Date.now();
+  const cached = leagueBrandingMemo.get(key);
+  if (cached != null && nowMs - cached.fetchedAt < LEAGUE_BRANDING_TTL_MS) {
+    return cached.promise;
+  }
+
+  const logo = { url: leagueLogoUrl(key) };
+  const promise = fetch(
+    `${FOTMOB_BASE}/api/data/leagues?id=${encodeURIComponent(key)}`,
+    {
+      headers: {
+        'User-Agent': FOTMOB_USER_AGENT,
+        Accept: 'application/json, text/plain, */*',
+        Referer: `${FOTMOB_BASE}/leagues/${key}`,
+      },
+    },
+  )
+    .then((response) => {
+      if (response.status < 200 || response.status >= 300) return { logo };
+      const data = JSON.parse(response.body);
+      const color = validFotmobColor(data?.details?.leagueColor);
+      return color == null ? { logo } : { logo, primaryColor: color };
+    })
+    .catch(() => ({ logo }));
+
+  leagueBrandingMemo.set(key, { promise, fetchedAt: nowMs });
+  return promise;
+}
+
+async function leagueBrandingFor(matches) {
+  const keys = [
+    ...new Set(
+      matches
+        .map((match) => leagueIdKey(match.leagueId))
+        .filter((key) => key != null),
+    ),
+  ];
+  const entries = await Promise.all(
+    keys.map(async (key) => [key, await fetchFotmobLeagueBranding(key)]),
+  );
+  return new Map(entries.filter((entry) => entry[1] != null));
+}
+
 // The daily match feed is fetched for today plus the next seven Jakarta dates.
 // Deduplication below handles the endpoint's next-day late-night overlap.
 let fixturesMemo = null;
 let popularLeaguesMemo = null;
+const leagueBrandingMemo = new Map();
 
 function fetchFixturesMemo(nowMs) {
   if (
@@ -222,18 +283,9 @@ function filterPopularMatches(matches, popularLeagues) {
       .filter((league) => league != null && league.id != null)
       .map((league) => String(league.id)),
   );
-  const allowedNames = new Set(
-    popularLeagues
-      .filter((league) => league != null && league.name != null)
-      .map((league) => String(league.name).trim().toLowerCase()),
+  return matches.filter(
+    (match) => match.leagueId != null && allowedIds.has(String(match.leagueId)),
   );
-  return matches.filter((match) => {
-    if (match.leagueId != null && allowedIds.has(String(match.leagueId))) {
-      return true;
-    }
-    return match.leagueName != null &&
-      allowedNames.has(String(match.leagueName).trim().toLowerCase());
-  });
 }
 
 function isWomenMatch(match) {
@@ -374,7 +426,7 @@ function fotmobParticipantsOf(match) {
   return [side(home), side(away)];
 }
 
-function toMediaItem(match, nowMs) {
+function toMediaItem(match, nowMs, brandingByLeague) {
   const home = match.home || {};
   const away = match.away || {};
   if (match.utcTime == null || kickoffMs(match) == null) return null;
@@ -397,8 +449,8 @@ function toMediaItem(match, nowMs) {
   if (match.leagueName != null) item.subtitle = match.leagueName;
   const participants = fotmobParticipantsOf(match);
   if (participants.length > 0) item.participants = participants;
-  const leagueLogo = leagueLogoUrl(match.leagueId);
-  if (leagueLogo != null) item.branding = { logo: { url: leagueLogo } };
+  const branding = brandingByLeague?.get(leagueIdKey(match.leagueId));
+  if (branding != null) item.branding = branding;
 
   return item;
 }
@@ -436,7 +488,7 @@ function sortedByKickoff(matches) {
 // Groups by kickoff day rather than league: league order says nothing about
 // when a fixture kicks off, so a distant match from a league that happens to
 // come first in the feed could otherwise show ahead of one kicking off soon.
-function byDate(matches, nowMs) {
+function byDate(matches, nowMs, brandingByLeague) {
   const todayIndex = jakartaDayIndex(nowMs);
   const buckets = new Map();
   for (const entry of sortedByKickoff(matches)) {
@@ -455,7 +507,7 @@ function byDate(matches, nowMs) {
     // preserves that insertion order, so no second sort is needed here.
     const entries = buckets.get(dayIndex);
     const items = entries
-      .map((entry) => toMediaItem(entry.match, nowMs))
+      .map((entry) => toMediaItem(entry.match, nowMs, brandingByLeague))
       .filter((item) => item != null);
     if (items.length === 0) continue;
     const offset = dayIndex - todayIndex;
@@ -591,13 +643,13 @@ function sportsOf(matches, cricfyEntries) {
   return sports;
 }
 
-function buildPage(query, matches, cricfyEntries, nowMs) {
+function buildPage(query, matches, cricfyEntries, nowMs, brandingByLeague) {
   const selected = query.subCategory == null ? null : query.subCategory;
   const subCategories = sportsOf(matches, cricfyEntries);
 
   if (selected === FOOTBALL.id) {
     return {
-      sections: byDate(matches, nowMs),
+      sections: byDate(matches, nowMs, brandingByLeague),
       subCategories,
     };
   }
@@ -617,7 +669,7 @@ function buildPage(query, matches, cricfyEntries, nowMs) {
       matches.filter((match) => isMatchLive(match, nowMs)),
     ).map((entry) => entry.match);
     const footballItems = liveFootballMatches
-      .map((match) => toMediaItem(match, nowMs))
+      .map((match) => toMediaItem(match, nowMs, brandingByLeague))
       .filter((item) => item != null);
 
     const items = [
@@ -634,7 +686,7 @@ function buildPage(query, matches, cricfyEntries, nowMs) {
 
   const sections = [];
   const footballItems = sortedByKickoff(matches)
-    .map((entry) => toMediaItem(entry.match, nowMs))
+    .map((entry) => toMediaItem(entry.match, nowMs, brandingByLeague))
     .filter((item) => item != null);
   if (footballItems.length > 0) {
     sections.push({ id: `sport:${FOOTBALL.id}`, title: FOOTBALL.name, items: footballItems });
@@ -671,12 +723,14 @@ async function fixturesCatalog(query) {
     matches = matches.filter((match) => isMatchLive(match, nowMs));
   }
 
+  const brandingByLeague = await leagueBrandingFor(matches);
+
   let cricfyEntries = await getCricfySportEntries(nowMs);
   if (live) {
     cricfyEntries = cricfyEntries.filter((entry) => entry.live);
   }
 
-  return buildPage(query, matches, cricfyEntries, nowMs);
+  return buildPage(query, matches, cricfyEntries, nowMs, brandingByLeague);
 }
 
 // Registers into `__catalogProviders` rather than assigning
