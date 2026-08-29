@@ -7570,8 +7570,18 @@ async function timesoccerResolveSource(sourceId) {
 
   // The CDN sample is public and CORS-enabled; returning no forced Referer
   // keeps native iOS HLS from being pushed through an unnecessary request
-  // header path. The player can resolve the master playlist adaptively.
-  return { url: hlsUrl, headers: {}, format: 'hls', label: 'Videa HLS' };
+  // header path. The User-Agent is still forced, though: every request up
+  // to here (post, embed, playlist) used the spoofed one above, but the
+  // native player's own segment fetches otherwise fall back to the
+  // platform default — a mismatch a CDN that treats non-browser clients
+  // differently would only start showing once real playback begins, not
+  // during this validation fetch.
+  return {
+    url: hlsUrl,
+    headers: { 'User-Agent': TIMESOCCER_USER_AGENT },
+    format: 'hls',
+    label: 'Videa HLS',
+  };
 }
 
 globalThis.__catalogProviders = globalThis.__catalogProviders || [];
