@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.68",
+      "version": "0.6.69",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added a `previews` catalog to TMDB — Coming Soon interleaved two-to-one with released Trending Movie/TV, de-duplicated by ref — and a lightweight per-item trailer resolver (official Trailer, then official Teaser, then a non-official Trailer, then the newest video) that fetches only `/movie|tv/{id}/videos` per candidate instead of the full detail payload. This is the data source for the app's new Shorts feed; it does not change anything on Home.",
         "Fixed Coming Soon still missing far-out tentpoles like Dune: Part Three and Avengers: Doomsday even after 0.6.67 started discovering them: the shelf re-sorted the combined movie/TV pool by nearest release date and cut it to 25, which buried a title releasing months out under an entire page of smaller titles releasing sooner. Coming Soon now ranks the merged pool by popularity, matching what each source query already used to decide who's in it.",
         "Brought back Coming Soon, sourced properly this time: `/movie/upcoming` only covers the next month or two of theatrical releases, so a tentpole releasing later in the year (e.g. Dune: Part Three, Avengers: Doomsday) never appeared even though it's clearly upcoming. Movies and TV are now discovered by future release date and ranked by popularity instead, so the shelf leads with titles people actually anticipate rather than whichever small release happens to land soonest — while still dropping anything whose date turns out not to be genuinely in the future.",
         "Removed the Coming Soon row: after filtering out titles TMDB misclassifies as upcoming (0.6.65), the region's genuinely future-dated catalog was thin enough on most days that the shelf wasn't worth a permanent spot on Home. Movie and TV items still carry their release date individually, so a title that isn't out yet still shows as upcoming wherever it appears (e.g. Trending) with the same Remind Me behavior.",
@@ -86,7 +87,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "4e949da9fc2059ecb354d205acdeadbd5aecc71bae5b178c69a84c81abef8715"
+      "bundleSha256": "260b5816fddf7eaf1bbffe61f0566aa46a5bb698e9039469d6a8a007938cf5c8"
     }
   ]
 }

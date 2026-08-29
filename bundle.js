@@ -3714,6 +3714,76 @@ async function tmdbCatalog(query) {
   return result;
 }
 
+// --- "previews" catalog: the Shorts feed producer — Coming Soon interleaved
+// with released Trending Movie/TV, de-duplicated by MediaRef. This is a
+// preview-surface catalog (`categories: []` in manifest.json), so it never
+// appears as a Home shelf; the app discovers it only through the Shorts
+// registry lookup. The merge policy is entirely ours — the app renders the
+// declared order and does not re-sort it.
+
+const PREVIEW_CATALOG_ID = 'previews';
+
+function mediaRefKey(ref) {
+  return `${ref.extensionId}/${ref.providerId}/${ref.id}`;
+}
+
+// Alternates movie/tv within one pool so a run of same-kind candidates
+// doesn't dominate a stretch of the feed, while preserving each kind's own
+// relative order (popularity for Coming Soon, trending rank for Trending).
+function alternateByKind(items) {
+  const movies = items.filter((item) => item.kind === 'video');
+  const series = items.filter((item) => item.kind === 'series');
+  const merged = [];
+  for (let i = 0; i < movies.length || i < series.length; i++) {
+    if (i < movies.length) merged.push(movies[i]);
+    if (i < series.length) merged.push(series[i]);
+  }
+  return merged;
+}
+
+// Trending's "day" window can surface a title whose release date is still
+// ahead of it (an early trailer spike) — Coming Soon already owns that case,
+// so this pool is filtered down to what's actually out.
+async function fetchReleasedTrending() {
+  const [movies, tv] = await Promise.all([
+    fetchTrending('movie').catch(() => []),
+    fetchTrending('tv').catch(() => []),
+  ]);
+  return alternateByKind([...movies, ...tv]).filter(
+    (item) => !tmdbIsNotYetReleased(item),
+  );
+}
+
+// Interleaves two Coming Soon candidates with one released Trending
+// candidate, then de-duplicates by MediaRef, keeping the first occurrence —
+// upcoming discovery leads the feed while every few items stay useful for
+// the Watch action right away.
+function interleavePreviewFeed(comingSoon, trending) {
+  const merged = [];
+  let ci = 0;
+  let ti = 0;
+  while (ci < comingSoon.length || ti < trending.length) {
+    for (let n = 0; n < 2 && ci < comingSoon.length; n++) merged.push(comingSoon[ci++]);
+    if (ti < trending.length) merged.push(trending[ti++]);
+  }
+  const seen = new Set();
+  return merged.filter((item) => {
+    const key = mediaRefKey(item.ref);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function tmdbPreviewCatalog() {
+  const [comingSoonRaw, trending] = await Promise.all([
+    fetchComingSoon().catch(() => []),
+    fetchReleasedTrending().catch(() => []),
+  ]);
+  const items = interleavePreviewFeed(alternateByKind(comingSoonRaw), trending);
+  return { sections: [{ id: 'previews', items }] };
+}
+
 // --- meta (detail page fetch) ---
 
 const TMDB_MAX_CAST = 15;
@@ -3952,6 +4022,73 @@ async function tmdbMeta(args) {
   return parsed.kind === 'series' ? tmdbTvMeta(parsed.tmdbId) : tmdbMovieMeta(parsed.tmdbId);
 }
 
+// --- preview (Shorts feed just-in-time resolver) ---
+//
+// Deliberately its own lightweight fetch, not a slice of `tmdbMovieMeta`/
+// `tmdbTvMeta`'s `append_to_response`: those pull credits, release dates and
+// images on top of videos, which would turn "does this candidate have a
+// trailer" into a full detail fetch per candidate. The Shorts workflow
+// resolves this lazily, one item at a time, so the cost has to stay small.
+
+async function tmdbVideosOnly(mediaType, tmdbId) {
+  const data = await tmdbGetJson(`/${mediaType}/${tmdbId}/videos`, {
+    include_video_language: 'en,null',
+  });
+  return Array.isArray(data.results) ? data.results : [];
+}
+
+function newestByPublishDate(videos) {
+  if (videos.length === 0) return null;
+  return videos
+    .slice()
+    .sort((a, b) => (Date.parse(b.published_at || '') || 0) - (Date.parse(a.published_at || '') || 0))[0];
+}
+
+// Official Trailer, then official Teaser, then a non-official Trailer,
+// falling back to whatever YouTube video was published most recently. Only
+// YouTube is considered: the app resolves the returned key as a YouTube
+// embed, never a raw watch URL.
+function tmdbPreviewVideoKey(videos) {
+  const youtubeVideos = videos.filter(
+    (v) => v && String(v.site || '').toLowerCase() === 'youtube'
+      && typeof v.key === 'string' && v.key.trim().length > 0,
+  );
+  const officialTrailers = youtubeVideos.filter((v) => v.type === 'Trailer' && v.official === true);
+  const officialTeasers = youtubeVideos.filter((v) => v.type === 'Teaser' && v.official === true);
+  const nonOfficialTrailers = youtubeVideos.filter((v) => v.type === 'Trailer' && v.official !== true);
+  const chosen =
+    newestByPublishDate(officialTrailers)
+    || newestByPublishDate(officialTeasers)
+    || newestByPublishDate(nonOfficialTrailers)
+    || newestByPublishDate(youtubeVideos);
+  return chosen ? chosen.key.trim() : null;
+}
+
+// Session-only by contract (PLAN.md/Shorts plan §2.4) — nothing here is
+// persisted, and a caller must re-resolve on every retry.
+async function tmdbPreview(args) {
+  const item = args && args.item;
+  const parsed = item && item.ref ? parseTmdbRef(item.ref.id) : null;
+  if (parsed === null) return { sources: [] };
+  const mediaType = parsed.kind === 'series' ? 'tv' : 'movie';
+
+  let videos;
+  try {
+    videos = await tmdbVideosOnly(mediaType, parsed.tmdbId);
+  } catch (_) {
+    // A candidate without a usable trailer is skipped by the Shorts
+    // workflow, not surfaced as an error — an upstream hiccup on one item
+    // must not look different from that item simply having no trailer.
+    return { sources: [] };
+  }
+
+  const key = tmdbPreviewVideoKey(videos);
+  if (key == null) return { sources: [] };
+  return {
+    sources: [{ id: `yt:${key}`, type: 'embedded', provider: 'youtube', mediaId: key }],
+  };
+}
+
 // --- search ---
 //
 // The app fans a free-text query out to every extension's own `search`
@@ -4022,6 +4159,10 @@ globalThis.__catalogProviders.push({
   catalogId: HIGHLIGHTS_CATALOG_ID,
   catalog: tmdbHighlightsCatalog,
 });
+globalThis.__catalogProviders.push({
+  catalogId: PREVIEW_CATALOG_ID,
+  catalog: tmdbPreviewCatalog,
+});
 
 globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.catalog) {
@@ -4052,6 +4193,24 @@ if (!globalThis.__extension.meta) {
       throw new Error(`No meta provider registered for "${args.ref.providerId}"`);
     }
     return provider.meta(args);
+  };
+}
+
+globalThis.__previewProviders = globalThis.__previewProviders || [];
+globalThis.__previewProviders.push({
+  providerId: TMDB_PROVIDER_ID,
+  preview: tmdbPreview,
+});
+
+globalThis.__extension = globalThis.__extension || {};
+if (!globalThis.__extension.preview) {
+  globalThis.__extension.preview = async (args) => {
+    const providerId = args && args.item && args.item.ref ? args.item.ref.providerId : null;
+    const provider = globalThis.__previewProviders.find((p) => p.providerId === providerId);
+    if (!provider) {
+      throw new Error(`No preview provider registered for "${providerId}"`);
+    }
+    return provider.preview(args);
   };
 }
 
