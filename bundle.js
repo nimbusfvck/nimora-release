@@ -484,13 +484,35 @@ function isWomenMatch(match) {
   return womenSuffix.test(`${homeName || ''}`) || womenSuffix.test(`${awayName || ''}`);
 }
 
+// FotMob's schedule feed and by433's live feed don't always spell the same
+// club the same way \u2014 FotMob abbreviates (e.g. "Nottm Forest"), by433
+// spells it out ("Nottingham Forest"). mergeBy433LiveStatus's team-key
+// lookup needs an exact match on this normalized name, so an unreconciled
+// abbreviation silently fails to confirm the match as live \u2014 and since
+// FotMob's own schedule entries frequently carry no `isLive` at all (it's
+// not a schedule-feed field so much as an incidental one), that leaves an
+// actually-live match showing as not-live indefinitely, refresh or not.
+// Mirrors kora.js's FOOTBALL_PROFILE.aliases \u2014 verified real-world
+// variants this codebase already had to handle for Cricfy matching.
+const CLUB_NAME_ALIASES = {
+  'nottm forest': 'nottingham forest',
+  'man utd': 'manchester united',
+  'man united': 'manchester united',
+  'man city': 'manchester city',
+  spurs: 'tottenham hotspur',
+  wolves: 'wolverhampton wanderers',
+  'west brom': 'west bromwich albion',
+  'west bromwich': 'west bromwich albion',
+};
+
 function normalizedClubName(team) {
-  return `${team && (team.longName || team.name) || ''}`
+  const normalized = `${team && (team.longName || team.name) || ''}`
     .trim()
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/\s+/g, ' ');
+  return CLUB_NAME_ALIASES[normalized] || normalized;
 }
 
 function topClubRank(team) {

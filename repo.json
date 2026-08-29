@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.75",
+      "version": "0.6.76",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed a live match staying marked as scheduled no matter how many times the app refreshed, e.g. Liverpool vs Nottingham Forest: FotMob spells some clubs differently in its schedule feed than by433 does in its live feed (e.g. \"Nottm Forest\" vs \"Nottingham Forest\"), so by433's live confirmation silently failed to match, and FotMob's own schedule fetch — which often carries no `isLive` flag at all — is cached for 15 minutes regardless of how often the app asks. Reconciles the known abbreviation variants.",
         "Added competition branding to football event payloads: FotMob league colors and logos now reach the app so match banners can use the competition's visual identity.",
         "Fixed Time Soccer highlights loading slowly and stalling on every quality switch: resolution (post, embed, playlist validation) spoofed a browser User-Agent throughout, but the resolved stream handed to the player carried no headers at all, so its own segment fetches fell back to the platform default UA — a mismatch a CDN that treats non-browser clients differently wouldn't show until real playback started. Playback now sends the same User-Agent resolution already used successfully.",
         "Removed Football Highlights from the Shorts previews feed (added in 0.6.72): landscape recap footage doesn't fit Shorts' vertical format, and the clip a viewer would preview there is already the whole thing, not a lead-in to watch something bigger. The Football Highlights row on Home/Sport is unaffected.",
@@ -94,7 +95,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "c36c92338249b0b50229234a4fd8648fc1bc9419214c4b0c1583eea7134c022b"
+      "bundleSha256": "ee832a14793e5b9c1188bd3aa1e1fe03d07b9d5f09048ffdd993bb79c7301a9d"
     }
   ]
 }
