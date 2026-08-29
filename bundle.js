@@ -3635,10 +3635,33 @@ async function fetchGroup(label, fetchFn) {
 const HIGHLIGHTS_CATALOG_ID = 'highlights';
 const TMDB_ALL_CATEGORY = 'all';
 
+async function fetchTimesoccerHighlights() {
+  const loader = globalThis.__timesoccerHighlightPage;
+  if (typeof loader !== 'function') return [];
+  try {
+    const page = await loader(null);
+    return page && Array.isArray(page.items) ? page.items : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function fetchTimesoccerHighlightsPage(page) {
+  const loader = globalThis.__timesoccerHighlightPage;
+  if (typeof loader !== 'function') return { items: [] };
+  try {
+    const result = await loader(page);
+    return result && Array.isArray(result.items) ? result : { items: [] };
+  } catch (_) {
+    return { items: [] };
+  }
+}
+
 const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
   { id: 'popular_today', name: 'Popular Today', fetch: fetchPopularStreaming },
+  { id: 'football_highlights', name: 'Football Highlights', fetch: fetchTimesoccerHighlights },
   { id: 'coming_soon', name: 'Coming Soon', fetch: () => fetchComingSoon() },
   { id: 'trending_anime', name: 'Trending Anime', fetch: () => anilistHighlightItems() },
   { id: 'popular_anime_season', name: 'Popular Anime This Season', fetch: () => anilistPopularSeasonItems() },
@@ -3675,6 +3698,15 @@ async function tmdbHighlightsCatalog(query) {
   if (query.subCategory != null) {
     const matched = HIGHLIGHT_GROUPS.find((g) => g.id === query.subCategory);
     if (matched == null) return { sections: [], subCategories };
+    if (matched.id === 'football_highlights') {
+      const page = await fetchTimesoccerHighlightsPage(query.page);
+      const result = {
+        sections: [{ id: matched.id, title: matched.name, items: page.items }],
+        subCategories,
+      };
+      if (page.nextPage != null) result.nextPage = page.nextPage;
+      return result;
+    }
     const items = await fetchGroup(matched.name, matched.fetch);
     return { sections: [{ id: matched.id, title: matched.name, items }], subCategories };
   }
@@ -3780,7 +3812,8 @@ async function tmdbPreviewCatalog() {
     fetchComingSoon().catch(() => []),
     fetchReleasedTrending().catch(() => []),
   ]);
-  const items = interleavePreviewFeed(alternateByKind(comingSoonRaw), trending);
+  const candidates = interleavePreviewFeed(alternateByKind(comingSoonRaw), trending);
+  const items = await filterToItemsWithTrailer(candidates);
   return { sections: [{ id: 'previews', items }] };
 }
 
@@ -4022,13 +4055,12 @@ async function tmdbMeta(args) {
   return parsed.kind === 'series' ? tmdbTvMeta(parsed.tmdbId) : tmdbMovieMeta(parsed.tmdbId);
 }
 
-// --- preview (Shorts feed just-in-time resolver) ---
+// --- preview (Shorts feed catalog filter + just-in-time resolver) ---
 //
 // Deliberately its own lightweight fetch, not a slice of `tmdbMovieMeta`/
 // `tmdbTvMeta`'s `append_to_response`: those pull credits, release dates and
 // images on top of videos, which would turn "does this candidate have a
-// trailer" into a full detail fetch per candidate. The Shorts workflow
-// resolves this lazily, one item at a time, so the cost has to stay small.
+// trailer" into a full detail fetch per candidate.
 
 async function tmdbVideosOnly(mediaType, tmdbId) {
   const data = await tmdbGetJson(`/${mediaType}/${tmdbId}/videos`, {
@@ -4064,25 +4096,47 @@ function tmdbPreviewVideoKey(videos) {
   return chosen ? chosen.key.trim() : null;
 }
 
+// Resolved trailer keys (or `null` for "checked, no trailer"), keyed by
+// `mediaType:tmdbId` — bridges `filterToItemsWithTrailer`'s catalog-build
+// check and the Shorts workflow's later per-item `preview()` call for the
+// same title so it isn't the exact same TMDB videos fetch twice. Unbounded
+// but small in practice: one entry per candidate the catalog has ever
+// considered in this extension instance's lifetime.
+const _previewTrailerCache = new Map();
+
+async function trailerKeyFor(item) {
+  const parsed = item && item.ref ? parseTmdbRef(item.ref.id) : null;
+  if (parsed === null) return null;
+  const mediaType = parsed.kind === 'series' ? 'tv' : 'movie';
+  const cacheKey = `${mediaType}:${parsed.tmdbId}`;
+  if (_previewTrailerCache.has(cacheKey)) return _previewTrailerCache.get(cacheKey);
+  const videos = await tmdbVideosOnly(mediaType, parsed.tmdbId);
+  const key = tmdbPreviewVideoKey(videos);
+  _previewTrailerCache.set(cacheKey, key);
+  return key;
+}
+
+// A candidate with no resolvable YouTube trailer is a dead end in the
+// Shorts feed — the viewer would swipe to it and get skipped immediately.
+// Checking every candidate here, once per catalog load, keeps it out of
+// the list entirely rather than relying on the client's own lazy skip.
+async function filterToItemsWithTrailer(items) {
+  const keys = await Promise.all(items.map((item) => trailerKeyFor(item).catch(() => null)));
+  return items.filter((_, i) => keys[i] != null);
+}
+
 // Session-only by contract (PLAN.md/Shorts plan §2.4) — nothing here is
 // persisted, and a caller must re-resolve on every retry.
 async function tmdbPreview(args) {
   const item = args && args.item;
-  const parsed = item && item.ref ? parseTmdbRef(item.ref.id) : null;
-  if (parsed === null) return { sources: [] };
-  const mediaType = parsed.kind === 'series' ? 'tv' : 'movie';
-
-  let videos;
+  let key;
   try {
-    videos = await tmdbVideosOnly(mediaType, parsed.tmdbId);
+    key = await trailerKeyFor(item);
   } catch (_) {
-    // A candidate without a usable trailer is skipped by the Shorts
-    // workflow, not surfaced as an error — an upstream hiccup on one item
-    // must not look different from that item simply having no trailer.
+    // An upstream hiccup on one item must not look different from that
+    // item simply having no trailer.
     return { sources: [] };
   }
-
-  const key = tmdbPreviewVideoKey(videos);
   if (key == null) return { sources: [] };
   return {
     sources: [{ id: `yt:${key}`, type: 'embedded', provider: 'youtube', mediaId: key }],
@@ -7242,6 +7296,7 @@ const TIMESOCCER_BASE =
 const TIMESOCCER_PROVIDER_ID = 'nimora.timesoccer';
 const TIMESOCCER_PROVIDER_KEY = 'timesoccer';
 const TIMESOCCER_CATALOG_ID = 'timesoccer';
+const TIMESOCCER_PREVIEW_CATALOG_ID = 'timesoccer-previews';
 const TIMESOCCER_VIDEO_CATEGORY = 4;
 const TIMESOCCER_PAGE_SIZE = 20;
 const TIMESOCCER_USER_AGENT =
@@ -7288,12 +7343,15 @@ function timesoccerContentOf(post) {
 }
 
 function timesoccerEmbedUrlFromHtml(html) {
-  const match = /<iframe\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/i.exec(html);
-  if (!match) return null;
-  const url = timesoccerDecodeHtml(match[1]).trim();
-  return /^https?:\/\/[^/]+\/embed\/media\/[A-Za-z0-9-]+(?:[/?#]|$)/i.test(url)
-    ? url
-    : null;
+  const frames = /<iframe\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/ig;
+  let match;
+  while ((match = frames.exec(html || '')) != null) {
+    const url = timesoccerDecodeHtml(match[1]).trim();
+    if (/^https?:\/\/[^/]+\/embed\/media\/[A-Za-z0-9-]+(?:[/?#]|$)/i.test(url)) {
+      return url;
+    }
+  }
+  return null;
 }
 
 function timesoccerHasVideaEmbed(post) {
@@ -7310,6 +7368,17 @@ function timesoccerHlsUrlFromEmbed(html) {
   return /^https?:\/\//i.test(url) ? url : null;
 }
 
+function timesoccerArtworkUrl(post) {
+  if (post == null || typeof post !== 'object') return null;
+  const embedded = post._embedded;
+  const media = embedded && embedded['wp:featuredmedia'];
+  const sourceUrl = Array.isArray(media) && media[0] && media[0].source_url;
+  if (typeof sourceUrl === 'string' && /^https?:\/\//i.test(sourceUrl)) {
+    return sourceUrl;
+  }
+  return null;
+}
+
 function timesoccerPostToItem(post) {
   if (post == null || post.id == null) return null;
   if (!timesoccerHasVideaEmbed(post)) return null;
@@ -7320,7 +7389,7 @@ function timesoccerPostToItem(post) {
   );
   if (title.length === 0) return null;
 
-  return {
+  const item = {
     ref: {
       extensionId: EXTENSION_ID,
       providerId: TIMESOCCER_PROVIDER_ID,
@@ -7330,6 +7399,9 @@ function timesoccerPostToItem(post) {
     title,
     subtitle: 'Football Highlights',
   };
+  const artworkUrl = timesoccerArtworkUrl(post);
+  if (artworkUrl != null) item.artwork = { portrait: { url: artworkUrl } };
+  return item;
 }
 
 function timesoccerPostsToItems(posts) {
@@ -7383,6 +7455,30 @@ function timesoccerHasNextPage(response, page, rawPosts) {
   return Array.isArray(rawPosts) && rawPosts.length >= TIMESOCCER_PAGE_SIZE;
 }
 
+async function timesoccerFetchPage(page) {
+  const url = timesoccerWithQuery(
+    `${TIMESOCCER_BASE}/wp-json/wp/v2/posts`,
+    {
+      categories: String(TIMESOCCER_VIDEO_CATEGORY),
+      per_page: String(TIMESOCCER_PAGE_SIZE),
+      page: String(page),
+      orderby: 'date',
+      order: 'desc',
+      _embed: '1',
+      _fields: 'id,date,modified,slug,link,title,content,featured_media,_embedded,_links',
+    },
+  );
+  let posts;
+  let response;
+  try {
+    response = await timesoccerFetchJson(url);
+    posts = response.data;
+  } catch (_) {
+    return { items: [], response: null, posts: [] };
+  }
+  return { items: timesoccerPostsToItems(posts), response, posts };
+}
+
 async function timesoccerCatalog(query) {
   if (query.category !== 'all' && query.category !== 'sport') {
     return { sections: [] };
@@ -7391,34 +7487,77 @@ async function timesoccerCatalog(query) {
   const page = Number.isFinite(requestedPage) && requestedPage > 0
     ? Math.floor(requestedPage)
     : 1;
-  const url = timesoccerWithQuery(
-    `${TIMESOCCER_BASE}/wp-json/wp/v2/posts`,
-    {
-      categories: String(TIMESOCCER_VIDEO_CATEGORY),
-      per_page: String(TIMESOCCER_PAGE_SIZE),
-      page: String(page),
-      _fields: 'id,date,modified,slug,link,title,content',
-    },
-  );
-
-  let posts;
-  let response;
-  try {
-    response = await timesoccerFetchJson(url);
-    posts = response.data;
-  } catch (_) {
-    return { sections: [] };
-  }
-  const items = timesoccerPostsToItems(posts);
+  const { items, response, posts } = await timesoccerFetchPage(page);
   const result = {
     sections: items.length === 0
       ? []
       : [{ id: 'timesoccer-latest', title: 'Football Highlights', items }],
   };
-  if (timesoccerHasNextPage(response, page, posts)) {
+  if (response != null && timesoccerHasNextPage(response, page, posts)) {
     result.nextPage = String(page + 1);
   }
   return result;
+}
+
+globalThis.__timesoccerHighlightPage = async (page) => {
+  const result = await timesoccerCatalog({
+    category: 'sport',
+    page,
+  });
+  const section = Array.isArray(result.sections) ? result.sections[0] : null;
+  return {
+    items: section && Array.isArray(section.items) ? section.items : [],
+    ...(result.nextPage != null ? { nextPage: result.nextPage } : {}),
+  };
+};
+
+// --- Shorts preview surface ---
+//
+// A highlight clip is already short-form — unlike a movie/show trailer,
+// there is no separate short preview to look up; the preview is the exact
+// same Videa HLS stream full playback resolves. Only the latest page is
+// offered here (no pagination — Shorts loads the whole preview catalog
+// once, per source plan §5).
+
+async function timesoccerPreviewCatalog() {
+  const { items } = await timesoccerFetchPage(1);
+  return { sections: [{ id: 'timesoccer-previews', items }] };
+}
+
+async function timesoccerPreview(args) {
+  const item = args && args.item;
+  const itemId = item && item.ref ? String(item.ref.id || '') : '';
+  if (
+    item == null ||
+    item.ref == null ||
+    item.ref.providerId !== TIMESOCCER_PROVIDER_ID ||
+    !/^post:\d+$/.test(itemId)
+  ) {
+    return { sources: [] };
+  }
+  try {
+    const stream = await timesoccerResolveSource(
+      `${TIMESOCCER_PROVIDER_KEY}:${itemId.slice('post:'.length)}`,
+    );
+    return {
+      sources: [
+        {
+          id: `${TIMESOCCER_PROVIDER_KEY}:${itemId}`,
+          type: 'direct',
+          stream: {
+            url: stream.url,
+            headers: stream.headers,
+            format: stream.format,
+            label: stream.label,
+          },
+        },
+      ],
+    };
+  } catch (_) {
+    // A candidate whose Videa embed can't be resolved right now is skipped
+    // by the Shorts workflow, not surfaced as an error.
+    return { sources: [] };
+  }
 }
 
 async function timesoccerSources(args) {
@@ -7505,12 +7644,22 @@ globalThis.__catalogProviders.push({
   catalogId: TIMESOCCER_CATALOG_ID,
   catalog: timesoccerCatalog,
 });
+globalThis.__catalogProviders.push({
+  catalogId: TIMESOCCER_PREVIEW_CATALOG_ID,
+  catalog: timesoccerPreviewCatalog,
+});
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
 globalThis.__streamProviders.push({
   providerKey: TIMESOCCER_PROVIDER_KEY,
   sources: timesoccerSources,
   resolve: (sourceId) => timesoccerResolveSource(sourceId),
+});
+
+globalThis.__previewProviders = globalThis.__previewProviders || [];
+globalThis.__previewProviders.push({
+  providerId: TIMESOCCER_PROVIDER_ID,
+  preview: timesoccerPreview,
 });
 
 globalThis.__extension = globalThis.__extension || {};
@@ -7523,6 +7672,16 @@ if (!globalThis.__extension.catalog) {
       throw new Error(`No catalog provider registered for "${query.catalogId}"`);
     }
     return provider.catalog(query);
+  };
+}
+if (!globalThis.__extension.preview) {
+  globalThis.__extension.preview = async (args) => {
+    const providerId = args && args.item && args.item.ref ? args.item.ref.providerId : null;
+    const provider = globalThis.__previewProviders.find((p) => p.providerId === providerId);
+    if (!provider) {
+      throw new Error(`No preview provider registered for "${providerId}"`);
+    }
+    return provider.preview(args);
   };
 }
 if (!globalThis.__extension.sources) {

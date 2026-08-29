@@ -3,13 +3,16 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.70",
+      "version": "0.6.72",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added a Football Highlights row to Home's Highlights shelf, sourced from Time Soccer alongside Trending Movie/TV and Popular Today.",
+        "Added Football Highlights to the Shorts previews feed: a highlight clip is already short-form, so its preview is the same Videa HLS stream full playback resolves, not a separate trailer lookup.",
+        "The `previews` catalog now checks every candidate for a resolvable YouTube trailer before including it, instead of leaving that to the app's own lazy per-item resolution — a title TMDB has no trailer for used to make it into the Shorts feed anyway, only to get skipped the instant the viewer swiped to it. The per-item trailer lookup this uses is cached, so resolving playback for the same title later doesn't repeat the fetch.",
         "Added a Time Soccer TV football highlights catalog to Home and Sport, with Videa HLS playback and paginated See more loading so the catalog can continue beyond the initial batch.",
         "Added a `previews` catalog to TMDB — Coming Soon interleaved two-to-one with released Trending Movie/TV, de-duplicated by ref — and a lightweight per-item trailer resolver (official Trailer, then official Teaser, then a non-official Trailer, then the newest video) that fetches only `/movie|tv/{id}/videos` per candidate instead of the full detail payload. This is the data source for the app's new Shorts feed; it does not change anything on Home.",
         "Fixed Coming Soon still missing far-out tentpoles like Dune: Part Three and Avengers: Doomsday even after 0.6.67 started discovering them: the shelf re-sorted the combined movie/TV pool by nearest release date and cut it to 25, which buried a title releasing months out under an entire page of smaller titles releasing sooner. Coming Soon now ranks the merged pool by popularity, matching what each source query already used to decide who's in it.",
@@ -88,7 +91,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "30b8ec9acbc1696f09d8abfa61efa8153269686add0385a2d9b2f6050744d156"
+      "bundleSha256": "ed0aef0f4a2977c800359c551c5de0b0a5fbb25b17cf958ae0524e41c6dfb7a5"
     }
   ]
 }
