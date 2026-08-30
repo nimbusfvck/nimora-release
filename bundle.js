@@ -3448,6 +3448,47 @@ async function fetchTopRated(mediaType) {
   return results.map((r) => tmdbToMediaItem(r, mediaType));
 }
 
+// TMDB does not expose a dedicated "popular by country" list. Keep the
+// country-specific values in data so adding another country only needs one
+// entry here. Shelf titles intentionally follow `Popular <Country> Series &
+// Movies`, which the app can match with /^Popular (.+) Series & Movies$/i.
+const POPULAR_COUNTRY_SHELVES = [
+  { id: 'korean', label: 'Korean', originCountry: 'KR', originalLanguage: 'ko' },
+  { id: 'indonesian', label: 'Indonesian', originCountry: 'ID', originalLanguage: 'id' },
+];
+
+function popularCountryTitle(country) {
+  return `Popular ${country.label} Series & Movies`;
+}
+
+async function fetchPopularCountryMediaType(country, mediaType) {
+  const data = await tmdbGetJson(`/discover/${mediaType}`, {
+    page: 1,
+    include_adult: 'false',
+    with_origin_country: country.originCountry,
+    with_original_language: country.originalLanguage,
+    sort_by: 'popularity.desc',
+    'vote_count.gte': 50,
+  });
+  const results = Array.isArray(data.results) ? data.results : [];
+  return results.map((result) => ({
+    item: tmdbToMediaItem(result, mediaType),
+    popularity: typeof result.popularity === 'number' ? result.popularity : 0,
+    voteCount: typeof result.vote_count === 'number' ? result.vote_count : 0,
+  }));
+}
+
+async function fetchPopularCountry(country) {
+  const [movies, series] = await Promise.all([
+    fetchPopularCountryMediaType(country, 'movie'),
+    fetchPopularCountryMediaType(country, 'tv'),
+  ]);
+  return [...movies, ...series]
+    .sort((a, b) => b.popularity - a.popularity || b.voteCount - a.voteCount)
+    .slice(0, 25)
+    .map((entry) => entry.item);
+}
+
 async function fetchSheguList(slug) {
   const data = await sheguGetJson(slug, 25);
   const items = Array.isArray(data.items) ? data.items : [];
@@ -3591,6 +3632,11 @@ const HIGHLIGHT_GROUPS = [
   { id: 'appletv_tv', name: 'TV Series on Apple TV', fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.appleTv) },
   { id: 'prime_tv', name: 'TV Series on Prime', fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.primeVideo) },
   { id: 'hbo_tv', name: 'TV Series on HBO', fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.hbo) },
+  ...POPULAR_COUNTRY_SHELVES.map((country) => ({
+    id: `popular_${country.id}`,
+    name: popularCountryTitle(country),
+    fetch: () => fetchPopularCountry(country),
+  })),
   { id: 'rotten_tomatoes_best', name: 'Rotten Tomatoes Best of All Time', fetch: () => fetchSheguList('rotten-tomatoes-best-of-all-time') },
   { id: 'based_on_true_story', name: 'Based On True Story', fetch: () => fetchSheguList('based-on-a-true-story') },
 ];
@@ -3665,6 +3711,7 @@ async function tmdbCatalog(query) {
 // declared order and does not re-sort it.
 
 const PREVIEW_CATALOG_ID = 'previews';
+const PREVIEW_TRAILER_TTL_MS = 60 * 60 * 1000;
 
 function mediaRefKey(ref) {
   return `${ref.extensionId}/${ref.providerId}/${ref.id}`;
@@ -4010,9 +4057,8 @@ function tmdbPreviewVideoKey(videos) {
 // Resolved trailer keys (or `null` for "checked, no trailer"), keyed by
 // `mediaType:tmdbId` — bridges `filterToItemsWithTrailer`'s catalog-build
 // check and the Shorts workflow's later per-item `preview()` call for the
-// same title so it isn't the exact same TMDB videos fetch twice. Unbounded
-// but small in practice: one entry per candidate the catalog has ever
-// considered in this extension instance's lifetime.
+// same title so it isn't the exact same TMDB videos fetch twice. Entries are
+// session-only and expire so newly published trailers can be discovered.
 const _previewTrailerCache = new Map();
 
 async function trailerKeyFor(item) {
@@ -4020,10 +4066,14 @@ async function trailerKeyFor(item) {
   if (parsed === null) return null;
   const mediaType = parsed.kind === 'series' ? 'tv' : 'movie';
   const cacheKey = `${mediaType}:${parsed.tmdbId}`;
-  if (_previewTrailerCache.has(cacheKey)) return _previewTrailerCache.get(cacheKey);
+  const nowMs = Date.now();
+  const cached = _previewTrailerCache.get(cacheKey);
+  if (cached != null && nowMs - cached.fetchedAt < PREVIEW_TRAILER_TTL_MS) {
+    return cached.key;
+  }
   const videos = await tmdbVideosOnly(mediaType, parsed.tmdbId);
   const key = tmdbPreviewVideoKey(videos);
-  _previewTrailerCache.set(cacheKey, key);
+  _previewTrailerCache.set(cacheKey, { key, fetchedAt: nowMs });
   return key;
 }
 
@@ -4036,8 +4086,8 @@ async function filterToItemsWithTrailer(items) {
   return items.filter((_, i) => keys[i] != null);
 }
 
-// Session-only by contract (PLAN.md/Shorts plan §2.4) — nothing here is
-// persisted, and a caller must re-resolve on every retry.
+// Nothing here is persisted, and the short TTL above lets a caller re-resolve
+// an item's preview after an upstream trailer update.
 async function tmdbPreview(args) {
   const item = args && args.item;
   let key;

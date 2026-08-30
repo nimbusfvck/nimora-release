@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.81",
+      "version": "0.6.82",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added Popular Korean and Popular Indonesian Series & Movies shelves to TMDB Highlights, using popularity-ranked country filters with a reusable configuration for adding more countries later.",
         "Removed finished football matches from the schedule takeout so completed fixtures no longer appear in `Today` or the upcoming Football shelf.",
         "Fixed the women-only exclusion to detect women's competitions from the league name, including FotMob's `UEFA Women's Europa Cup`, even when club names do not carry a `(W)` suffix.",
         "Fixed popular and international football curation to match league IDs only, preventing unrelated competitions with the same display name (such as Liviy Bereh vs Karpaty) from appearing.",
@@ -100,7 +101,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "77fc3578e863bbef417fe509fa2bd566286a6111f17923fc42793282e4c6d595"
+      "bundleSha256": "3e6acb10470260489f50a41dc8ce3451e29cb003dd96e0469b7fb64dd27ab3f7"
     }
   ]
 }
