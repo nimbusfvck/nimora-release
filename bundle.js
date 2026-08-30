@@ -3244,20 +3244,33 @@ if (!globalThis.__extension.sources) {
   };
 }
 
-// MeteGol's agenda18 stream provider.
+// MeteGol's football stream provider.
 //
-// This is the first MeteGol source port. It keeps FotMob/Nimora's catalog as
-// the source of truth: the agenda is only a candidate list used to add
-// streams to an existing football fixture. The embed URL is carried in the
-// opaque source id and the final playback URL is extracted fresh in resolve,
-// because agenda18's player URLs are tokenized and short-lived.
+// It keeps FotMob/Nimora's catalog as the source of truth: these agendas are
+// only candidate lists used to add streams to an existing football fixture.
+// The embed URL is carried in the opaque source id and the final playback URL
+// is extracted fresh in resolve, because the player URLs are tokenized.
 
 const METEGOL_PROVIDER_KEY = 'metegol';
 const METEGOL_PROVIDER_ID = 'nimora.metegol';
-const METEGOL_AGENDA_URL =
+const METEGOL_AGENDA18_URL =
   globalThis.__metegolAgendaUrl || 'https://agenda18.com/agenda.json?v=1.1';
-const METEGOL_REFERER = 'https://agenda18.com/';
-const METEGOL_CACHE_KEY = 'metegol.agenda18.events.v1';
+const METEGOL_ALANGULO_URL =
+  globalThis.__metegolAlAnguloUrl || 'https://alangulotv.cx/agenda.php';
+const METEGOL_FUTBOLIBRE_URL =
+  globalThis.__metegolFutbolLibreUrl || 'https://futbollibretv.sx/eventos.js';
+const METEGOL_DEPORFLIX_SEARCH_URL =
+  globalThis.__metegolDeporflixSearchUrl ||
+  'https://deporflix.pe/wp-json/wp/v2/search?search=vs&per_page=20&_embed=1';
+const METEGOL_DEPORFLIX_AJAX_URL =
+  globalThis.__metegolDeporflixAjaxUrl ||
+  'https://deporflix.pe/wp-admin/admin-ajax.php';
+const METEGOL_AGENDA18_REFERER = 'https://agenda18.com/';
+const METEGOL_ALANGULO_REFERER = 'https://alangulotv.cx/';
+const METEGOL_FUTBOLIBRE_REFERER = 'https://futbollibretv.sx/';
+const METEGOL_DEPORFLIX_REFERER = 'https://deporflix.pe/';
+const METEGOL_CACHE_KEY = 'metegol.events.v2';
+const METEGOL_LEGACY_CACHE_KEY = 'metegol.agenda18.events.v1';
 const METEGOL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const METEGOL_EVENTS_TTL_MS = 15 * 60 * 1000;
 const METEGOL_USER_AGENT =
@@ -3272,6 +3285,16 @@ function metegolStorage() {
 
 function metegolText(value) {
   return value === null || value === undefined ? '' : String(value).trim();
+}
+
+function metegolNormalizeTitle(value) {
+  return metegolText(value)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[:\u2013\u2014_-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function metegolToStartUtc(dateText, timeText) {
@@ -3315,15 +3338,38 @@ function metegolDecodeHref(href) {
   return match === null ? null : metegolDecodeBase64(match[1]);
 }
 
+function metegolTeamNames(title) {
+  let value = metegolText(title).split('|')[0];
+  const colon = value.indexOf(':');
+  if (colon >= 0 && colon < value.length - 1) value = value.slice(colon + 1);
+  return value
+    .split(/\s+v(?:s|s\.)?\.?\s+|\s+@\s+|\s+[–—-]\s+/i)
+    .map((team) => team.trim())
+    .filter((team) => team.length > 0)
+    .slice(0, 2);
+}
+
+function metegolSameTeams(left, right) {
+  const a = metegolTeamNames(left).map(metegolNormalizeTitle);
+  const b = metegolTeamNames(right).map(metegolNormalizeTitle);
+  if (a.length !== 2 || b.length !== 2) return false;
+  const contains = (x, y) => x.includes(y) || y.includes(x);
+  return (
+    (contains(a[0], b[0]) && contains(a[1], b[1])) ||
+    (contains(a[0], b[1]) && contains(a[1], b[0]))
+  );
+}
+
 function metegolIsFootball(category) {
   const value = metegolText(category).toLowerCase();
   return value === 'futbol' || value === 'football' || value.includes('futbol');
 }
 
-function metegolLabel(attributes) {
+function metegolLabel(attributes, prefix) {
   const name = metegolText(attributes.embed_name) || 'Agenda18';
   const language = metegolText(attributes.idioma);
-  return language.length === 0 ? name : `${name} · ${language}`;
+  const label = language.length === 0 ? name : `${name} · ${language}`;
+  return prefix ? `${prefix} · ${label}` : label;
 }
 
 function metegolParseAgenda(json) {
@@ -3350,6 +3396,8 @@ function metegolParseAgenda(json) {
       streams.push({
         url,
         label: metegolLabel(embedAttributes),
+        source: 'agenda18',
+        referer: METEGOL_AGENDA18_REFERER,
       });
     }
     if (streams.length === 0) continue;
@@ -3371,6 +3419,152 @@ function metegolParseAgenda(json) {
   return events;
 }
 
+function metegolParseAlAngulo(html) {
+  const events = [];
+  const liRe =
+    /<li class="([A-Z0-9\s]+)"><a href="#">([\s\S]*?)<\/a>\s*<ul>([\s\S]*?)<\/ul>\s*<\/li>/g;
+  let match;
+  while ((match = liRe.exec(html)) !== null) {
+    const body = match[2];
+    const streamsHtml = match[3];
+    const title = body
+      .split('<span class="t">')[0]
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/:\s*$/, '')
+      .trim();
+    if (title.length === 0) continue;
+
+    const streams = [];
+    const streamRe =
+      /<li class="([^"]+)"><a href="[^"?]*\?r=([A-Za-z0-9+/=]+)"[^>]*>([\s\S]*?)<\/a><\/li>/g;
+    let streamMatch;
+    while ((streamMatch = streamRe.exec(streamsHtml)) !== null) {
+      const url = metegolDecodeBase64(streamMatch[2]);
+      if (url === null || url.length === 0) continue;
+      const label = streamMatch[3]
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      streams.push({
+        source: 'alangulo',
+        referer: METEGOL_ALANGULO_REFERER,
+        label: `Al Angulo · ${label || 'Stream'}`,
+        url,
+      });
+    }
+    if (streams.length === 0) continue;
+    events.push({ title, streams, sport: metegolText(match[1]) });
+  }
+  return events;
+}
+
+function metegolParseFutbolLibre(body) {
+  const match = /EVENTOS_DATA\s*=\s*(\[[\s\S]*\])\s*;?\s*$/.exec(body);
+  if (match === null) return [];
+  let data;
+  try {
+    data = JSON.parse(match[1]);
+  } catch (_) {
+    return [];
+  }
+  if (!Array.isArray(data)) return [];
+
+  const events = [];
+  const seen = {};
+  for (const row of data) {
+    if (!row || !row.titulo || !Array.isArray(row.canales)) continue;
+    const streams = [];
+    for (const channel of row.canales) {
+      const url = metegolDecodeHref(channel && channel.url);
+      if (url === null || url.length === 0) continue;
+      const name = metegolText(channel && channel.nombre) || 'Stream';
+      const quality = metegolText(channel && channel.calidad);
+      streams.push({
+        source: 'futbollibre',
+        referer: METEGOL_FUTBOLIBRE_REFERER,
+        label: `Futbol Libre · ${name}${quality ? ` · ${quality}` : ''}`,
+        url,
+      });
+    }
+    if (streams.length === 0) continue;
+    const title = metegolText(row.titulo);
+    const key = metegolNormalizeTitle(title);
+    if (seen[key]) continue;
+    seen[key] = true;
+    events.push({ title, streams, sport: metegolText(row.clase) });
+  }
+  return events;
+}
+
+async function metegolFetchDeporflixEvents() {
+  const searchResponse = await fetch(METEGOL_DEPORFLIX_SEARCH_URL, {
+    headers: {
+      'User-Agent': METEGOL_USER_AGENT,
+      Accept: 'application/json, text/plain, */*',
+      Referer: METEGOL_DEPORFLIX_REFERER,
+    },
+    timeoutMs: 12000,
+  });
+  if (searchResponse.status < 200 || searchResponse.status >= 300) {
+    throw new Error(`MeteGol Deporflix search failed: ${searchResponse.status}`);
+  }
+  let results;
+  try {
+    results = JSON.parse(searchResponse.body);
+  } catch (_) {
+    return [];
+  }
+  if (!Array.isArray(results)) return [];
+
+  const matches = results.filter(
+    (row) =>
+      row &&
+      row.id &&
+      row.title &&
+      /\s+vs\s+/i.test(row.title) &&
+      typeof row.url === 'string' &&
+      /\/canales\//.test(row.url),
+  );
+  const events = await Promise.all(
+    matches.map(async (row) => {
+      try {
+        const response = await fetch(METEGOL_DEPORFLIX_AJAX_URL, {
+          method: 'POST',
+          headers: {
+            'User-Agent': METEGOL_USER_AGENT,
+            Accept: 'application/json, text/plain, */*',
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Requested-With': 'XMLHttpRequest',
+            Referer: row.url,
+          },
+          body:
+            `action=doo_player_ajax&post=${encodeURIComponent(row.id)}` +
+            '&nume=1&type=movie',
+          timeoutMs: 10000,
+        });
+        if (response.status < 200 || response.status >= 300) return null;
+        const payload = JSON.parse(response.body);
+        if (!payload || typeof payload.embed_url !== 'string') return null;
+        return {
+          title: metegolText(row.title),
+          streams: [
+            {
+              source: 'deporflix',
+              referer: row.url,
+              label: 'Deporflix',
+              url: payload.embed_url,
+            },
+          ],
+        };
+      } catch (_) {
+        return null;
+      }
+    }),
+  );
+  return events.filter((event) => event !== null);
+}
+
 async function metegolFetchText(url, headers, timeoutMs) {
   const response = await fetch(url, {
     headers,
@@ -3382,18 +3576,94 @@ async function metegolFetchText(url, headers, timeoutMs) {
   return response.body;
 }
 
+function metegolMergeStreams(left, right) {
+  const streams = [...(left || [])];
+  const urls = {};
+  for (const stream of streams) urls[stream.url] = true;
+  for (const stream of right || []) {
+    if (!stream || !stream.url || urls[stream.url]) continue;
+    urls[stream.url] = true;
+    streams.push(stream);
+  }
+  return streams;
+}
+
+function metegolMergeEvents(...lists) {
+  const events = [];
+  for (const list of lists) {
+    for (const event of list || []) {
+      const key = metegolNormalizeTitle(event.title);
+      if (key.length === 0) continue;
+      const existing = events.find(
+        (candidate) =>
+          metegolNormalizeTitle(candidate.title) === key ||
+          metegolSameTeams(candidate.title, event.title),
+      );
+      if (existing) {
+        existing.streams = metegolMergeStreams(existing.streams, event.streams);
+        if (!existing.startUtc && event.startUtc) existing.startUtc = event.startUtc;
+      } else {
+        const copy = { ...event, streams: [...(event.streams || [])] };
+        events.push(copy);
+      }
+    }
+  }
+  return events;
+}
+
+function metegolAddDeporflixStreams(events, extras) {
+  for (const extra of extras || []) {
+    const exact = metegolNormalizeTitle(extra.title);
+    const target = events.find(
+      (event) =>
+        metegolNormalizeTitle(event.title) === exact ||
+        metegolSameTeams(event.title, extra.title),
+    );
+    if (target) target.streams = metegolMergeStreams(target.streams, extra.streams);
+  }
+  return events;
+}
+
 async function metegolFetchEvents() {
-  const body = await metegolFetchText(
-    METEGOL_AGENDA_URL,
-    {
-      'User-Agent': METEGOL_USER_AGENT,
-      Accept: 'application/json, text/plain, */*',
-      Referer: METEGOL_REFERER,
-    },
-    15000,
+  const [alangulo, futbolibre, agenda18, deporflix] = await Promise.allSettled([
+    metegolFetchText(
+      METEGOL_ALANGULO_URL,
+      {
+        'User-Agent': METEGOL_USER_AGENT,
+        Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+        Referer: METEGOL_ALANGULO_REFERER,
+      },
+      12000,
+    ).then(metegolParseAlAngulo),
+    metegolFetchText(
+      METEGOL_FUTBOLIBRE_URL,
+      {
+        'User-Agent': METEGOL_USER_AGENT,
+        Accept: 'application/javascript, text/plain, */*',
+        Referer: METEGOL_FUTBOLIBRE_REFERER,
+      },
+      12000,
+    ).then(metegolParseFutbolLibre),
+    metegolFetchText(
+      METEGOL_AGENDA18_URL,
+      {
+        'User-Agent': METEGOL_USER_AGENT,
+        Accept: 'application/json, text/plain, */*',
+        Referer: METEGOL_AGENDA18_REFERER,
+      },
+      15000,
+    ).then((body) => metegolParseAgenda(JSON.parse(body))),
+    metegolFetchDeporflixEvents(),
+  ]);
+  const events = metegolMergeEvents(
+    alangulo.status === 'fulfilled' ? alangulo.value : [],
+    futbolibre.status === 'fulfilled' ? futbolibre.value : [],
+    agenda18.status === 'fulfilled' ? agenda18.value : [],
   );
-  const parsed = JSON.parse(body);
-  const events = metegolParseAgenda(parsed);
+  metegolAddDeporflixStreams(
+    events,
+    deporflix.status === 'fulfilled' ? deporflix.value : [],
+  );
   const storage = metegolStorage();
   if (storage !== null) {
     try {
@@ -3412,30 +3682,30 @@ async function metegolFetchEvents() {
 function metegolCachedEvents() {
   const storage = metegolStorage();
   if (storage === null) return null;
-  let raw;
-  try {
-    raw = storage.read(METEGOL_CACHE_KEY);
-  } catch (_) {
-    return null;
-  }
-  if (typeof raw !== 'string' || raw.length === 0) return null;
-  try {
-    const events = JSON.parse(raw);
-    if (!Array.isArray(events) || events.length === 0) return null;
-    for (const event of events) {
-      if (
-        typeof event !== 'object' ||
-        event === null ||
-        typeof event.title !== 'string' ||
-        !Array.isArray(event.streams)
-      ) {
-        return null;
-      }
+  for (const key of [METEGOL_CACHE_KEY, METEGOL_LEGACY_CACHE_KEY]) {
+    let raw;
+    try {
+      raw = storage.read(key);
+    } catch (_) {
+      continue;
     }
-    return events;
-  } catch (_) {
-    return null;
+    if (typeof raw !== 'string' || raw.length === 0) continue;
+    try {
+      const events = JSON.parse(raw);
+      if (!Array.isArray(events) || events.length === 0) continue;
+      const valid = events.every(
+        (event) =>
+          typeof event === 'object' &&
+          event !== null &&
+          typeof event.title === 'string' &&
+          Array.isArray(event.streams),
+      );
+      if (valid) return events;
+    } catch (_) {
+      continue;
+    }
   }
+  return null;
 }
 
 let metegolEventsMemo = null;
@@ -3483,17 +3753,6 @@ function metegolFetchEventsMemo(nowMs) {
   return metegolEventsMemo.promise;
 }
 
-function metegolTeamNames(title) {
-  let value = metegolText(title).split('|')[0];
-  const colon = value.indexOf(':');
-  if (colon >= 0 && colon < value.length - 1) value = value.slice(colon + 1);
-  return value
-    .split(/\s+v(?:s|s\.)?\.?\s+|\s+@\s+|\s+[–—-]\s+/i)
-    .map((team) => team.trim())
-    .filter((team) => team.length > 0)
-    .slice(0, 2);
-}
-
 function metegolCandidatesFrom(events) {
   const candidates = [];
   for (const event of events) {
@@ -3510,7 +3769,12 @@ function metegolCandidatesFrom(events) {
 }
 
 function metegolEncodeSourceId(stream) {
-  const json = JSON.stringify({ u: stream.url, l: stream.label });
+  const json = JSON.stringify({
+    u: stream.url,
+    l: stream.label,
+    s: stream.source || 'agenda18',
+    r: stream.referer || METEGOL_AGENDA18_REFERER,
+  });
   return host.codec
     .textToBase64(json)
     .replace(/\+/g, '-')
@@ -3531,7 +3795,7 @@ function metegolDecodeSourceId(encoded) {
 function metegolSourcesForEvent(event) {
   return event.streams.map((stream) => ({
     id: `${METEGOL_PROVIDER_KEY}:${metegolEncodeSourceId(stream)}`,
-    label: `MeteGol · ${stream.label || 'Agenda18'}`,
+    label: stream.label || 'Agenda18',
     provider: 'Nimora',
     providerId: METEGOL_PROVIDER_ID,
   }));
@@ -3585,7 +3849,7 @@ async function metegolResolveSource(sourceId) {
   const html = await metegolFetchText(payload.u, {
     'User-Agent': METEGOL_USER_AGENT,
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    Referer: METEGOL_REFERER,
+    Referer: payload.r || METEGOL_AGENDA18_REFERER,
   });
   const url = metegolExtractPlaybackUrl(html);
   if (url === null || url.length === 0) {
@@ -3593,7 +3857,7 @@ async function metegolResolveSource(sourceId) {
   }
   return {
     url,
-    headers: { Referer: METEGOL_REFERER },
+    headers: { Referer: payload.r || METEGOL_AGENDA18_REFERER },
     format: 'hls',
     label: payload.l || 'Agenda18',
   };
