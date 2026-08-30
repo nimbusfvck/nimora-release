@@ -3442,10 +3442,28 @@ async function fetchComingSoon() {
     .map((entry) => entry.item);
 }
 
-async function fetchTopRated(mediaType) {
-  const data = await tmdbGetJson(`/${mediaType}/top_rated`, { page: 1, include_adult: 'false' });
+function tmdbRequestedPage(page) {
+  const parsed = Number(page);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
+
+async function fetchTopRatedPage(mediaType, page) {
+  const requestedPage = tmdbRequestedPage(page);
+  const data = await tmdbGetJson(`/${mediaType}/top_rated`, {
+    page: requestedPage,
+    include_adult: 'false',
+  });
   const results = Array.isArray(data.results) ? data.results : [];
-  return results.map((r) => tmdbToMediaItem(r, mediaType));
+  return {
+    items: results.map((r) => tmdbToMediaItem(r, mediaType)),
+    page: typeof data.page === 'number' ? data.page : requestedPage,
+    totalPages: typeof data.total_pages === 'number' ? data.total_pages : requestedPage,
+  };
+}
+
+async function fetchTopRated(mediaType) {
+  const page = await fetchTopRatedPage(mediaType, 1);
+  return page.items;
 }
 
 // TMDB does not expose a dedicated "popular by country" list. Keep the
@@ -3461,9 +3479,10 @@ function popularCountryTitle(country) {
   return `Popular ${country.label} Series & Movies`;
 }
 
-async function fetchPopularCountryMediaType(country, mediaType) {
+async function fetchPopularCountryMediaTypePage(country, mediaType, page) {
+  const requestedPage = tmdbRequestedPage(page);
   const data = await tmdbGetJson(`/discover/${mediaType}`, {
-    page: 1,
+    page: requestedPage,
     include_adult: 'false',
     with_origin_country: country.originCountry,
     with_original_language: country.originalLanguage,
@@ -3471,22 +3490,47 @@ async function fetchPopularCountryMediaType(country, mediaType) {
     'vote_count.gte': 50,
   });
   const results = Array.isArray(data.results) ? data.results : [];
-  return results.map((result) => ({
-    item: tmdbToMediaItem(result, mediaType),
-    popularity: typeof result.popularity === 'number' ? result.popularity : 0,
-    voteCount: typeof result.vote_count === 'number' ? result.vote_count : 0,
-  }));
+  return {
+    entries: results.map((result) => ({
+      item: tmdbToMediaItem(result, mediaType),
+      popularity: typeof result.popularity === 'number' ? result.popularity : 0,
+      voteCount: typeof result.vote_count === 'number' ? result.vote_count : 0,
+    })),
+    page: typeof data.page === 'number' ? data.page : requestedPage,
+    totalPages: typeof data.total_pages === 'number' ? data.total_pages : requestedPage,
+  };
 }
 
-async function fetchPopularCountry(country) {
-  const [movies, series] = await Promise.all([
-    fetchPopularCountryMediaType(country, 'movie'),
-    fetchPopularCountryMediaType(country, 'tv'),
-  ]);
+async function fetchPopularCountryMediaType(country, mediaType) {
+  const page = await fetchPopularCountryMediaTypePage(country, mediaType, 1);
+  return page.entries;
+}
+
+function popularCountryItems(movies, series) {
   return [...movies, ...series]
     .sort((a, b) => b.popularity - a.popularity || b.voteCount - a.voteCount)
     .slice(0, 25)
     .map((entry) => entry.item);
+}
+
+async function fetchPopularCountryPage(country, page) {
+  const requestedPage = tmdbRequestedPage(page);
+  const [movies, series] = await Promise.all([
+    fetchPopularCountryMediaTypePage(country, 'movie', requestedPage),
+    fetchPopularCountryMediaTypePage(country, 'tv', requestedPage),
+  ]);
+  const nextPage = movies.page < movies.totalPages || series.page < series.totalPages
+    ? String(requestedPage + 1)
+    : null;
+  return {
+    items: popularCountryItems(movies.entries, series.entries),
+    nextPage,
+  };
+}
+
+async function fetchPopularCountry(country) {
+  const page = await fetchPopularCountryPage(country, 1);
+  return page.items;
 }
 
 async function fetchSheguList(slug) {
@@ -3515,37 +3559,57 @@ async function fetchDiscover(mediaType, page) {
   return fetchDiscoverPage(mediaType, {}, page);
 }
 
-async function fetchPopularStreamingMediaType(mediaType) {
+async function fetchPopularStreamingMediaTypePage(mediaType, page) {
   try {
+    const requestedPage = tmdbRequestedPage(page);
     const data = await tmdbGetJson(`/discover/${mediaType}`, {
       include_adult: 'false',
       watch_region: TMDB_WATCH_REGION,
       with_watch_monetization_types: TMDB_STREAMING_TYPES,
       sort_by: 'popularity.desc',
-      page: 1,
+      page: requestedPage,
     });
     const results = Array.isArray(data.results) ? data.results : [];
-    return results.map((result) => ({
-      item: tmdbToMediaItem(result, mediaType),
-      popularity: typeof result.popularity === 'number' ? result.popularity : 0,
-    }));
+    return {
+      entries: results.map((result) => ({
+        item: tmdbToMediaItem(result, mediaType),
+        popularity: typeof result.popularity === 'number' ? result.popularity : 0,
+      })),
+      page: typeof data.page === 'number' ? data.page : requestedPage,
+      totalPages: typeof data.total_pages === 'number' ? data.total_pages : requestedPage,
+    };
   } catch (_) {
-    return [];
+    return { entries: [], page: 1, totalPages: 1 };
   }
+}
+
+async function fetchPopularStreamingMediaType(mediaType) {
+  const page = await fetchPopularStreamingMediaTypePage(mediaType, 1);
+  return page.entries;
 }
 
 // Combine paid movie and TV streaming results into one shelf. The public API
 // exposes the availability filter, while the website's private panel owns its
 // own ranking and may therefore show a different order.
 async function fetchPopularStreaming() {
+  const page = await fetchPopularStreamingPage(1);
+  return page.items;
+}
+
+async function fetchPopularStreamingPage(page) {
+  const requestedPage = tmdbRequestedPage(page);
   const [movies, tv] = await Promise.all([
-    fetchPopularStreamingMediaType('movie'),
-    fetchPopularStreamingMediaType('tv'),
+    fetchPopularStreamingMediaTypePage('movie', requestedPage),
+    fetchPopularStreamingMediaTypePage('tv', requestedPage),
   ]);
-  return [...movies, ...tv]
+  const items = [...movies.entries, ...tv.entries]
     .sort((a, b) => b.popularity - a.popularity)
     .slice(0, 25)
     .map((entry) => entry.item);
+  const nextPage = movies.page < movies.totalPages || tv.page < tv.totalPages
+    ? String(requestedPage + 1)
+    : null;
+  return { items, nextPage };
 }
 
 // TMDB's `watch_providers` catalog ids — stable across regions, used with
@@ -3559,11 +3623,21 @@ const WATCH_PROVIDER = {
   appleTv: 350,
 };
 
-// Single page only (page 1) — these are `highlights` shelf sections, not
-// something a viewer pages through further, same as the other curated lists.
 async function fetchWatchProvider(mediaType, providerId) {
   const page = await fetchDiscoverPage(mediaType, { with_watch_providers: providerId }, 1);
   return page.items;
+}
+
+async function fetchWatchProviderPage(mediaType, providerId, page) {
+  const discover = await fetchDiscoverPage(
+    mediaType,
+    { with_watch_providers: providerId },
+    tmdbRequestedPage(page),
+  );
+  return {
+    items: discover.items,
+    nextPage: discover.page < discover.totalPages ? String(discover.page + 1) : null,
+  };
 }
 
 // Try/catch wrapper so one upstream outage drops just its own section
@@ -3574,6 +3648,15 @@ async function fetchGroup(label, fetchFn) {
   return items;
   } catch (e) {
     return [];
+  }
+}
+
+async function fetchGroupPage(label, fetchFn, page) {
+  try {
+    const result = await fetchFn(page);
+    return result && Array.isArray(result.items) ? result : { items: [] };
+  } catch (e) {
+    return { items: [] };
   }
 }
 
@@ -3612,36 +3695,122 @@ async function fetchTimesoccerHighlightsPage(page) {
 const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
-  { id: 'popular_today', name: 'Popular Today', fetch: fetchPopularStreaming },
+  {
+    id: 'popular_today',
+    name: 'Popular Today',
+    fetch: fetchPopularStreaming,
+    fetchPage: fetchPopularStreamingPage,
+  },
   { id: 'football_highlights', name: 'Football Highlights', fetch: fetchTimesoccerHighlights },
   { id: 'coming_soon', name: 'Coming Soon', fetch: () => fetchComingSoon() },
   { id: 'trending_anime', name: 'Trending Anime', fetch: () => anilistHighlightItems() },
   { id: 'popular_anime_season', name: 'Popular Anime This Season', fetch: () => anilistPopularSeasonItems() },
-  { id: 'top_rated_movie', name: 'Top Rated Movie', fetch: () => fetchTopRated('movie') },
-  { id: 'top_rated_tv', name: 'Top Rated TV', fetch: () => fetchTopRated('tv') },
+  {
+    id: 'top_rated_movie',
+    name: 'Top Rated Movie',
+    fetch: () => fetchTopRated('movie'),
+    fetchPage: async (page) => {
+      const result = await fetchTopRatedPage('movie', page);
+      return {
+        items: result.items,
+        nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
+      };
+    },
+  },
+  {
+    id: 'top_rated_tv',
+    name: 'Top Rated TV',
+    fetch: () => fetchTopRated('tv'),
+    fetchPage: async (page) => {
+      const result = await fetchTopRatedPage('tv', page);
+      return {
+        items: result.items,
+        nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
+      };
+    },
+  },
   { id: 'oscar_nominees', name: 'Oscar Nominees', fetch: () => fetchSheguList('oscar-nominees-best-picture') },
   { id: 'cannes', name: 'Cannes Film Festival', fetch: () => fetchSheguList('cannes-film-festival') },
-  { id: 'netflix_movies', name: 'Movies on Netflix', fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.netflix) },
-  { id: 'hulu_movies', name: 'Movies on Hulu', fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.hulu) },
-  { id: 'disney_movies', name: 'Movies on Disney+', fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.disneyPlus) },
-  { id: 'prime_movies', name: 'Movies on Prime Video', fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.primeVideo) },
-  { id: 'hbo_movies', name: 'Movies on HBO', fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.hbo) },
-  { id: 'appletv_movies', name: 'Movies on Apple TV', fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.appleTv) },
-  { id: 'netflix_tv', name: 'TV Series on Netflix', fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.netflix) },
-  { id: 'disney_tv', name: 'TV Series on Disney+', fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.disneyPlus) },
-  { id: 'appletv_tv', name: 'TV Series on Apple TV', fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.appleTv) },
-  { id: 'prime_tv', name: 'TV Series on Prime', fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.primeVideo) },
-  { id: 'hbo_tv', name: 'TV Series on HBO', fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.hbo) },
+  {
+    id: 'netflix_movies',
+    name: 'Movies on Netflix',
+    fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.netflix),
+    fetchPage: (page) => fetchWatchProviderPage('movie', WATCH_PROVIDER.netflix, page),
+  },
+  {
+    id: 'hulu_movies',
+    name: 'Movies on Hulu',
+    fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.hulu),
+    fetchPage: (page) => fetchWatchProviderPage('movie', WATCH_PROVIDER.hulu, page),
+  },
+  {
+    id: 'disney_movies',
+    name: 'Movies on Disney+',
+    fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.disneyPlus),
+    fetchPage: (page) => fetchWatchProviderPage('movie', WATCH_PROVIDER.disneyPlus, page),
+  },
+  {
+    id: 'prime_movies',
+    name: 'Movies on Prime Video',
+    fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.primeVideo),
+    fetchPage: (page) => fetchWatchProviderPage('movie', WATCH_PROVIDER.primeVideo, page),
+  },
+  {
+    id: 'hbo_movies',
+    name: 'Movies on HBO',
+    fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.hbo),
+    fetchPage: (page) => fetchWatchProviderPage('movie', WATCH_PROVIDER.hbo, page),
+  },
+  {
+    id: 'appletv_movies',
+    name: 'Movies on Apple TV',
+    fetch: () => fetchWatchProvider('movie', WATCH_PROVIDER.appleTv),
+    fetchPage: (page) => fetchWatchProviderPage('movie', WATCH_PROVIDER.appleTv, page),
+  },
+  {
+    id: 'netflix_tv',
+    name: 'TV Series on Netflix',
+    fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.netflix),
+    fetchPage: (page) => fetchWatchProviderPage('tv', WATCH_PROVIDER.netflix, page),
+  },
+  {
+    id: 'disney_tv',
+    name: 'TV Series on Disney+',
+    fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.disneyPlus),
+    fetchPage: (page) => fetchWatchProviderPage('tv', WATCH_PROVIDER.disneyPlus, page),
+  },
+  {
+    id: 'appletv_tv',
+    name: 'TV Series on Apple TV',
+    fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.appleTv),
+    fetchPage: (page) => fetchWatchProviderPage('tv', WATCH_PROVIDER.appleTv, page),
+  },
+  {
+    id: 'prime_tv',
+    name: 'TV Series on Prime',
+    fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.primeVideo),
+    fetchPage: (page) => fetchWatchProviderPage('tv', WATCH_PROVIDER.primeVideo, page),
+  },
+  {
+    id: 'hbo_tv',
+    name: 'TV Series on HBO',
+    fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.hbo),
+    fetchPage: (page) => fetchWatchProviderPage('tv', WATCH_PROVIDER.hbo, page),
+  },
   ...POPULAR_COUNTRY_SHELVES.map((country) => ({
     id: `popular_${country.id}`,
     name: popularCountryTitle(country),
     fetch: () => fetchPopularCountry(country),
+    fetchPage: (page) => fetchPopularCountryPage(country, page),
   })),
   { id: 'rotten_tomatoes_best', name: 'Rotten Tomatoes Best of All Time', fetch: () => fetchSheguList('rotten-tomatoes-best-of-all-time') },
   { id: 'based_on_true_story', name: 'Based On True Story', fetch: () => fetchSheguList('based-on-a-true-story') },
 ];
 
-// Single page per section (no further pagination within one), but *does*
+// Highlights declare `subCategories` — one per group, id-matched to the name
+// each group is tagged with. Groups backed by a paginated TMDB endpoint also
+// expose `nextPage`, allowing the app's See more grid to load more on scroll.
+// Non-paginated editorial lists remain single-page, but *do*
 // declare `subCategories` — one per group, id-matched to the name each
 // group is tagged with — so "See more" on any one of them narrows to just
 // that section instead of falling back to the whole unnarrowed catalog
@@ -3657,6 +3826,15 @@ async function tmdbHighlightsCatalog(query) {
     if (matched == null) return { sections: [], subCategories };
     if (matched.id === 'football_highlights') {
       const page = await fetchTimesoccerHighlightsPage(query.page);
+      const result = {
+        sections: [{ id: matched.id, title: matched.name, items: page.items }],
+        subCategories,
+      };
+      if (page.nextPage != null) result.nextPage = page.nextPage;
+      return result;
+    }
+    if (typeof matched.fetchPage === 'function') {
+      const page = await fetchGroupPage(matched.name, matched.fetchPage, query.page);
       const result = {
         sections: [{ id: matched.id, title: matched.name, items: page.items }],
         subCategories,
