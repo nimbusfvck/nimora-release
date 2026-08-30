@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.84",
+      "version": "0.6.85",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added MeteGol's agenda18 football stream provider: it matches the agenda to FotMob fixtures, keeps the parsed schedule across launches when `host.storage` is available, and resolves fresh HLS playback URLs when a source is selected.",
         "Kept Cricfy events and sources working while its API is slow or refusing: the event schedule is now requested with a longer timeout and kept between app launches, so a cold start serves the stored schedule straight away and refreshes it in the background instead of showing an empty Live row while the upstream stalls. Needs an app build that provides extension storage; on an older build nothing changes.",
         "Kora now resolves a repeated source through a different edge each time, so retrying after a live stall takes another route instead of pinning to the one that just stalled.",
         "Added paginated See more loading for TMDB Highlights backed by TMDB pages, including Korean and Indonesian shelves, Top Rated, Popular Today, and streaming-provider rows.",
@@ -104,7 +105,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "b11553e3e97084d7d65fc175ed399e23d0ad71f86874ba7cc00cb7bc66954977"
+      "bundleSha256": "602449951e13833fcb2eaa23c1d60d898f3d711a58ac391dfef20799ed66868b"
     }
   ]
 }

@@ -3244,6 +3244,435 @@ if (!globalThis.__extension.sources) {
   };
 }
 
+// MeteGol's agenda18 stream provider.
+//
+// This is the first MeteGol source port. It keeps FotMob/Nimora's catalog as
+// the source of truth: the agenda is only a candidate list used to add
+// streams to an existing football fixture. The embed URL is carried in the
+// opaque source id and the final playback URL is extracted fresh in resolve,
+// because agenda18's player URLs are tokenized and short-lived.
+
+const METEGOL_PROVIDER_KEY = 'metegol';
+const METEGOL_PROVIDER_ID = 'nimora.metegol';
+const METEGOL_AGENDA_URL =
+  globalThis.__metegolAgendaUrl || 'https://agenda18.com/agenda.json?v=1.1';
+const METEGOL_REFERER = 'https://agenda18.com/';
+const METEGOL_CACHE_KEY = 'metegol.agenda18.events.v1';
+const METEGOL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const METEGOL_EVENTS_TTL_MS = 15 * 60 * 1000;
+const METEGOL_USER_AGENT =
+  'Mozilla/5.0 (Linux; Android 10; Pixel 3 XL) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36';
+
+function metegolStorage() {
+  return typeof host === 'object' && host !== null && host.storage
+    ? host.storage
+    : null;
+}
+
+function metegolText(value) {
+  return value === null || value === undefined ? '' : String(value).trim();
+}
+
+function metegolToStartUtc(dateText, timeText) {
+  const time = metegolText(timeText);
+  const date = metegolText(dateText);
+  const timeParts = time.split(':').map(Number);
+  const dateParts = date.split('-').map(Number);
+  if (
+    dateParts.length !== 3 ||
+    timeParts.length < 2 ||
+    dateParts.some((value) => Number.isNaN(value)) ||
+    timeParts.slice(0, 2).some((value) => Number.isNaN(value))
+  ) {
+    return null;
+  }
+  return new Date(
+    Date.UTC(
+      dateParts[0],
+      dateParts[1] - 1,
+      dateParts[2],
+      timeParts[0] + 5,
+      timeParts[1],
+      Number.isNaN(timeParts[2]) ? 0 : timeParts[2],
+    ),
+  ).toISOString();
+}
+
+function metegolDecodeBase64(value) {
+  let token = metegolText(value).replace(/-/g, '+').replace(/_/g, '/');
+  const remainder = token.length % 4;
+  if (remainder !== 0) token += '='.repeat(4 - remainder);
+  try {
+    return host.codec.base64ToText(token);
+  } catch (_) {
+    return null;
+  }
+}
+
+function metegolDecodeHref(href) {
+  const match = /[?&]r=([A-Za-z0-9+/_=-]+)/.exec(metegolText(href));
+  return match === null ? null : metegolDecodeBase64(match[1]);
+}
+
+function metegolIsFootball(category) {
+  const value = metegolText(category).toLowerCase();
+  return value === 'futbol' || value === 'football' || value.includes('futbol');
+}
+
+function metegolLabel(attributes) {
+  const name = metegolText(attributes.embed_name) || 'Agenda18';
+  const language = metegolText(attributes.idioma);
+  return language.length === 0 ? name : `${name} · ${language}`;
+}
+
+function metegolParseAgenda(json) {
+  const rows = json && Array.isArray(json.data) ? json.data : [];
+  const seen = {};
+  const events = [];
+  for (const row of rows) {
+    const attributes = row && row.attributes ? row.attributes : {};
+    if (!metegolIsFootball(attributes.deportes)) continue;
+    const title = metegolText(attributes.diary_description);
+    if (title.length === 0) continue;
+
+    const embeds =
+      attributes.embeds && Array.isArray(attributes.embeds.data)
+        ? attributes.embeds.data
+        : [];
+    const streams = [];
+    for (const embed of embeds) {
+      const embedAttributes = embed && embed.attributes ? embed.attributes : {};
+      const url = metegolDecodeHref(embedAttributes.embed_iframe);
+      if (url === null || url.length === 0) continue;
+      if (/\.mpd(?:\?|$)/i.test(url) || /drm\.php/i.test(url)) continue;
+      if (/tarjetarojita|proveseat|la10tv|la10\.com/i.test(url)) continue;
+      streams.push({
+        url,
+        label: metegolLabel(embedAttributes),
+      });
+    }
+    if (streams.length === 0) continue;
+
+    const key = title.toLowerCase();
+    if (seen[key]) continue;
+    seen[key] = true;
+    events.push({
+      title,
+      date: metegolText(attributes.date_diary),
+      time: metegolText(attributes.diary_hour).slice(0, 8),
+      startUtc: metegolToStartUtc(
+        attributes.date_diary,
+        attributes.diary_hour,
+      ),
+      streams,
+    });
+  }
+  return events;
+}
+
+async function metegolFetchText(url, headers, timeoutMs) {
+  const response = await fetch(url, {
+    headers,
+    timeoutMs: timeoutMs || null,
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`MeteGol request failed: ${response.status}`);
+  }
+  return response.body;
+}
+
+async function metegolFetchEvents() {
+  const body = await metegolFetchText(
+    METEGOL_AGENDA_URL,
+    {
+      'User-Agent': METEGOL_USER_AGENT,
+      Accept: 'application/json, text/plain, */*',
+      Referer: METEGOL_REFERER,
+    },
+    15000,
+  );
+  const parsed = JSON.parse(body);
+  const events = metegolParseAgenda(parsed);
+  const storage = metegolStorage();
+  if (storage !== null) {
+    try {
+      storage.write(
+        METEGOL_CACHE_KEY,
+        JSON.stringify(events),
+        METEGOL_CACHE_TTL_MS,
+      );
+    } catch (_) {
+      // Storage is an optional cache; a refused write must not fail discovery.
+    }
+  }
+  return events;
+}
+
+function metegolCachedEvents() {
+  const storage = metegolStorage();
+  if (storage === null) return null;
+  let raw;
+  try {
+    raw = storage.read(METEGOL_CACHE_KEY);
+  } catch (_) {
+    return null;
+  }
+  if (typeof raw !== 'string' || raw.length === 0) return null;
+  try {
+    const events = JSON.parse(raw);
+    if (!Array.isArray(events) || events.length === 0) return null;
+    for (const event of events) {
+      if (
+        typeof event !== 'object' ||
+        event === null ||
+        typeof event.title !== 'string' ||
+        !Array.isArray(event.streams)
+      ) {
+        return null;
+      }
+    }
+    return events;
+  } catch (_) {
+    return null;
+  }
+}
+
+let metegolEventsMemo = null;
+let metegolBackgroundRefresh = null;
+
+function metegolRefreshInBackground() {
+  if (metegolBackgroundRefresh !== null) return;
+  metegolBackgroundRefresh = metegolFetchEvents().then(
+    (events) => {
+      metegolBackgroundRefresh = null;
+      metegolEventsMemo = {
+        promise: Promise.resolve(events),
+        fetchedAt: Date.now(),
+      };
+    },
+    () => {
+      metegolBackgroundRefresh = null;
+    },
+  );
+}
+
+function metegolFetchEventsMemo(nowMs) {
+  const now = nowMs == null ? Date.now() : nowMs;
+  if (metegolEventsMemo === null) {
+    const cached = metegolCachedEvents();
+    if (cached !== null) {
+      metegolEventsMemo = {
+        promise: Promise.resolve(cached),
+        fetchedAt: now,
+      };
+      metegolRefreshInBackground();
+      return metegolEventsMemo.promise;
+    }
+  }
+  if (
+    metegolEventsMemo === null ||
+    now - metegolEventsMemo.fetchedAt >= METEGOL_EVENTS_TTL_MS
+  ) {
+    const promise = metegolFetchEvents().catch((error) => {
+      metegolEventsMemo = null;
+      throw error;
+    });
+    metegolEventsMemo = { promise, fetchedAt: now };
+  }
+  return metegolEventsMemo.promise;
+}
+
+function metegolTeamNames(title) {
+  let value = metegolText(title).split('|')[0];
+  const colon = value.indexOf(':');
+  if (colon >= 0 && colon < value.length - 1) value = value.slice(colon + 1);
+  return value
+    .split(/\s+v(?:s|s\.)?\.?\s+|\s+@\s+|\s+[–—-]\s+/i)
+    .map((team) => team.trim())
+    .filter((team) => team.length > 0)
+    .slice(0, 2);
+}
+
+function metegolCandidatesFrom(events) {
+  const candidates = [];
+  for (const event of events) {
+    const teams = metegolTeamNames(event.title);
+    if (teams.length !== 2) continue;
+    candidates.push({
+      teamA: teams[0],
+      teamB: teams[1],
+      startsAt: event.startUtc || null,
+      event,
+    });
+  }
+  return candidates;
+}
+
+function metegolEncodeSourceId(stream) {
+  const json = JSON.stringify({ u: stream.url, l: stream.label });
+  return host.codec
+    .textToBase64(json)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function metegolDecodeSourceId(encoded) {
+  const json = metegolDecodeBase64(encoded);
+  if (json === null) throw new Error('Malformed MeteGol source id');
+  const payload = JSON.parse(json);
+  if (!payload || typeof payload.u !== 'string' || payload.u.length === 0) {
+    throw new Error('MeteGol source id has no embed URL');
+  }
+  return payload;
+}
+
+function metegolSourcesForEvent(event) {
+  return event.streams.map((stream) => ({
+    id: `${METEGOL_PROVIDER_KEY}:${metegolEncodeSourceId(stream)}`,
+    label: `MeteGol · ${stream.label || 'Agenda18'}`,
+    provider: 'Nimora',
+    providerId: METEGOL_PROVIDER_ID,
+  }));
+}
+
+function metegolExtractObfuscatedPlaybackUrl(html) {
+  const pairs = [];
+  const pairsRe = /\[(\d+),"([A-Za-z0-9+/=]+)"\]/g;
+  let match;
+  while ((match = pairsRe.exec(html)) !== null) {
+    pairs.push([Number(match[1]), match[2]]);
+  }
+  if (pairs.length === 0) return null;
+  const keyMatch =
+    /var\s+k\s*=\s*(\w+)\(\)\s*\+\s*(\w+)\(\);[\s\S]*?function\s+\1\(\)\s*\{\s*return\s+(\d+);\}[\s\S]*?function\s+\2\(\)\s*\{\s*return\s+(\d+);\}/.exec(
+      html,
+    );
+  if (keyMatch === null) return null;
+  const key = Number(keyMatch[3]) + Number(keyMatch[4]);
+  pairs.sort((left, right) => left[0] - right[0]);
+  let url = '';
+  for (const pair of pairs) {
+    const decoded = metegolDecodeBase64(pair[1]);
+    if (decoded === null) return null;
+    const digits = decoded.replace(/\D/g, '');
+    if (digits.length > 0) url += String.fromCharCode(Number(digits) - key);
+  }
+  return url.length === 0 ? null : url;
+}
+
+function metegolExtractPlaybackUrl(html) {
+  const direct =
+    /(?:playbackURL|playbackUrl|playback_url|playbackurl|var\s+url)\s*=\s*"([^"]+)"/i.exec(
+      html,
+    );
+  if (direct !== null && direct[1]) {
+    return direct[1].replace(/\\\//g, '/').replace(/\\/g, '');
+  }
+  const obfuscated = metegolExtractObfuscatedPlaybackUrl(html);
+  if (obfuscated !== null) return obfuscated;
+  const m3u8 = /https?:\\?\/\\?\/[^"'\s\\]+\.m3u8[^"'\s]*/i.exec(html);
+  return m3u8 === null ? null : m3u8[0].replace(/\\\//g, '/');
+}
+
+async function metegolResolveSource(sourceId) {
+  const prefix = `${METEGOL_PROVIDER_KEY}:`;
+  const encoded = sourceId.startsWith(prefix)
+    ? sourceId.slice(prefix.length)
+    : sourceId;
+  const payload = metegolDecodeSourceId(encoded);
+  const html = await metegolFetchText(payload.u, {
+    'User-Agent': METEGOL_USER_AGENT,
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    Referer: METEGOL_REFERER,
+  });
+  const url = metegolExtractPlaybackUrl(html);
+  if (url === null || url.length === 0) {
+    throw new Error('MeteGol embed has no playback URL');
+  }
+  return {
+    url,
+    headers: { Referer: METEGOL_REFERER },
+    format: 'hls',
+    label: payload.l || 'Agenda18',
+  };
+}
+
+async function metegolSources(args) {
+  const enabled = args.enabledProviders;
+  if (
+    enabled !== null &&
+    enabled !== undefined &&
+    enabled.indexOf(METEGOL_PROVIDER_ID) === -1
+  ) {
+    return { sources: [] };
+  }
+  const item = args.item || {};
+  if (!Array.isArray(item.participants) || item.participants.length !== 2) {
+    return { sources: [] };
+  }
+
+  let events;
+  try {
+    events = await metegolFetchEventsMemo();
+  } catch (_) {
+    return { sources: [] };
+  }
+  const candidates = metegolCandidatesFrom(events);
+  if (candidates.length === 0) return { sources: [] };
+
+  const result = host.match.resolve(
+    {
+      teamA: item.participants[0].name,
+      teamB: item.participants[1].name,
+      teamAShort: item.participants[0].shortName || null,
+      teamBShort: item.participants[1].shortName || null,
+      kickoff: item.schedule ? item.schedule.startsAt : null,
+    },
+    candidates.map((candidate) => ({
+      teamA: candidate.teamA,
+      teamB: candidate.teamB,
+      startsAt: candidate.startsAt,
+    })),
+    { profile: FOOTBALL_PROFILE },
+  );
+  if (!result) return { sources: [] };
+  return { sources: metegolSourcesForEvent(candidates[result.index].event) };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: METEGOL_PROVIDER_KEY,
+  sources: metegolSources,
+  resolve: (sourceId) => metegolResolveSource(sourceId),
+});
+
+globalThis.__extension = globalThis.__extension || {};
+if (!globalThis.__extension.sources) {
+  globalThis.__extension.sources = async (args) => {
+    const perProvider = await Promise.all(
+      globalThis.__streamProviders.map((provider) =>
+        provider.sources(args).catch(() => ({ sources: [] })),
+      ),
+    );
+    return { sources: perProvider.flatMap((result) => result.sources) };
+  };
+  globalThis.__extension.resolve = async (args) => {
+    const sourceId = args.sourceId;
+    const separator = sourceId.indexOf(':');
+    if (separator < 0) throw new Error(`Malformed source id: ${sourceId}`);
+    const providerKey = sourceId.slice(0, separator);
+    const provider = globalThis.__streamProviders.find(
+      (candidate) => candidate.providerKey === providerKey,
+    );
+    if (!provider) {
+      throw new Error(`No stream provider registered for "${providerKey}"`);
+    }
+    return provider.resolve(sourceId);
+  };
+}
+
 // TMDB + shegu.st curated-lists catalog, as a JS extension — Movies and TV.
 //
 // Talks to TMDB and lists.shegu.st directly. Items use stable

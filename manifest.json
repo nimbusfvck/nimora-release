@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "0.6.84",
+  "version": "0.6.85",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -73,6 +73,13 @@
     {
       "id": "nimora.cricfy",
       "name": "Cricfy",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.metegol",
+      "name": "MeteGol",
       "roles": [
         "stream"
       ]
