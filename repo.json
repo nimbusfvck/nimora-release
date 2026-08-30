@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.87",
+      "version": "0.6.88",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Cricfy sources duplicating after refresh by keeping source IDs stable across token changes, and added the Deportivo A Coruña/Deportivo La Coruña football-name alias so MeteGol can match the fixture.",
         "Removed redundant Al Angulo and Futbol Libre prefixes from stream labels and de-duplicated identical MeteGol stream URLs.",
         "Expanded MeteGol football streams with Al Angulo, Futbol Libre, and Deporflix, preserving FotMob as the fixture catalog, per-source playback referers, and fresh token resolution; stream labels now show the source name without a redundant MeteGol prefix.",
         "Added MeteGol's agenda18 football stream provider: it matches the agenda to FotMob fixtures, keeps the parsed schedule across launches when `host.storage` is available, and resolves fresh HLS playback URLs when a source is selected.",
@@ -107,7 +108,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "a2cea0de5173d4ed2fafb2a5c462cb365bd324622b38507d0cc3136f9eddfce8"
+      "bundleSha256": "2a530d39c68859f27e8d73057b1e44a6343e66c467fc8208cc6c9123e7a03134"
     }
   ]
 }

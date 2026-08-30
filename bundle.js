@@ -843,6 +843,9 @@ const FOOTBALL_PROFILE = {
     wolves: 'wolverhampton wanderers',
     'west brom': 'west bromwich albion',
     'west bromwich': 'west bromwich albion',
+    // FotMob uses "A Coruña" while Spanish broadcast feeds often use the
+    // club's traditional "La Coruña" spelling.
+    'deportivo a coruna': 'deportivo la coruna',
   },
   stopTokens: ['fc', 'afc', 'cf', 'sc', 'ac', 'cd', 'club'],
   ambiguousAlone: [
@@ -3079,12 +3082,10 @@ function cricfyRefreshEventsInBackground() {
   );
 }
 
-// Resolved links cached by a per-call session token, same as Dart's
-// `_linkCache`/`_sourcesSession` — two events' links (opened from a detail
-// page and a bulk scan, say) never collide, and the cache is capped so a
-// long session can't grow it forever.
+// Resolved links are cached by a stable link key so repeated discovery can
+// replace the same source instead of making the picker show it twice. The
+// cache is capped so a long session can't grow it forever.
 let cricfyLinkCache = {};
-let cricfySourcesSession = 0;
 const CRICFY_MAX_LINK_CACHE_ENTRIES = 500;
 
 function cricfyTrimLinkCache() {
@@ -3115,12 +3116,41 @@ function cricfySourceIdentity(link) {
   return path.length > 0 ? `path:${path}` : 'unknown';
 }
 
+function cricfyEventSourceKey(event) {
+  const path = String(event.linksPath ?? '').trim().toLowerCase();
+  if (path.length > 0) return `path:${path}`;
+  return [
+    event.eventName,
+    event.teamAName,
+    event.teamBName,
+    event.date,
+    event.time,
+  ]
+    .map((value) => String(value ?? '').trim().toLowerCase())
+    .join('|');
+}
+
+function cricfySourceCacheKey(event, link) {
+  const stable = {
+    event: cricfyEventSourceKey(event),
+    name: String(link.name ?? '').trim().toLowerCase(),
+    link: String(link.link ?? '').trim().split(/[|?#]/)[0].toLowerCase(),
+    tokenApi: String(link.tokenApi ?? '').trim().split(/[|?#]/)[0].toLowerCase(),
+    drmApi: String(link.drmApi ?? '').trim().split(/[|?#]/)[0].toLowerCase(),
+    audio: String(link.audio ?? '').trim().split(/[|?#]/)[0].toLowerCase(),
+  };
+  return host.codec
+    .textToBase64(JSON.stringify(stable))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
 async function cricfySourcesForEvent(event) {
   const links = await cricfyEventLinks(event);
-  const session = cricfySourcesSession++;
   const sources = [];
   for (let i = 0; i < links.length; i++) {
-    const id = `s${session}-${i}`;
+    const id = cricfySourceCacheKey(event, links[i]);
     const identity = cricfySourceIdentity(links[i]);
     const label = sourceAliasWithQuality(
       `${CRICFY_PROVIDER_KEY}:${identity}`,
