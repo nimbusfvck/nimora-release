@@ -3449,7 +3449,7 @@ function metegolParseAlAngulo(html) {
       streams.push({
         source: 'alangulo',
         referer: METEGOL_ALANGULO_REFERER,
-        label: `Al Angulo · ${label || 'Stream'}`,
+        label: label || 'Stream',
         url,
       });
     }
@@ -3483,7 +3483,7 @@ function metegolParseFutbolLibre(body) {
       streams.push({
         source: 'futbollibre',
         referer: METEGOL_FUTBOLIBRE_REFERER,
-        label: `Futbol Libre · ${name}${quality ? ` · ${quality}` : ''}`,
+        label: `${name}${quality ? ` · ${quality}` : ''}`,
         url,
       });
     }
@@ -3603,7 +3603,10 @@ function metegolMergeEvents(...lists) {
         existing.streams = metegolMergeStreams(existing.streams, event.streams);
         if (!existing.startUtc && event.startUtc) existing.startUtc = event.startUtc;
       } else {
-        const copy = { ...event, streams: [...(event.streams || [])] };
+        const copy = {
+          ...event,
+          streams: metegolMergeStreams([], event.streams),
+        };
         events.push(copy);
       }
     }
