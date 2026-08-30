@@ -14,7 +14,11 @@
 // production otherwise. Not a general configuration mechanism — extensions
 // have none yet, and this is not one.
 const FOTMOB_BASE = globalThis.__fotmobBaseUrl || 'https://www.fotmob.com';
+// Keep the match feed localized for Indonesian users, but use the US league
+// market for FotMob's popular list so Indonesian domestic competitions are not
+// promoted into the Football catalog just because the app is localized to ID.
 const FOTMOB_CCODE3 = 'IDN';
+const FOTMOB_LEAGUE_COUNTRY = 'USA';
 const FOTMOB_IMAGE_BASE = 'https://images.fotmob.com/image_resources/logo/teamlogo';
 const BY433_LEAGUE_IMAGE_BASE =
   'https://media.prod.by433.com/media/logos/league';
@@ -48,10 +52,10 @@ const JAKARTA_OFFSET_MS = 7 * 60 * 60 * 1000;
 // belongs to the extension because the shell must not know what
 // counts as a top football club.
 const TOP_CLUBS = [
-  { id: '8633', aliases: ['real madrid', 'real madrid cf'] },
   { id: '8634', aliases: ['barcelona', 'fc barcelona', 'barca', 'barça'] },
-  { id: '8456', aliases: ['manchester city', 'man city'] },
   { id: '8650', aliases: ['liverpool', 'liverpool fc'] },
+  { id: '8633', aliases: ['real madrid', 'real madrid cf'] },
+  { id: '8456', aliases: ['manchester city', 'man city'] },
   { id: '9825', aliases: ['arsenal', 'arsenal fc'] },
   { id: '10260', aliases: ['manchester united', 'man united', 'man utd'] },
   { id: '9823', aliases: ['bayern munich', 'bayern munchen', 'fc bayern'] },
@@ -113,7 +117,7 @@ async function fetchFotmobMatchesForDate(dateKey) {
 async function fetchFotmobPopularLeagues() {
   const url =
     `${FOTMOB_BASE}/api/data/allLeagues?locale=en` +
-    `&country=${encodeURIComponent(FOTMOB_CCODE3)}`;
+    `&country=${encodeURIComponent(FOTMOB_LEAGUE_COUNTRY)}`;
   const response = await fetch(url, {
     headers: {
       'User-Agent': FOTMOB_USER_AGENT,
@@ -345,6 +349,18 @@ function topClubMatchRank(match) {
   };
 }
 
+// Maps the editorial club rank onto the generic protocol rating consumed by
+// the app's Featured Hero. A fixture involving both configured clubs gets a
+// small bonus, while the ordered list still makes Barcelona rank above
+// Liverpool and the remaining clubs.
+function topClubEditorialRating(match) {
+  const priority = topClubMatchRank(match);
+  if (priority == null) return null;
+  const clubScore = TOP_CLUBS.length - priority.rank;
+  const fixtureBonus = priority.clubs > 1 ? 0.5 : 0;
+  return clubScore + fixtureBonus;
+}
+
 // Keep FotMob's response order as the default. A fixture involving two
 // configured top clubs comes first, followed by fixtures involving one; ties
 // retain their original response order. This gives the app a useful editorial
@@ -452,6 +468,9 @@ function toMediaItem(match, nowMs, brandingByLeague) {
       state: isMatchLive(match, nowMs) ? 'live' : 'scheduled',
     },
   };
+
+  const topClubRating = topClubEditorialRating(match);
+  if (topClubRating != null) item.rating = topClubRating;
 
   if (match.leagueName != null) item.subtitle = match.leagueName;
   const participants = fotmobParticipantsOf(match);
