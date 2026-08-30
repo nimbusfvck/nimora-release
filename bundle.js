@@ -1242,6 +1242,39 @@ function koraFrameUrl(edge, edgeDomain, query) {
   return withQuery(base, query);
 }
 
+// A frame.php response only proves that an edge can mint an HLS URL. It does
+// not prove the edge will keep serving a moving live playlist. Keep a small,
+// in-memory cursor per stable source id so a player re-resolve after a live
+// stall starts at a different edge instead of pinning itself to edges[0].
+// The cursor deliberately never enters the source id: it is a session-local
+// transport choice, not a new user-visible source.
+const koraLastResolvedEdgeBySource =
+  globalThis.__koraLastResolvedEdgeBySource ||
+  (globalThis.__koraLastResolvedEdgeBySource = Object.create(null));
+
+function koraEdgesForResolve(sourceKey, edges) {
+  const uniqueEdges = [];
+  for (const edge of edges) {
+    if (typeof edge === 'string' && edge.length > 0 && uniqueEdges.indexOf(edge) === -1) {
+      uniqueEdges.push(edge);
+    }
+  }
+  if (uniqueEdges.length === 0) return uniqueEdges;
+
+  const previousEdge = koraLastResolvedEdgeBySource[sourceKey];
+  const previousIndex = uniqueEdges.indexOf(previousEdge);
+  // A fresh extension session must not always prefer the first published
+  // edge. Once an edge has been used, every subsequent resolve is strictly
+  // round-robin so stall recovery gets a different route.
+  const start = previousIndex >= 0
+    ? (previousIndex + 1) % uniqueEdges.length
+    : Math.floor(Math.random() * uniqueEdges.length);
+  return [
+    ...uniqueEdges.slice(start),
+    ...uniqueEdges.slice(0, start),
+  ];
+}
+
 async function resolveKoraSource(sourceId) {
   const prefix = `${KORA_PROVIDER_KEY}:`;
   const inner = sourceId.startsWith(prefix)
@@ -1255,7 +1288,7 @@ async function resolveKoraSource(sourceId) {
   if (!chParam) throw new Error('Kora source has no stream key');
 
   let lastError = null;
-  for (const edge of decoded.edges) {
+  for (const edge of koraEdgesForResolve(inner, decoded.edges)) {
     const requestUrl = koraFrameUrl(edge, decoded.edgeDomain, {
       ch: chParam,
       p: String(KORA_PLAYER_VALUE),
@@ -1267,6 +1300,7 @@ async function resolveKoraSource(sourceId) {
       // The player carries a browser User-Agent into the m3u8/segment requests.
       const stream = parseKoraFrame(body, { 'User-Agent': KORA_BROWSER_UA });
       if (!/^https?:\/\//i.test(stream.url)) throw new Error('Kora frame returned an invalid stream URL');
+      koraLastResolvedEdgeBySource[inner] = edge;
       return { url: stream.url, headers: stream.headers, format: 'hls', label: decoded.label };
     } catch (error) {
       lastError = error;
@@ -1882,6 +1916,23 @@ const CRICFY_CONFIG_UA = 'Mozilla/5.0 Cricfy2/1.0';
 const CRICFY_PROVIDER_KEY = 'cricfy';
 const CRICFY_PROVIDER_ID = 'nimora.cricfy';
 
+// Cricfy's own API answers in ~20 s when it is having a bad day, well past
+// the engine-wide fetch budget every provider shares. Asking for more time
+// on *these* calls only (see JsEngine's `timeoutMs`) keeps the fan-out to
+// every other provider as tight as it was: this is the one host that needs
+// it, so it is the only one that gets it. A host too old to know the option
+// ignores it and times out as before.
+const CRICFY_CONTENT_TIMEOUT_MS = 30 * 1000;
+
+// The event list, kept across app launches (see `host.storage`). A cold
+// start would otherwise have to wait out that same slow call before it could
+// offer a single source, inside a discovery budget that has no room for it.
+// Held longer than the in-session memo because its job is different: not
+// "is this fresh?" but "is there anything at all to work from while the
+// fresh copy is on its way?".
+const CRICFY_EVENTS_CACHE_KEY = 'cricfy.events.v1';
+const CRICFY_EVENTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
 // ---- codec (port of CricfyCodec, minus CricfyContentCipher — see
 // cricfy_cipher.js, M14) ----
 
@@ -2345,8 +2396,8 @@ async function cricfyValidatePlaybackManifest(url, { headers, format }) {
 
 let cricfyConfigCache = null;
 
-async function cricfyGetText(url, headers) {
-  const response = await fetch(url, { headers });
+async function cricfyGetText(url, headers, timeoutMs) {
+  const response = await fetch(url, { headers, timeoutMs: timeoutMs || null });
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`Cricfy request failed: ${response.status}`);
   }
@@ -2533,7 +2584,11 @@ async function cricfyFetchContent(path) {
   for (const candidate of configs) {
     const uri = cricfyContentUri(candidate, path);
     try {
-      const body = await cricfyGetText(uri, cricfyDefaultHeaders());
+      const body = await cricfyGetText(
+        uri,
+        cricfyDefaultHeaders(),
+        CRICFY_CONTENT_TIMEOUT_MS,
+      );
       return decodeCricfyResponse(body);
     } catch (error) {
       lastError = error;
@@ -2583,6 +2638,7 @@ async function cricfyEvents() {
   const path = cricfyConfigEventsUrl(cfg) || CRICFY_EVENTS_PATH;
   const items = await cricfyFetchWrappedList(path, 'event');
   const parsed = items.map(cricfyEventFromJson).filter((e) => e.visible);
+  cricfyCacheEvents(parsed);
   parsed.sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority;
     const left = cricfyParseEventDateTime(a.date, a.time);
@@ -2904,6 +2960,62 @@ function cricfyCandidatesFrom(events) {
   return out;
 }
 
+// ---- the schedule, cached across launches ----
+//
+// `host.storage` is a cache an extension may use, never one it may rely on:
+// an older host has no storage at all, a value can be dropped between
+// launches, and a write can be refused for being too big. Every path here
+// therefore treats a miss as ordinary and falls through to the network.
+
+function cricfyStorage() {
+  return typeof host === 'object' && host !== null && host.storage
+    ? host.storage
+    : null;
+}
+
+function cricfyCacheEvents(events) {
+  const storage = cricfyStorage();
+  if (storage === null) return;
+  try {
+    storage.write(
+      CRICFY_EVENTS_CACHE_KEY,
+      JSON.stringify(events),
+      CRICFY_EVENTS_CACHE_TTL_MS,
+    );
+  } catch (_) {
+    // A cache that won't take the value changes nothing about this session.
+  }
+}
+
+// Returns the stored schedule, or null when there isn't a usable one. The
+// events were written as already-parsed objects, so nothing here repeats the
+// decode — that is most of what makes reading them cheap.
+function cricfyCachedEvents() {
+  const storage = cricfyStorage();
+  if (storage === null) return null;
+  let raw;
+  try {
+    raw = storage.read(CRICFY_EVENTS_CACHE_KEY);
+  } catch (_) {
+    return null;
+  }
+  if (typeof raw !== 'string' || raw.length === 0) return null;
+  let decoded;
+  try {
+    decoded = JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+  if (!Array.isArray(decoded) || decoded.length === 0) return null;
+  for (const event of decoded) {
+    if (typeof event !== 'object' || event === null) return null;
+    if (typeof event.date !== 'string' || typeof event.time !== 'string') {
+      return null;
+    }
+  }
+  return decoded;
+}
+
 // Events list is a forward schedule, same shape as fixtures.js's own TV
 // guide memo — cached for CRICFY_EVENTS_TTL_MS, not the engine's whole
 // lifetime. A plain never-expiring memo (the original shape here) meant a
@@ -2917,6 +3029,20 @@ let cricfyEventsMemo = null;
 
 function cricfyFetchEventsMemo(nowMs) {
   const now = nowMs != null ? nowMs : Date.now();
+  if (cricfyEventsMemo === null) {
+    const cached = cricfyCachedEvents();
+    if (cached !== null) {
+      // Serve last launch's schedule now and fetch behind it. The cached
+      // copy is dated by the statuses derived from each event's own kickoff,
+      // not by when it was stored, so a few hours old still answers "what is
+      // live right now" correctly for everything already on it — and what it
+      // can't know about (an event added since) arrives with the refresh,
+      // rather than holding up every source lookup until it does.
+      cricfyEventsMemo = { promise: Promise.resolve(cached), fetchedAt: now };
+      cricfyRefreshEventsInBackground();
+      return cricfyEventsMemo.promise;
+    }
+  }
   if (
     cricfyEventsMemo === null ||
     now - cricfyEventsMemo.fetchedAt >= CRICFY_EVENTS_TTL_MS
@@ -2928,6 +3054,29 @@ function cricfyFetchEventsMemo(nowMs) {
     cricfyEventsMemo = { promise, fetchedAt: now };
   }
   return cricfyEventsMemo.promise;
+}
+
+// Replaces a cache-seeded memo once the real list lands. Deliberately not
+// awaited by anyone: the caller already has an answer, and this one is only
+// worth having if it arrives. At most one runs at a time, and a failure
+// leaves the seeded memo in place — the cached schedule is still better than
+// nothing, and the normal TTL will try again.
+let cricfyBackgroundRefresh = null;
+
+function cricfyRefreshEventsInBackground() {
+  if (cricfyBackgroundRefresh !== null) return;
+  cricfyBackgroundRefresh = cricfyEvents().then(
+    (events) => {
+      cricfyBackgroundRefresh = null;
+      cricfyEventsMemo = {
+        promise: Promise.resolve(events),
+        fetchedAt: Date.now(),
+      };
+    },
+    () => {
+      cricfyBackgroundRefresh = null;
+    },
+  );
 }
 
 // Resolved links cached by a per-call session token, same as Dart's

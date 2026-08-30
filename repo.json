@@ -3,13 +3,15 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.83",
+      "version": "0.6.84",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Kept Cricfy events and sources working while its API is slow or refusing: the event schedule is now requested with a longer timeout and kept between app launches, so a cold start serves the stored schedule straight away and refreshes it in the background instead of showing an empty Live row while the upstream stalls. Needs an app build that provides extension storage; on an older build nothing changes.",
+        "Kora now resolves a repeated source through a different edge each time, so retrying after a live stall takes another route instead of pinning to the one that just stalled.",
         "Added paginated See more loading for TMDB Highlights backed by TMDB pages, including Korean and Indonesian shelves, Top Rated, Popular Today, and streaming-provider rows.",
         "Added Popular Korean and Popular Indonesian Series & Movies shelves to TMDB Highlights, using popularity-ranked country filters with a reusable configuration for adding more countries later.",
         "Removed finished football matches from the schedule takeout so completed fixtures no longer appear in `Today` or the upcoming Football shelf.",
@@ -102,7 +104,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "181585d569b3d12787217ab67836b7a48239a27e3e84833aa18ec7e7e2268b8a"
+      "bundleSha256": "b11553e3e97084d7d65fc175ed399e23d0ad71f86874ba7cc00cb7bc66954977"
     }
   ]
 }
