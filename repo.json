@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.93",
+      "version": "0.6.94",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Removed MeteGol's fake per-stream quality claims: AlAngulo and FutbolLibre both printed the same \"720p\" on every single channel regardless of what actually played, so the label no longer states a quality the source never measured. Merged stream labels now also tag their origin site (Agenda18/AlAngulo/FutbolLibre/Deporflix), so identically named channels pulled from different sources under the same fixture (e.g. two \"Disney+\" entries) are no longer indistinguishable. Deporflix and FutbolLibre are disabled for now: Deporflix for its two-request chain and loose title matching, FutbolLibre for mostly relabeling AlAngulo's own channel pool (la18hd.su, streamtp-golden1.click) under a second near-identical name while covering fewer matches and streams.",
         "Fixed episodes offering the skip-intro button twice: AniSkip carries several community submissions per episode, and overlapping ones were all kept, so skipping landed inside the next intro and offered the button again. Overlapping segments of the same kind now collapse to the earliest, and an outro sitting inside an opening is dropped rather than letting the player treat the first minutes as the end of the episode.",
         "Reordered the movie and TV sources so VaPlayer and vidrock lead, FlyStream follows for the 4K ladder nothing else offers, and VidEasy trails after most of its entries failed to resolve; FlyStream's label no longer carries the ladder's top rung, which named a rendition the player does not open.",
         "Added the protocol-v2 segments role backed by IntroDB for TMDB episodes and AniSkip for AniList anime episodes.",
@@ -113,7 +114,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "3c676caf4796111be40d37ab87de1795fed5e0177fcaf53daef5334be80e72d5"
+      "bundleSha256": "f8a8e319ec43e110f062639d7039360b78d3166e962835654394f2acdd98d1a6"
     }
   ]
 }

@@ -4800,7 +4800,12 @@ function metegolParseAlAngulo(html) {
     while ((streamMatch = streamRe.exec(streamsHtml)) !== null) {
       const url = metegolDecodeBase64(streamMatch[2]);
       if (url === null || url.length === 0) continue;
+      // The site prints "Calidad 720p" inside a <span> on every single
+      // channel, HD or not — it is a template constant, not a measurement,
+      // so keeping it would put a specific claim on the label the site
+      // itself does not back up. Drop the span and keep the channel name.
       const label = streamMatch[3]
+        .replace(/<span[\s\S]*?<\/span>/gi, '')
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
@@ -4837,11 +4842,14 @@ function metegolParseFutbolLibre(body) {
       const url = metegolDecodeHref(channel && channel.url);
       if (url === null || url.length === 0) continue;
       const name = metegolText(channel && channel.nombre) || 'Stream';
-      const quality = metegolText(channel && channel.calidad);
+      // `calidad` reads "720p" on every channel in this feed regardless of
+      // what actually plays — a fixed field, not a real measurement — so
+      // appending it would put a specific claim on the label the source
+      // does not back up.
       streams.push({
         source: 'futbollibre',
         referer: METEGOL_FUTBOLIBRE_REFERER,
-        label: `${name}${quality ? ` · ${quality}` : ''}`,
+        label: name,
         url,
       });
     }
@@ -4986,7 +4994,17 @@ function metegolAddDeporflixStreams(events, extras) {
 }
 
 async function metegolFetchEvents() {
-  const [alangulo, futbolibre, agenda18, deporflix] = await Promise.allSettled([
+  // Deporflix disabled for now: unlike the other three, it needs two chained
+  // requests (search, then an ajax lookup per match) and matches events by a
+  // loose " vs " title filter — the most likely of the four to time out or
+  // hang a wrong stream on an event. Commented out, not deleted; uncomment
+  // both blocks below to bring it back.
+  //
+  // FutbolLibre disabled too: it draws from the same channel pool as
+  // AlAngulo (la18hd.su, streamtp-golden1.click) but covers fewer matches
+  // and fewer streams per match, so it mostly just relabels AlAngulo's own
+  // channels under a second near-identical name. Uncomment to bring it back.
+  const [alangulo, /* futbolibre, */ agenda18 /* , deporflix */] = await Promise.allSettled([
     metegolFetchText(
       METEGOL_ALANGULO_URL,
       {
@@ -4996,15 +5014,15 @@ async function metegolFetchEvents() {
       },
       12000,
     ).then(metegolParseAlAngulo),
-    metegolFetchText(
-      METEGOL_FUTBOLIBRE_URL,
-      {
-        'User-Agent': METEGOL_USER_AGENT,
-        Accept: 'application/javascript, text/plain, */*',
-        Referer: METEGOL_FUTBOLIBRE_REFERER,
-      },
-      12000,
-    ).then(metegolParseFutbolLibre),
+    // metegolFetchText(
+    //   METEGOL_FUTBOLIBRE_URL,
+    //   {
+    //     'User-Agent': METEGOL_USER_AGENT,
+    //     Accept: 'application/javascript, text/plain, */*',
+    //     Referer: METEGOL_FUTBOLIBRE_REFERER,
+    //   },
+    //   12000,
+    // ).then(metegolParseFutbolLibre),
     metegolFetchText(
       METEGOL_AGENDA18_URL,
       {
@@ -5014,17 +5032,17 @@ async function metegolFetchEvents() {
       },
       15000,
     ).then((body) => metegolParseAgenda(JSON.parse(body))),
-    metegolFetchDeporflixEvents(),
+    // metegolFetchDeporflixEvents(),
   ]);
   const events = metegolMergeEvents(
     alangulo.status === 'fulfilled' ? alangulo.value : [],
-    futbolibre.status === 'fulfilled' ? futbolibre.value : [],
+    // futbolibre.status === 'fulfilled' ? futbolibre.value : [],
     agenda18.status === 'fulfilled' ? agenda18.value : [],
   );
-  metegolAddDeporflixStreams(
-    events,
-    deporflix.status === 'fulfilled' ? deporflix.value : [],
-  );
+  // metegolAddDeporflixStreams(
+  //   events,
+  //   deporflix.status === 'fulfilled' ? deporflix.value : [],
+  // );
   const storage = metegolStorage();
   if (storage !== null) {
     try {
@@ -5153,13 +5171,33 @@ function metegolDecodeSourceId(encoded) {
   return payload;
 }
 
+// The four upstream sites pull from overlapping channel pools, so the same
+// channel (e.g. "Disney+", "Universo") often shows up once per site under a
+// slightly different URL and survives `metegolMergeStreams`' exact-URL dedupe
+// as separate entries. Tagging the label with its real origin site — not a
+// made-up quality — is the only way to tell those apart in the list.
+const METEGOL_SOURCE_NAMES = {
+  agenda18: 'Agenda18',
+  alangulo: 'AlAngulo',
+  futbollibre: 'FutbolLibre',
+  deporflix: 'Deporflix',
+};
+
 function metegolSourcesForEvent(event) {
-  return event.streams.map((stream) => ({
-    id: `${METEGOL_PROVIDER_KEY}:${metegolEncodeSourceId(stream)}`,
-    label: stream.label || 'Agenda18',
-    provider: 'Nimora',
-    providerId: METEGOL_PROVIDER_ID,
-  }));
+  return event.streams.map((stream) => {
+    const label = metegolText(stream.label) || 'Stream';
+    const siteName = METEGOL_SOURCE_NAMES[stream.source] || null;
+    const taggedLabel =
+      siteName === null || label.toLowerCase().includes(siteName.toLowerCase())
+        ? label
+        : `${label} · ${siteName}`;
+    return {
+      id: `${METEGOL_PROVIDER_KEY}:${metegolEncodeSourceId(stream)}`,
+      label: taggedLabel,
+      provider: 'Nimora',
+      providerId: METEGOL_PROVIDER_ID,
+    };
+  });
 }
 
 function metegolExtractObfuscatedPlaybackUrl(html) {
