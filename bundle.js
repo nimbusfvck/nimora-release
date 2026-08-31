@@ -9065,17 +9065,61 @@ async function skipIntroAniSkip(context) {
     .filter((segment) => segment != null);
 }
 
+function skipIntroOverlap(a, b) {
+  return a.startMs < b.endMs && b.startMs < a.endMs;
+}
+
+// Sources disagree, and one source disagrees with itself: AniSkip carries
+// several community submissions per episode, so One Piece and Frieren each
+// come back with two intros overlapping by half their length, and Attack on
+// Titan adds an "outro" sitting in its first two minutes.
+//
+// Dropping only exact duplicates left all of them standing, and the player
+// showed it: skipping to the end of the first intro lands inside the second,
+// which still covers that moment and offers the button again — the double
+// skip a viewer sees.
+//
+// Overlap is the tell, so overlap resolves it. Same-type segments that touch
+// keep the earliest, since that is where a viewer pressing skip wants to
+// leave from. An outro overlapping an intro is dropped outright: a closing
+// sequence cannot sit inside an opening one, and mislabelling it that way
+// would have the player treat the first minutes as the end of the episode.
 function skipIntroMergeSegments(segmentLists) {
-  const seen = new Set();
-  const merged = [];
-  for (const segment of segmentLists.flat()) {
-    const key = `${segment.type}:${segment.startMs}:${segment.endMs}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(segment);
+  const candidates = segmentLists
+    .flat()
+    .filter(
+      (segment) =>
+        segment != null &&
+        Number.isFinite(segment.startMs) &&
+        Number.isFinite(segment.endMs) &&
+        segment.startMs >= 0 &&
+        segment.endMs > segment.startMs,
+    )
+    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+
+  const kept = [];
+  const keepUnlessOverlapping = (segment) => {
+    if (kept.some((other) => other.type === segment.type && skipIntroOverlap(other, segment))) {
+      return;
+    }
+    kept.push(segment);
+  };
+
+  // Openings and recaps first, so an outro is judged against every intro that
+  // survived rather than against whichever happened to be read first.
+  for (const segment of candidates) {
+    if (segment.type !== 'outro') keepUnlessOverlapping(segment);
   }
-  merged.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
-  return merged;
+  for (const segment of candidates) {
+    if (segment.type !== 'outro') continue;
+    if (kept.some((other) => other.type === 'intro' && skipIntroOverlap(other, segment))) {
+      continue;
+    }
+    keepUnlessOverlapping(segment);
+  }
+
+  kept.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  return kept;
 }
 
 async function skipIntroSegments(args) {
