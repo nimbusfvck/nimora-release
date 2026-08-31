@@ -813,6 +813,509 @@ function sourceQuality(value) {
   return numeric == null ? normalized.toUpperCase() : `${numeric[1]}p`;
 }
 
+// VaPlayer as a stream provider, over the host `fetch` API.
+//
+// Ported from CineStream's `invokeVaPlayer` (CineStreamExtractors.kt). The
+// one upstream in this family that hands back playable URLs in the clear:
+// `api.php` answers with `data.stream_urls`, a plain list of HLS playlists,
+// plus a large `default_subs` list. No cipher, no key exchange, nothing to
+// decrypt.
+//
+// That is worth stating because its sibling is not. `data.vidsrcme.ru` serves
+// the same `api.php` shape, but its `stream_urls` is a single encrypted blob
+// with a `vs.wasm_url` beside it — a per-response WebAssembly module that
+// decrypts it, whose id rotates on every request. This sandbox has no
+// `WebAssembly` at all, so that host cannot be integrated without widening
+// the runtime; this one needs nothing new.
+//
+// Keyed by tmdbId, which the `movie:<tmdbId>` / `series:<tmdbId>` references
+// already carry, so no id translation is needed
+// (the upstream accepts `imdb=` too — verified — but nothing here has an
+// IMDB id to give it).
+//
+// Both movies and series. A series item must carry `extra.season` and
+// `extra.episode`; without them there is no episode to ask for, and the call
+// is declined with an empty list rather than guessed at.
+
+const VAPLAYER_BASE =
+  globalThis.__vaplayerBaseUrl || 'https://streamdata.vaplayer.ru';
+
+const VAPLAYER_PROVIDER_KEY = 'vaplayer';
+
+// The upstream serves these only to its own embed host.
+const VAPLAYER_REFERER = 'https://nextgencloudfabric.com/';
+const VAPLAYER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
+
+function vaplayerHeaders() {
+  return {
+    Accept: '*/*',
+    Referer: VAPLAYER_REFERER,
+    'User-Agent': VAPLAYER_UA,
+  };
+}
+
+// Reads `movie:<tmdbId>` / `series:<tmdbId>` references.
+function parseVaplayerRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const episode = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
+  if (episode != null) {
+    return {
+      kind: 'series',
+      tmdbId: episode[1],
+      season: episode[2],
+      episode: episode[3],
+    };
+  }
+  const separator = refId.indexOf(':');
+  if (separator < 0) return null;
+  const kind = refId.slice(0, separator);
+  const tmdbId = refId.slice(separator + 1);
+  if ((kind !== 'movie' && kind !== 'series') || tmdbId.length === 0) {
+    return null;
+  }
+  return { kind, tmdbId, season: null, episode: null };
+}
+
+function vaplayerApiUrl(tmdbId, kind, season, episode) {
+  const base = `${VAPLAYER_BASE}/api.php?tmdb=${encodeURIComponent(tmdbId)}`;
+  if (kind === 'movie') return `${base}&type=movie`;
+  return (
+    `${base}&type=tv&season=${encodeURIComponent(season)}` +
+    `&episode=${encodeURIComponent(episode)}`
+  );
+}
+
+async function fetchVaplayer(url) {
+  let response;
+  try {
+    response = await fetch(url, { headers: vaplayerHeaders() });
+  } catch (_) {
+    return null;
+  }
+  if (response.status < 200 || response.status >= 300) return null;
+  try {
+    return JSON.parse(response.body);
+  } catch (_) {
+    return null;
+  }
+}
+
+function vaplayerStreamUrls(payload) {
+  const urls = payload && payload.data && payload.data.stream_urls;
+  if (!Array.isArray(urls)) return [];
+  return urls.filter((u) => typeof u === 'string' && u.length > 0);
+}
+
+// `default_subs` entries are `{lang, code, url}`. `lang` is the human label
+// ("Portuguese - Brazilian"); `code` is the two-letter tag the app groups by.
+function vaplayerSubtitles(payload) {
+  const subs = payload && payload.default_subs;
+  if (!Array.isArray(subs)) return [];
+  return subs
+    .filter((s) => s && typeof s.url === 'string' && s.url.length > 0)
+    .map((s) => ({
+      language: s.code || s.lang || '',
+      url: s.url,
+      label: s.lang || s.code || '',
+    }));
+}
+
+// Source ids carry everything resolve() needs to ask again, plus which of the
+// returned URLs this source stands for. The URL itself is deliberately *not*
+// baked in: resolve() has to re-fetch anyway to get the subtitles, which are
+// far too many to carry in an id.
+function encodeVaplayerSourceId(payload) {
+  const json = JSON.stringify({
+    m: payload.tmdbId,
+    k: payload.kind,
+    i: payload.index,
+    ...(payload.season != null
+      ? { s: payload.season, e: payload.episode }
+      : {}),
+  });
+  return base64ToBase64Url(host.codec.textToBase64(json));
+}
+
+function decodeVaplayerSourceId(encoded) {
+  const json = host.codec.base64ToText(base64UrlToBase64(encoded));
+  return JSON.parse(json);
+}
+
+// sources() — one entry per stream URL the upstream offers.
+//
+// This does fetch, unlike videasy.js's server list: how many URLs there are
+// is only known from the response, and offering a fixed number would mean
+// either inventing sources that don't resolve or hiding ones that do.
+async function vaplayerListSources(args) {
+  const item = args.item || {};
+  const refId = (item.ref && item.ref.id) || item.id || '';
+  const parsed = parseVaplayerRef(refId);
+  if (!parsed) return { sources: [] };
+
+  const isSeries = parsed.kind === 'series';
+  if (isSeries && (parsed.season == null || parsed.episode == null)) {
+    return { sources: [] };
+  }
+
+  const payload = await fetchVaplayer(
+    vaplayerApiUrl(parsed.tmdbId, parsed.kind, parsed.season, parsed.episode),
+  );
+  const urls = vaplayerStreamUrls(payload);
+
+  return {
+    sources: urls.map((_, index) => {
+      const id = `${VAPLAYER_PROVIDER_KEY}:${encodeVaplayerSourceId({
+        tmdbId: parsed.tmdbId,
+        kind: parsed.kind,
+        index,
+        season: isSeries ? parsed.season : null,
+        episode: isSeries ? parsed.episode : null,
+      })}`;
+      // The upstream distinguishes them in no way at all — they are
+      // The upstream gives these playlists no distinct names.
+      return {
+        id,
+        label: `VaPlayer ${index + 1}`,
+        provider: 'Nimora',
+        providerId: 'nimora.vaplayer',
+      };
+    }),
+  };
+}
+
+async function vaplayerResolveSource(sourceId) {
+  const prefix = `${VAPLAYER_PROVIDER_KEY}:`;
+  if (!sourceId.startsWith(prefix)) {
+    throw new Error(`Invalid VaPlayer sourceId: ${sourceId}`);
+  }
+  const payloadId = decodeVaplayerSourceId(sourceId.slice(prefix.length));
+  const { m: tmdbId, k: kind, i: index, s: season, e: episode } = payloadId;
+
+  const payload = await fetchVaplayer(
+    vaplayerApiUrl(tmdbId, kind, season, episode),
+  );
+  if (!payload) throw new Error('VaPlayer: failed to fetch sources');
+
+  const urls = vaplayerStreamUrls(payload);
+  // Re-fetched, so the list can be shorter than when the id was minted.
+  if (index >= urls.length) {
+    throw new Error('VaPlayer: stream no longer offered');
+  }
+
+  return {
+    url: urls[index],
+    format: 'hls',
+    headers: {
+      Referer: VAPLAYER_REFERER,
+      'User-Agent': VAPLAYER_UA,
+    },
+    subtitles: vaplayerSubtitles(payload),
+  };
+}
+
+// ---- registration — see kora.js's tail for the shared aggregator ----
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: VAPLAYER_PROVIDER_KEY,
+  sources: vaplayerListSources,
+  resolve: (sourceId) => vaplayerResolveSource(sourceId),
+});
+
+// Vidrock as a stream provider, in JS on the host `fetch`/`codec`/`crypto` API.
+//
+// A port of CineStream's `invokeVidrock` (CineStreamExtractors.kt) and
+// `decryptVidrockUrl` (CineStreamUtils.kt) — CineStream
+// (github.com/SaurabhKaperwan/CineStream) is a CloudStream-style Kotlin
+// aggregator with ~60 upstream integrations, most of them HTML-scrape-heavy
+// in a way this sandbox has no primitive for yet (no `host.html`, per
+// PLAN.md §18). Vidrock is the one ported here: one JSON GET, one field to
+// decrypt per server — the same shape kora.js/cricfy.js already handle, and
+// the only new capability it needs is `host.crypto.aesGcmDecrypt`, added
+// alongside this file.
+//
+// Movies only. Vidrock's TV endpoint is keyed by tmdbId+season+episode, and
+// nothing in the app yet lets a user choose either — PLAN.md flags
+// "children (series)" as an acknowledged, not-yet-built capability — so a
+// series item's `sources()` call is declined with an empty list, exactly how
+// kora.js declines an item without two participants.
+//
+// Matches TMDB-backed items through their `movie:<tmdbId>` reference.
+//
+// Vidrock only returns subtitles that belong to its resolved stream. Shegu is
+// a separate external-subtitles provider and is intentionally not consulted
+// from this resolver.
+
+const VIDROCK_BASE = globalThis.__vidrockBaseUrl || 'https://vidrock.ru';
+
+// Static across the whole upstream (verified against the live API, not just
+// the Kotlin source): AES-256-GCM, no AAD, 12-byte nonce prepended to the
+// ciphertext+tag, the base64url-of-hex-key form CineStream hardcodes.
+const VIDROCK_KEY_HEX =
+  '7f3e9c2a8b5d1f4e6a9c3b7d2e5f8a1c4b6d9e2f5a8c1b4d7e9f2a5c8b1d4e7f';
+const VIDROCK_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
+
+const VIDROCK_PROVIDER_KEY = 'vidrock';
+const VIDROCK_PROVIDER_ID = 'nimora.vidrock';
+
+function vidrockHeaders() {
+  return {
+    Origin: VIDROCK_BASE,
+    Referer: `${VIDROCK_BASE}/`,
+    'User-Agent': VIDROCK_UA,
+  };
+}
+
+// Reads a `movie:<tmdbId>` reference.
+function parseTmdbMovieRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const prefix = 'movie:';
+  if (!refId.startsWith(prefix)) return null;
+  const tmdbId = refId.slice(prefix.length);
+  return tmdbId.length > 0 ? tmdbId : null;
+}
+
+// Reads a `series:<tmdbId>` reference.
+function parseTmdbSeriesRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const prefix = 'series:';
+  if (!refId.startsWith(prefix)) return null;
+  const tmdbId = refId.slice(prefix.length);
+  return tmdbId.length > 0 ? tmdbId : null;
+}
+
+function parseVidrockEpisodeRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const match = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
+  return match == null
+    ? null
+    : { tmdbId: match[1], season: match[2], episode: match[3] };
+}
+
+// ---- base64url (same pair kora.js defines; kept local — see this
+// extension's no-shared-helpers convention, one file per provider) ----
+
+function base64UrlToBase64(token) {
+  let normalized = token.replace(/-/g, '+').replace(/_/g, '/');
+  const remainder = normalized.length % 4;
+  if (remainder !== 0) normalized += '='.repeat(4 - remainder);
+  return normalized;
+}
+
+function base64ToBase64Url(b64) {
+  return b64.replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+// ---- source id ----
+//
+// Bakes the still-encrypted url straight in, so `resolve()` needs no second
+// fetch for the stream itself — same shape as kora.js's `encodeKoraSourceId`.
+// The tmdbId rides along because the upstream API response and source label
+// are TMDB-keyed; `resolve(sourceId)` receives only this opaque id.
+
+function encodeVidrockSourceId(payload) {
+  const json = JSON.stringify({
+    u: payload.encryptedUrl,
+    type: payload.type,
+    m: payload.tmdbId,
+    // season/episode are present only for TV; omit for movies.
+    ...(payload.season != null ? { s: payload.season, e: payload.episode } : {}),
+  });
+  return base64ToBase64Url(host.codec.textToBase64(json));
+}
+
+function decodeVidrockSourceId(encoded) {
+  const json = host.codec.base64ToText(base64UrlToBase64(encoded));
+  return JSON.parse(json);
+}
+
+// ---- decrypt (port of decryptVidrockUrl) ----
+
+function decryptVidrockUrl(encryptedPayload) {
+  const dataHex = host.codec.base64ToHex(base64UrlToBase64(encryptedPayload));
+  const nonceHex = dataHex.slice(0, 24); // 12 bytes
+  const cipherHex = dataHex.slice(24); // ciphertext + 16-byte tag
+  if (nonceHex.length !== 24 || cipherHex.length === 0) return null;
+
+  const keyB64 = host.codec.hexToBase64(VIDROCK_KEY_HEX);
+  const nonceB64 = host.codec.hexToBase64(nonceHex);
+  const cipherB64 = host.codec.hexToBase64(cipherHex);
+
+  const plainB64 = host.crypto.aesGcmDecrypt(keyB64, nonceB64, cipherB64);
+  return plainB64 === null ? null : host.codec.base64ToText(plainB64);
+}
+
+// ---- network ----
+
+async function vidrockSources(args) {
+  const item = args.item;
+  const enabled = args.enabledProviders;
+  if (enabled != null && enabled.indexOf(VIDROCK_PROVIDER_ID) === -1) {
+    return { sources: [] };
+  }
+
+  const refId = item.ref && item.ref.id;
+
+  // ---- TV series episode path ----
+  const episodeRef = parseVidrockEpisodeRef(refId);
+  if (episodeRef !== null) {
+    const seriesTmdbId = episodeRef.tmdbId;
+    const season = episodeRef.season;
+    const episode = episodeRef.episode;
+
+    let response;
+    try {
+      response = await fetch(
+        `${VIDROCK_BASE}/api/tv/${seriesTmdbId}/${season}/${episode}`,
+        { headers: vidrockHeaders() },
+      );
+    } catch (_) {
+      return { sources: [] };
+    }
+    if (response.status < 200 || response.status >= 300) return { sources: [] };
+
+    let servers;
+    try {
+      servers = JSON.parse(response.body);
+    } catch (_) {
+      return { sources: [] };
+    }
+
+    const sources = [];
+    for (const name of Object.keys(servers)) {
+      const server = servers[name];
+      const encryptedUrl = server && server.url;
+      if (!encryptedUrl || encryptedUrl === 'error' || encryptedUrl === 'null') {
+        continue;
+      }
+      const id = encodeVidrockSourceId({
+        encryptedUrl,
+        type: server.type || 'hls',
+        tmdbId: seriesTmdbId,
+        season,
+        episode,
+      });
+      const lang = server.language ? ` (${server.language})` : '';
+      const realName = [
+        name,
+        server.name,
+        server.quality,
+        server.resolution,
+      ]
+        .filter((value) => value != null && String(value).trim().length > 0)
+        .join(' ');
+      const sourceId = `${VIDROCK_PROVIDER_KEY}:${id}`;
+      sources.push({
+        id: sourceId,
+        // Keep the provider's original server name and the dub language.
+        label: `${sourceAliasWithQuality(sourceId, name, realName)}${lang}`,
+        provider: 'Nimora',
+        providerId: 'nimora.vidrock',
+      });
+    }
+    return { sources };
+  }
+
+  // ---- Movie path (unchanged) ----
+  const tmdbId = parseTmdbMovieRef(refId);
+  if (tmdbId === null) return { sources: [] };
+
+  let response;
+  try {
+    response = await fetch(`${VIDROCK_BASE}/api/movie/${tmdbId}/`, {
+      headers: vidrockHeaders(),
+    });
+  } catch (_) {
+    return { sources: [] };
+  }
+  if (response.status < 200 || response.status >= 300) return { sources: [] };
+
+  let servers;
+  try {
+    servers = JSON.parse(response.body);
+  } catch (_) {
+    return { sources: [] };
+  }
+
+  const sources = [];
+  for (const name of Object.keys(servers)) {
+    const server = servers[name];
+    const encryptedUrl = server && server.url;
+    if (!encryptedUrl || encryptedUrl === 'error' || encryptedUrl === 'null') {
+      continue;
+    }
+    const id = encodeVidrockSourceId({
+      encryptedUrl,
+      type: server.type || 'hls',
+      tmdbId,
+    });
+    const lang = server.language ? ` (${server.language})` : '';
+    const realName = [
+      name,
+      server.name,
+      server.quality,
+      server.resolution,
+    ]
+      .filter((value) => value != null && String(value).trim().length > 0)
+      .join(' ');
+    const sourceId = `${VIDROCK_PROVIDER_KEY}:${id}`;
+    sources.push({
+      id: sourceId,
+      // Keep the provider's original server name and the dub language.
+      label: `${sourceAliasWithQuality(sourceId, name, realName)}${lang}`,
+      provider: 'Nimora',
+      providerId: 'nimora.vidrock',
+    });
+  }
+  return { sources };
+}
+
+async function resolveVidrockSource(sourceId) {
+  const prefix = `${VIDROCK_PROVIDER_KEY}:`;
+  const inner = sourceId.startsWith(prefix) ? sourceId.slice(prefix.length) : sourceId;
+  const decoded = decodeVidrockSourceId(inner);
+
+  const url = decryptVidrockUrl(decoded.u);
+  if (url === null) throw new Error('Vidrock source failed to decrypt');
+
+  const format = decoded.type === 'hls' || url.indexOf('.m3u8') !== -1 ? 'hls' : 'other';
+  const result = { url, headers: vidrockHeaders(), format };
+
+  return result;
+}
+
+// ---- registration — see kora.js's tail for the shared aggregator ----
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: VIDROCK_PROVIDER_KEY,
+  sources: vidrockSources,
+  resolve: (sourceId) => resolveVidrockSource(sourceId),
+});
+
+globalThis.__extension = globalThis.__extension || {};
+if (!globalThis.__extension.sources) {
+  globalThis.__extension.sources = async (args) => {
+    const perProvider = await Promise.all(
+      globalThis.__streamProviders.map((p) => p.sources(args).catch(() => ({ sources: [] }))),
+    );
+    return { sources: perProvider.flatMap((r) => r.sources) };
+  };
+  globalThis.__extension.resolve = async (args) => {
+    const sourceId = args.sourceId;
+    const separator = sourceId.indexOf(':');
+    if (separator < 0) throw new Error(`Malformed source id: ${sourceId}`);
+    const providerKey = sourceId.slice(0, separator);
+    const provider = globalThis.__streamProviders.find((p) => p.providerKey === providerKey);
+    if (!provider) throw new Error(`No stream provider registered for "${providerKey}"`);
+    return provider.resolve(sourceId);
+  };
+}
+
 // FlyStream as a stream provider, over the host `fetch` API.
 //
 // flystream.net serves one adaptive HLS playlist per title from
@@ -1164,12 +1667,12 @@ function flystreamFormat(stream) {
 // `videoCodec` is deliberately ignored. The API reports "h264" for playlists
 // whose 2160p variant is plainly `hvc1`, so surfacing it would be stating
 // something wrong with more confidence than the API has earned.
-function flystreamLabel(stream, index, total) {
-  const quality = typeof stream.quality === 'string' ? stream.quality.trim() : '';
-  const base = quality.length > 0 ? `FlyStream ${quality}` : 'FlyStream';
-  // Quality alone separates them in practice; the counter is only there so
-  // two same-quality entries don't come out as one repeated line.
-  return total > 1 ? `${base} ${index + 1}` : base;
+function flystreamLabel(index, total) {
+  // The API's `quality` names the top rung of the ladder, not what plays:
+  // the player opens at its own ceiling, so putting "2160p" on the label
+  // promised something the source does not keep. The counter is all that is
+  // left to carry, and only when there is more than one entry to tell apart.
+  return total > 1 ? `FlyStream ${index + 1}` : 'FlyStream';
 }
 
 // ---- source ids ----
@@ -1260,7 +1763,7 @@ async function flystreamListSources(args) {
       label: sourceAliasWithQuality(
         sourceId,
         'FlyStream',
-        flystreamLabel(stream, sources.length, streams.length),
+        flystreamLabel(sources.length, streams.length),
       ),
       provider: 'Nimora',
       providerId: FLYSTREAM_PROVIDER_ID,
@@ -1288,10 +1791,12 @@ async function flystreamResolveSource(sourceId) {
 
 // ---- registration — see kora.js's tail for the shared aggregator ----
 //
-// Registered before every other stream provider on purpose: the aggregator
-// concatenates each provider's list in registration order and nothing
-// downstream re-sorts, so this is what puts FlyStream at the top of the
-// source list.
+// The aggregator concatenates each provider's list in registration order and
+// nothing downstream re-sorts, so the bundle's file order decides where this
+// one sits. It no longer leads: these renditions are fMP4, which the FFmpeg
+// libmpv is built against cannot seek without the player's cut-playlist
+// path, while VaPlayer and vidrock seek through libmpv's own. FlyStream
+// stays for the 4K ladder nothing else here offers.
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
 globalThis.__streamProviders.push({
@@ -1326,6 +1831,296 @@ if (!globalThis.__extension.sources) {
     return provider.resolve(sourceId);
   };
 }
+
+// VidEasy stream provider, in JS on the host `fetch`/`codec` API.
+//
+// VidEasy (player.videasy.to) sources streams from api.speedracelight.com,
+// which returns seed-encrypted JSON. We decrypt via enc-dec.app/api/dec-videasy.
+//
+// Servers available (language info from EncDecEndpoints README):
+//   cdn        -> Original (may have 4K)
+//   m4uhd      -> Original
+//   vsrc       -> Original
+//   hdmovie    -> Original (EN quality) / Hindi (quality == "Hindi")
+//   meine      -> German
+//   lamovie    -> Spanish
+//   superflix  -> Portuguese
+//
+// Matches TMDB-backed items through their movie/series reference prefix.
+
+const VIDEASY_SPEEDRACE_BASE =
+  globalThis.__videasySpeedraceBaseUrl || 'https://api.speedracelight.com';
+const VIDEASY_ENCDEC_BASE =
+  globalThis.__videasyEncDecBaseUrl || 'https://enc-dec.app/api';
+
+const VIDEASY_PROVIDER_KEY = 'videasy';
+const VIDEASY_PROVIDER_ID = 'nimora.videasy';
+
+const VIDEASY_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
+
+// Servers exposed as stream sources. The key is the speedracelight.com path
+// segment (e.g. /cdn/sources-with-title).
+//
+// Several, because which ones answer changes per *title*, not just per day:
+// checked live, a film resolved only on `downloader2` while an episode of a
+// series resolved only on `m4uhd`, `cdn` and `lamovie` — every other server
+// returned 500 for that same request. Listing one server, or a short list
+// that happens to miss the right one, reads to the viewer as "VidEasy has
+// nothing" when it simply wasn't asked in the right place.
+//
+// Listing costs nothing: `videasyListSources` doesn't call these, it only
+// names them. The requests happen when a source is resolved.
+//
+// Servers that answered 404 for every request (`myflixerzupcloud`, `jett`,
+// `tejo`, `ym`) are left out — a 404 here is the path segment not existing,
+// so those are wasted round trips rather than a server being down.
+const VIDEASY_SERVERS = [
+  { key: 'cdn', label: 'VidEasy Yoru', quality: '' },
+  { key: 'downloader2', label: 'VidEasy Kite', quality: '' },
+  { key: 'm4uhd', label: 'VidEasy Breach', quality: '' },
+  { key: 'hdmovie', label: 'VidEasy Vyse', quality: '' },
+  { key: 'lamovie', label: 'VidEasy Aura', quality: '' },
+  { key: 'superflix', label: 'VidEasy Solstice', quality: '' },
+  { key: 'neon2', label: 'VidEasy Neon', quality: '' },
+];
+
+function videasyHeaders() {
+  return {
+    Accept: '*/*',
+    Origin: 'https://player.videasy.to',
+    Referer: 'https://player.videasy.to/',
+    'User-Agent': VIDEASY_UA,
+  };
+}
+
+// Reads a `movie:<tmdbId>` reference.
+function parseMovieRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const prefix = 'movie:';
+  if (!refId.startsWith(prefix)) return null;
+  const id = refId.slice(prefix.length);
+  return id.length > 0 ? id : null;
+}
+
+// Reads a `series:<tmdbId>` reference.
+function parseSeriesRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const prefix = 'series:';
+  if (!refId.startsWith(prefix)) return null;
+  const id = refId.slice(prefix.length);
+  return id.length > 0 ? id : null;
+}
+
+function parseVideasyEpisodeRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const match = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
+  return match == null
+    ? null
+    : { tmdbId: match[1], season: match[2], episode: match[3] };
+}
+
+// Source id encodes everything resolve() needs in base64url.
+function encodeVideasySourceId(payload) {
+  const json = JSON.stringify({
+    s: payload.server,
+    m: payload.tmdbId,
+    t: payload.type,         // 'movie' or 'tv'
+    se: payload.seed,
+    // season/episode only for TV
+    ...(payload.season != null ? { sn: payload.season, ep: payload.episode } : {}),
+  });
+  return host.codec.textToBase64(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function decodeVideasySourceId(sourceId) {
+  // Restore standard base64 padding
+  let b64 = sourceId.replace(/-/g, '+').replace(/_/g, '/');
+  const rem = b64.length % 4;
+  if (rem !== 0) b64 += '='.repeat(4 - rem);
+  try {
+    return JSON.parse(host.codec.base64ToText(b64));
+  } catch (_) {
+    return null;
+  }
+}
+
+// Fetch the seed for a given tmdbId. Required to decrypt the response.
+async function fetchSeed(tmdbId) {
+  let response;
+  try {
+    response = await fetch(
+      `${VIDEASY_SPEEDRACE_BASE}/seed?mediaId=${encodeURIComponent(tmdbId)}`,
+      { headers: videasyHeaders() },
+    );
+  } catch (_) {
+    return null;
+  }
+  if (response.status < 200 || response.status >= 300) return null;
+  try {
+    const data = JSON.parse(response.body);
+    return data.seed != null ? String(data.seed) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Double-encodes the title per VidEasy convention.
+function doubleEncodeTitle(title) {
+  return encodeURIComponent(encodeURIComponent(title));
+}
+
+// Returns the raw encrypted text from speedracelight.
+async function fetchEncryptedSources(serverKey, query) {
+  const params = Object.entries(query)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
+  const url = `${VIDEASY_SPEEDRACE_BASE}/${serverKey}/sources-with-title?${params}`;
+  let response;
+  try {
+    response = await fetch(url, { headers: videasyHeaders() });
+  } catch (_) {
+    return null;
+  }
+  if (response.status < 200 || response.status >= 300) return null;
+  return response.body;
+}
+
+// Decrypts the encrypted text via enc-dec.app.
+async function decryptVideasy(encryptedText, tmdbId, seed) {
+  let response;
+  try {
+    response = await fetch(`${VIDEASY_ENCDEC_BASE}/dec-videasy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: encryptedText, id: tmdbId, seed }),
+    });
+  } catch (_) {
+    return null;
+  }
+  if (response.status < 200 || response.status >= 300) return null;
+  try {
+    const data = JSON.parse(response.body);
+    if (data.status !== 200) return null;
+    return data.result;
+  } catch (_) {
+    return null;
+  }
+}
+
+// sources() — lists one source entry per server for a given movie/series item.
+// We list them by server without fetching (that happens on resolve()), so this
+// is fast and doesn't hit the network per-server.
+async function videasyListSources(args) {
+  const item = args.item || {};
+  const refId = (item.ref && item.ref.id) || item.id || '';
+
+  const isMovie = parseMovieRef(refId) !== null;
+  const episodeRef = parseVideasyEpisodeRef(refId);
+  const isSeries = episodeRef !== null;
+  if (!isMovie && !isSeries) return { sources: [] };
+
+  const tmdbId = isMovie ? parseMovieRef(refId) : episodeRef.tmdbId;
+
+  // For series, require season + episode in item.extra.
+  // Fetch the seed now (one request) so resolve() can use it without a
+  // redundant trip.
+  const seed = await fetchSeed(tmdbId);
+  if (!seed) return { sources: [] };
+
+  const sources = VIDEASY_SERVERS.map((srv) => {
+    const id = `${VIDEASY_PROVIDER_KEY}:${encodeVideasySourceId({
+      server: srv.key,
+      tmdbId,
+      type: isMovie ? 'movie' : 'tv',
+      seed,
+      season: isSeries ? episodeRef.season : null,
+      episode: isSeries ? episodeRef.episode : null,
+    })}`;
+    return { id, label: srv.label, provider: 'Nimora', providerId: 'nimora.videasy' };
+  });
+
+  return { sources };
+}
+
+// resolve() — fetches and decrypts the actual stream URL for the chosen server.
+async function videasyResolveSource(sourceId) {
+  const prefix = `${VIDEASY_PROVIDER_KEY}:`;
+  if (!sourceId.startsWith(prefix)) {
+    throw new Error(`Invalid VidEasy sourceId: ${sourceId}`);
+  }
+  const payload = decodeVideasySourceId(sourceId.slice(prefix.length));
+  if (!payload) throw new Error('Malformed VidEasy source id');
+
+  const { s: server, m: tmdbId, t: type, se: seed, sn: season, ep: episode } = payload;
+
+  // Build the speedracelight query.
+  const query = {
+    tmdbId,
+    mediaType: type,
+    enc: '2',
+    seed,
+    // title is not needed when we have tmdbId; use a placeholder to satisfy
+    // the endpoint signature.
+    title: encodeURIComponent(String(tmdbId)),
+  };
+  if (type === 'tv') {
+    query.seasonId = season;
+    query.episodeId = episode;
+  }
+
+  const encrypted = await fetchEncryptedSources(server, query);
+  if (!encrypted) throw new Error('VidEasy: failed to fetch encrypted sources');
+
+  const decrypted = await decryptVideasy(encrypted, tmdbId, seed);
+  if (!decrypted) throw new Error('VidEasy: decryption failed');
+
+  // Decrypted is `{ sources: [{url, quality}], subtitles: [...] }`.
+  //
+  // Not `{file, type}` / `tracks`, which is what this read for until it was
+  // checked against a live response — so even a server that answered fell
+  // over here with "no stream URL". `quality` is a server nickname
+  // ("playhq", "bk"), not a resolution, so it isn't treated as one.
+  let parsed;
+  try {
+    parsed = typeof decrypted === 'string' ? JSON.parse(decrypted) : decrypted;
+  } catch (_) {
+    throw new Error('VidEasy: invalid decrypted JSON');
+  }
+
+  const sourcesArr = Array.isArray(parsed.sources) ? parsed.sources : [];
+  const entry = sourcesArr.find((s) => s && typeof s.url === 'string' && s.url);
+  if (!entry) throw new Error('VidEasy: no stream URL in decrypted payload');
+
+  const rawSubs = Array.isArray(parsed.subtitles) ? parsed.subtitles : [];
+  const subtitles = rawSubs
+    .filter((t) => t && (t.url || t.file))
+    .map((t) => ({
+      language: t.language || t.label || t.lang || '',
+      url: t.url || t.file,
+      label: t.label || t.language || t.lang || '',
+    }));
+
+  return {
+    url: entry.url,
+    // These come back as both .m3u8 and .mp4 depending on the server.
+    format: entry.url.includes('.m3u8') ? 'hls' : 'other',
+    headers: {
+      Origin: 'https://player.videasy.to',
+      Referer: 'https://player.videasy.to/',
+      'User-Agent': VIDEASY_UA,
+    },
+    subtitles,
+  };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: VIDEASY_PROVIDER_KEY,
+  sources: videasyListSources,
+  resolve: videasyResolveSource,
+});
 
 // Kora as a stream provider, in JS on the host `fetch`/`codec`/`match` API.
 //
@@ -5916,799 +6711,6 @@ globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.subtitles) {
   globalThis.__extension.subtitles = sheguExternalSubtitles;
 }
-
-// Vidrock as a stream provider, in JS on the host `fetch`/`codec`/`crypto` API.
-//
-// A port of CineStream's `invokeVidrock` (CineStreamExtractors.kt) and
-// `decryptVidrockUrl` (CineStreamUtils.kt) — CineStream
-// (github.com/SaurabhKaperwan/CineStream) is a CloudStream-style Kotlin
-// aggregator with ~60 upstream integrations, most of them HTML-scrape-heavy
-// in a way this sandbox has no primitive for yet (no `host.html`, per
-// PLAN.md §18). Vidrock is the one ported here: one JSON GET, one field to
-// decrypt per server — the same shape kora.js/cricfy.js already handle, and
-// the only new capability it needs is `host.crypto.aesGcmDecrypt`, added
-// alongside this file.
-//
-// Movies only. Vidrock's TV endpoint is keyed by tmdbId+season+episode, and
-// nothing in the app yet lets a user choose either — PLAN.md flags
-// "children (series)" as an acknowledged, not-yet-built capability — so a
-// series item's `sources()` call is declined with an empty list, exactly how
-// kora.js declines an item without two participants.
-//
-// Matches TMDB-backed items through their `movie:<tmdbId>` reference.
-//
-// Vidrock only returns subtitles that belong to its resolved stream. Shegu is
-// a separate external-subtitles provider and is intentionally not consulted
-// from this resolver.
-
-const VIDROCK_BASE = globalThis.__vidrockBaseUrl || 'https://vidrock.ru';
-
-// Static across the whole upstream (verified against the live API, not just
-// the Kotlin source): AES-256-GCM, no AAD, 12-byte nonce prepended to the
-// ciphertext+tag, the base64url-of-hex-key form CineStream hardcodes.
-const VIDROCK_KEY_HEX =
-  '7f3e9c2a8b5d1f4e6a9c3b7d2e5f8a1c4b6d9e2f5a8c1b4d7e9f2a5c8b1d4e7f';
-const VIDROCK_UA =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
-
-const VIDROCK_PROVIDER_KEY = 'vidrock';
-const VIDROCK_PROVIDER_ID = 'nimora.vidrock';
-
-function vidrockHeaders() {
-  return {
-    Origin: VIDROCK_BASE,
-    Referer: `${VIDROCK_BASE}/`,
-    'User-Agent': VIDROCK_UA,
-  };
-}
-
-// Reads a `movie:<tmdbId>` reference.
-function parseTmdbMovieRef(refId) {
-  if (typeof refId !== 'string') return null;
-  const prefix = 'movie:';
-  if (!refId.startsWith(prefix)) return null;
-  const tmdbId = refId.slice(prefix.length);
-  return tmdbId.length > 0 ? tmdbId : null;
-}
-
-// Reads a `series:<tmdbId>` reference.
-function parseTmdbSeriesRef(refId) {
-  if (typeof refId !== 'string') return null;
-  const prefix = 'series:';
-  if (!refId.startsWith(prefix)) return null;
-  const tmdbId = refId.slice(prefix.length);
-  return tmdbId.length > 0 ? tmdbId : null;
-}
-
-function parseVidrockEpisodeRef(refId) {
-  if (typeof refId !== 'string') return null;
-  const match = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
-  return match == null
-    ? null
-    : { tmdbId: match[1], season: match[2], episode: match[3] };
-}
-
-// ---- base64url (same pair kora.js defines; kept local — see this
-// extension's no-shared-helpers convention, one file per provider) ----
-
-function base64UrlToBase64(token) {
-  let normalized = token.replace(/-/g, '+').replace(/_/g, '/');
-  const remainder = normalized.length % 4;
-  if (remainder !== 0) normalized += '='.repeat(4 - remainder);
-  return normalized;
-}
-
-function base64ToBase64Url(b64) {
-  return b64.replace(/\+/g, '-').replace(/\//g, '_');
-}
-
-// ---- source id ----
-//
-// Bakes the still-encrypted url straight in, so `resolve()` needs no second
-// fetch for the stream itself — same shape as kora.js's `encodeKoraSourceId`.
-// The tmdbId rides along because the upstream API response and source label
-// are TMDB-keyed; `resolve(sourceId)` receives only this opaque id.
-
-function encodeVidrockSourceId(payload) {
-  const json = JSON.stringify({
-    u: payload.encryptedUrl,
-    type: payload.type,
-    m: payload.tmdbId,
-    // season/episode are present only for TV; omit for movies.
-    ...(payload.season != null ? { s: payload.season, e: payload.episode } : {}),
-  });
-  return base64ToBase64Url(host.codec.textToBase64(json));
-}
-
-function decodeVidrockSourceId(encoded) {
-  const json = host.codec.base64ToText(base64UrlToBase64(encoded));
-  return JSON.parse(json);
-}
-
-// ---- decrypt (port of decryptVidrockUrl) ----
-
-function decryptVidrockUrl(encryptedPayload) {
-  const dataHex = host.codec.base64ToHex(base64UrlToBase64(encryptedPayload));
-  const nonceHex = dataHex.slice(0, 24); // 12 bytes
-  const cipherHex = dataHex.slice(24); // ciphertext + 16-byte tag
-  if (nonceHex.length !== 24 || cipherHex.length === 0) return null;
-
-  const keyB64 = host.codec.hexToBase64(VIDROCK_KEY_HEX);
-  const nonceB64 = host.codec.hexToBase64(nonceHex);
-  const cipherB64 = host.codec.hexToBase64(cipherHex);
-
-  const plainB64 = host.crypto.aesGcmDecrypt(keyB64, nonceB64, cipherB64);
-  return plainB64 === null ? null : host.codec.base64ToText(plainB64);
-}
-
-// ---- network ----
-
-async function vidrockSources(args) {
-  const item = args.item;
-  const enabled = args.enabledProviders;
-  if (enabled != null && enabled.indexOf(VIDROCK_PROVIDER_ID) === -1) {
-    return { sources: [] };
-  }
-
-  const refId = item.ref && item.ref.id;
-
-  // ---- TV series episode path ----
-  const episodeRef = parseVidrockEpisodeRef(refId);
-  if (episodeRef !== null) {
-    const seriesTmdbId = episodeRef.tmdbId;
-    const season = episodeRef.season;
-    const episode = episodeRef.episode;
-
-    let response;
-    try {
-      response = await fetch(
-        `${VIDROCK_BASE}/api/tv/${seriesTmdbId}/${season}/${episode}`,
-        { headers: vidrockHeaders() },
-      );
-    } catch (_) {
-      return { sources: [] };
-    }
-    if (response.status < 200 || response.status >= 300) return { sources: [] };
-
-    let servers;
-    try {
-      servers = JSON.parse(response.body);
-    } catch (_) {
-      return { sources: [] };
-    }
-
-    const sources = [];
-    for (const name of Object.keys(servers)) {
-      const server = servers[name];
-      const encryptedUrl = server && server.url;
-      if (!encryptedUrl || encryptedUrl === 'error' || encryptedUrl === 'null') {
-        continue;
-      }
-      const id = encodeVidrockSourceId({
-        encryptedUrl,
-        type: server.type || 'hls',
-        tmdbId: seriesTmdbId,
-        season,
-        episode,
-      });
-      const lang = server.language ? ` (${server.language})` : '';
-      const realName = [
-        name,
-        server.name,
-        server.quality,
-        server.resolution,
-      ]
-        .filter((value) => value != null && String(value).trim().length > 0)
-        .join(' ');
-      const sourceId = `${VIDROCK_PROVIDER_KEY}:${id}`;
-      sources.push({
-        id: sourceId,
-        // Keep the provider's original server name and the dub language.
-        label: `${sourceAliasWithQuality(sourceId, name, realName)}${lang}`,
-        provider: 'Nimora',
-        providerId: 'nimora.vidrock',
-      });
-    }
-    return { sources };
-  }
-
-  // ---- Movie path (unchanged) ----
-  const tmdbId = parseTmdbMovieRef(refId);
-  if (tmdbId === null) return { sources: [] };
-
-  let response;
-  try {
-    response = await fetch(`${VIDROCK_BASE}/api/movie/${tmdbId}/`, {
-      headers: vidrockHeaders(),
-    });
-  } catch (_) {
-    return { sources: [] };
-  }
-  if (response.status < 200 || response.status >= 300) return { sources: [] };
-
-  let servers;
-  try {
-    servers = JSON.parse(response.body);
-  } catch (_) {
-    return { sources: [] };
-  }
-
-  const sources = [];
-  for (const name of Object.keys(servers)) {
-    const server = servers[name];
-    const encryptedUrl = server && server.url;
-    if (!encryptedUrl || encryptedUrl === 'error' || encryptedUrl === 'null') {
-      continue;
-    }
-    const id = encodeVidrockSourceId({
-      encryptedUrl,
-      type: server.type || 'hls',
-      tmdbId,
-    });
-    const lang = server.language ? ` (${server.language})` : '';
-    const realName = [
-      name,
-      server.name,
-      server.quality,
-      server.resolution,
-    ]
-      .filter((value) => value != null && String(value).trim().length > 0)
-      .join(' ');
-    const sourceId = `${VIDROCK_PROVIDER_KEY}:${id}`;
-    sources.push({
-      id: sourceId,
-      // Keep the provider's original server name and the dub language.
-      label: `${sourceAliasWithQuality(sourceId, name, realName)}${lang}`,
-      provider: 'Nimora',
-      providerId: 'nimora.vidrock',
-    });
-  }
-  return { sources };
-}
-
-async function resolveVidrockSource(sourceId) {
-  const prefix = `${VIDROCK_PROVIDER_KEY}:`;
-  const inner = sourceId.startsWith(prefix) ? sourceId.slice(prefix.length) : sourceId;
-  const decoded = decodeVidrockSourceId(inner);
-
-  const url = decryptVidrockUrl(decoded.u);
-  if (url === null) throw new Error('Vidrock source failed to decrypt');
-
-  const format = decoded.type === 'hls' || url.indexOf('.m3u8') !== -1 ? 'hls' : 'other';
-  const result = { url, headers: vidrockHeaders(), format };
-
-  return result;
-}
-
-// ---- registration — see kora.js's tail for the shared aggregator ----
-
-globalThis.__streamProviders = globalThis.__streamProviders || [];
-globalThis.__streamProviders.push({
-  providerKey: VIDROCK_PROVIDER_KEY,
-  sources: vidrockSources,
-  resolve: (sourceId) => resolveVidrockSource(sourceId),
-});
-
-globalThis.__extension = globalThis.__extension || {};
-if (!globalThis.__extension.sources) {
-  globalThis.__extension.sources = async (args) => {
-    const perProvider = await Promise.all(
-      globalThis.__streamProviders.map((p) => p.sources(args).catch(() => ({ sources: [] }))),
-    );
-    return { sources: perProvider.flatMap((r) => r.sources) };
-  };
-  globalThis.__extension.resolve = async (args) => {
-    const sourceId = args.sourceId;
-    const separator = sourceId.indexOf(':');
-    if (separator < 0) throw new Error(`Malformed source id: ${sourceId}`);
-    const providerKey = sourceId.slice(0, separator);
-    const provider = globalThis.__streamProviders.find((p) => p.providerKey === providerKey);
-    if (!provider) throw new Error(`No stream provider registered for "${providerKey}"`);
-    return provider.resolve(sourceId);
-  };
-}
-
-// VidEasy stream provider, in JS on the host `fetch`/`codec` API.
-//
-// VidEasy (player.videasy.to) sources streams from api.speedracelight.com,
-// which returns seed-encrypted JSON. We decrypt via enc-dec.app/api/dec-videasy.
-//
-// Servers available (language info from EncDecEndpoints README):
-//   cdn        -> Original (may have 4K)
-//   m4uhd      -> Original
-//   vsrc       -> Original
-//   hdmovie    -> Original (EN quality) / Hindi (quality == "Hindi")
-//   meine      -> German
-//   lamovie    -> Spanish
-//   superflix  -> Portuguese
-//
-// Matches TMDB-backed items through their movie/series reference prefix.
-
-const VIDEASY_SPEEDRACE_BASE =
-  globalThis.__videasySpeedraceBaseUrl || 'https://api.speedracelight.com';
-const VIDEASY_ENCDEC_BASE =
-  globalThis.__videasyEncDecBaseUrl || 'https://enc-dec.app/api';
-
-const VIDEASY_PROVIDER_KEY = 'videasy';
-const VIDEASY_PROVIDER_ID = 'nimora.videasy';
-
-const VIDEASY_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
-
-// Servers exposed as stream sources. The key is the speedracelight.com path
-// segment (e.g. /cdn/sources-with-title).
-//
-// Several, because which ones answer changes per *title*, not just per day:
-// checked live, a film resolved only on `downloader2` while an episode of a
-// series resolved only on `m4uhd`, `cdn` and `lamovie` — every other server
-// returned 500 for that same request. Listing one server, or a short list
-// that happens to miss the right one, reads to the viewer as "VidEasy has
-// nothing" when it simply wasn't asked in the right place.
-//
-// Listing costs nothing: `videasyListSources` doesn't call these, it only
-// names them. The requests happen when a source is resolved.
-//
-// Servers that answered 404 for every request (`myflixerzupcloud`, `jett`,
-// `tejo`, `ym`) are left out — a 404 here is the path segment not existing,
-// so those are wasted round trips rather than a server being down.
-const VIDEASY_SERVERS = [
-  { key: 'cdn', label: 'VidEasy Yoru', quality: '' },
-  { key: 'downloader2', label: 'VidEasy Kite', quality: '' },
-  { key: 'm4uhd', label: 'VidEasy Breach', quality: '' },
-  { key: 'hdmovie', label: 'VidEasy Vyse', quality: '' },
-  { key: 'lamovie', label: 'VidEasy Aura', quality: '' },
-  { key: 'superflix', label: 'VidEasy Solstice', quality: '' },
-  { key: 'neon2', label: 'VidEasy Neon', quality: '' },
-];
-
-function videasyHeaders() {
-  return {
-    Accept: '*/*',
-    Origin: 'https://player.videasy.to',
-    Referer: 'https://player.videasy.to/',
-    'User-Agent': VIDEASY_UA,
-  };
-}
-
-// Reads a `movie:<tmdbId>` reference.
-function parseMovieRef(refId) {
-  if (typeof refId !== 'string') return null;
-  const prefix = 'movie:';
-  if (!refId.startsWith(prefix)) return null;
-  const id = refId.slice(prefix.length);
-  return id.length > 0 ? id : null;
-}
-
-// Reads a `series:<tmdbId>` reference.
-function parseSeriesRef(refId) {
-  if (typeof refId !== 'string') return null;
-  const prefix = 'series:';
-  if (!refId.startsWith(prefix)) return null;
-  const id = refId.slice(prefix.length);
-  return id.length > 0 ? id : null;
-}
-
-function parseVideasyEpisodeRef(refId) {
-  if (typeof refId !== 'string') return null;
-  const match = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
-  return match == null
-    ? null
-    : { tmdbId: match[1], season: match[2], episode: match[3] };
-}
-
-// Source id encodes everything resolve() needs in base64url.
-function encodeVideasySourceId(payload) {
-  const json = JSON.stringify({
-    s: payload.server,
-    m: payload.tmdbId,
-    t: payload.type,         // 'movie' or 'tv'
-    se: payload.seed,
-    // season/episode only for TV
-    ...(payload.season != null ? { sn: payload.season, ep: payload.episode } : {}),
-  });
-  return host.codec.textToBase64(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-function decodeVideasySourceId(sourceId) {
-  // Restore standard base64 padding
-  let b64 = sourceId.replace(/-/g, '+').replace(/_/g, '/');
-  const rem = b64.length % 4;
-  if (rem !== 0) b64 += '='.repeat(4 - rem);
-  try {
-    return JSON.parse(host.codec.base64ToText(b64));
-  } catch (_) {
-    return null;
-  }
-}
-
-// Fetch the seed for a given tmdbId. Required to decrypt the response.
-async function fetchSeed(tmdbId) {
-  let response;
-  try {
-    response = await fetch(
-      `${VIDEASY_SPEEDRACE_BASE}/seed?mediaId=${encodeURIComponent(tmdbId)}`,
-      { headers: videasyHeaders() },
-    );
-  } catch (_) {
-    return null;
-  }
-  if (response.status < 200 || response.status >= 300) return null;
-  try {
-    const data = JSON.parse(response.body);
-    return data.seed != null ? String(data.seed) : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-// Double-encodes the title per VidEasy convention.
-function doubleEncodeTitle(title) {
-  return encodeURIComponent(encodeURIComponent(title));
-}
-
-// Returns the raw encrypted text from speedracelight.
-async function fetchEncryptedSources(serverKey, query) {
-  const params = Object.entries(query)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join('&');
-  const url = `${VIDEASY_SPEEDRACE_BASE}/${serverKey}/sources-with-title?${params}`;
-  let response;
-  try {
-    response = await fetch(url, { headers: videasyHeaders() });
-  } catch (_) {
-    return null;
-  }
-  if (response.status < 200 || response.status >= 300) return null;
-  return response.body;
-}
-
-// Decrypts the encrypted text via enc-dec.app.
-async function decryptVideasy(encryptedText, tmdbId, seed) {
-  let response;
-  try {
-    response = await fetch(`${VIDEASY_ENCDEC_BASE}/dec-videasy`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: encryptedText, id: tmdbId, seed }),
-    });
-  } catch (_) {
-    return null;
-  }
-  if (response.status < 200 || response.status >= 300) return null;
-  try {
-    const data = JSON.parse(response.body);
-    if (data.status !== 200) return null;
-    return data.result;
-  } catch (_) {
-    return null;
-  }
-}
-
-// sources() — lists one source entry per server for a given movie/series item.
-// We list them by server without fetching (that happens on resolve()), so this
-// is fast and doesn't hit the network per-server.
-async function videasyListSources(args) {
-  const item = args.item || {};
-  const refId = (item.ref && item.ref.id) || item.id || '';
-
-  const isMovie = parseMovieRef(refId) !== null;
-  const episodeRef = parseVideasyEpisodeRef(refId);
-  const isSeries = episodeRef !== null;
-  if (!isMovie && !isSeries) return { sources: [] };
-
-  const tmdbId = isMovie ? parseMovieRef(refId) : episodeRef.tmdbId;
-
-  // For series, require season + episode in item.extra.
-  // Fetch the seed now (one request) so resolve() can use it without a
-  // redundant trip.
-  const seed = await fetchSeed(tmdbId);
-  if (!seed) return { sources: [] };
-
-  const sources = VIDEASY_SERVERS.map((srv) => {
-    const id = `${VIDEASY_PROVIDER_KEY}:${encodeVideasySourceId({
-      server: srv.key,
-      tmdbId,
-      type: isMovie ? 'movie' : 'tv',
-      seed,
-      season: isSeries ? episodeRef.season : null,
-      episode: isSeries ? episodeRef.episode : null,
-    })}`;
-    return { id, label: srv.label, provider: 'Nimora', providerId: 'nimora.videasy' };
-  });
-
-  return { sources };
-}
-
-// resolve() — fetches and decrypts the actual stream URL for the chosen server.
-async function videasyResolveSource(sourceId) {
-  const prefix = `${VIDEASY_PROVIDER_KEY}:`;
-  if (!sourceId.startsWith(prefix)) {
-    throw new Error(`Invalid VidEasy sourceId: ${sourceId}`);
-  }
-  const payload = decodeVideasySourceId(sourceId.slice(prefix.length));
-  if (!payload) throw new Error('Malformed VidEasy source id');
-
-  const { s: server, m: tmdbId, t: type, se: seed, sn: season, ep: episode } = payload;
-
-  // Build the speedracelight query.
-  const query = {
-    tmdbId,
-    mediaType: type,
-    enc: '2',
-    seed,
-    // title is not needed when we have tmdbId; use a placeholder to satisfy
-    // the endpoint signature.
-    title: encodeURIComponent(String(tmdbId)),
-  };
-  if (type === 'tv') {
-    query.seasonId = season;
-    query.episodeId = episode;
-  }
-
-  const encrypted = await fetchEncryptedSources(server, query);
-  if (!encrypted) throw new Error('VidEasy: failed to fetch encrypted sources');
-
-  const decrypted = await decryptVideasy(encrypted, tmdbId, seed);
-  if (!decrypted) throw new Error('VidEasy: decryption failed');
-
-  // Decrypted is `{ sources: [{url, quality}], subtitles: [...] }`.
-  //
-  // Not `{file, type}` / `tracks`, which is what this read for until it was
-  // checked against a live response — so even a server that answered fell
-  // over here with "no stream URL". `quality` is a server nickname
-  // ("playhq", "bk"), not a resolution, so it isn't treated as one.
-  let parsed;
-  try {
-    parsed = typeof decrypted === 'string' ? JSON.parse(decrypted) : decrypted;
-  } catch (_) {
-    throw new Error('VidEasy: invalid decrypted JSON');
-  }
-
-  const sourcesArr = Array.isArray(parsed.sources) ? parsed.sources : [];
-  const entry = sourcesArr.find((s) => s && typeof s.url === 'string' && s.url);
-  if (!entry) throw new Error('VidEasy: no stream URL in decrypted payload');
-
-  const rawSubs = Array.isArray(parsed.subtitles) ? parsed.subtitles : [];
-  const subtitles = rawSubs
-    .filter((t) => t && (t.url || t.file))
-    .map((t) => ({
-      language: t.language || t.label || t.lang || '',
-      url: t.url || t.file,
-      label: t.label || t.language || t.lang || '',
-    }));
-
-  return {
-    url: entry.url,
-    // These come back as both .m3u8 and .mp4 depending on the server.
-    format: entry.url.includes('.m3u8') ? 'hls' : 'other',
-    headers: {
-      Origin: 'https://player.videasy.to',
-      Referer: 'https://player.videasy.to/',
-      'User-Agent': VIDEASY_UA,
-    },
-    subtitles,
-  };
-}
-
-globalThis.__streamProviders = globalThis.__streamProviders || [];
-globalThis.__streamProviders.push({
-  providerKey: VIDEASY_PROVIDER_KEY,
-  sources: videasyListSources,
-  resolve: videasyResolveSource,
-});
-
-// VaPlayer as a stream provider, over the host `fetch` API.
-//
-// Ported from CineStream's `invokeVaPlayer` (CineStreamExtractors.kt). The
-// one upstream in this family that hands back playable URLs in the clear:
-// `api.php` answers with `data.stream_urls`, a plain list of HLS playlists,
-// plus a large `default_subs` list. No cipher, no key exchange, nothing to
-// decrypt.
-//
-// That is worth stating because its sibling is not. `data.vidsrcme.ru` serves
-// the same `api.php` shape, but its `stream_urls` is a single encrypted blob
-// with a `vs.wasm_url` beside it — a per-response WebAssembly module that
-// decrypts it, whose id rotates on every request. This sandbox has no
-// `WebAssembly` at all, so that host cannot be integrated without widening
-// the runtime; this one needs nothing new.
-//
-// Keyed by tmdbId, which the `movie:<tmdbId>` / `series:<tmdbId>` references
-// already carry, so no id translation is needed
-// (the upstream accepts `imdb=` too — verified — but nothing here has an
-// IMDB id to give it).
-//
-// Both movies and series. A series item must carry `extra.season` and
-// `extra.episode`; without them there is no episode to ask for, and the call
-// is declined with an empty list rather than guessed at.
-
-const VAPLAYER_BASE =
-  globalThis.__vaplayerBaseUrl || 'https://streamdata.vaplayer.ru';
-
-const VAPLAYER_PROVIDER_KEY = 'vaplayer';
-
-// The upstream serves these only to its own embed host.
-const VAPLAYER_REFERER = 'https://nextgencloudfabric.com/';
-const VAPLAYER_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
-
-function vaplayerHeaders() {
-  return {
-    Accept: '*/*',
-    Referer: VAPLAYER_REFERER,
-    'User-Agent': VAPLAYER_UA,
-  };
-}
-
-// Reads `movie:<tmdbId>` / `series:<tmdbId>` references.
-function parseVaplayerRef(refId) {
-  if (typeof refId !== 'string') return null;
-  const episode = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
-  if (episode != null) {
-    return {
-      kind: 'series',
-      tmdbId: episode[1],
-      season: episode[2],
-      episode: episode[3],
-    };
-  }
-  const separator = refId.indexOf(':');
-  if (separator < 0) return null;
-  const kind = refId.slice(0, separator);
-  const tmdbId = refId.slice(separator + 1);
-  if ((kind !== 'movie' && kind !== 'series') || tmdbId.length === 0) {
-    return null;
-  }
-  return { kind, tmdbId, season: null, episode: null };
-}
-
-function vaplayerApiUrl(tmdbId, kind, season, episode) {
-  const base = `${VAPLAYER_BASE}/api.php?tmdb=${encodeURIComponent(tmdbId)}`;
-  if (kind === 'movie') return `${base}&type=movie`;
-  return (
-    `${base}&type=tv&season=${encodeURIComponent(season)}` +
-    `&episode=${encodeURIComponent(episode)}`
-  );
-}
-
-async function fetchVaplayer(url) {
-  let response;
-  try {
-    response = await fetch(url, { headers: vaplayerHeaders() });
-  } catch (_) {
-    return null;
-  }
-  if (response.status < 200 || response.status >= 300) return null;
-  try {
-    return JSON.parse(response.body);
-  } catch (_) {
-    return null;
-  }
-}
-
-function vaplayerStreamUrls(payload) {
-  const urls = payload && payload.data && payload.data.stream_urls;
-  if (!Array.isArray(urls)) return [];
-  return urls.filter((u) => typeof u === 'string' && u.length > 0);
-}
-
-// `default_subs` entries are `{lang, code, url}`. `lang` is the human label
-// ("Portuguese - Brazilian"); `code` is the two-letter tag the app groups by.
-function vaplayerSubtitles(payload) {
-  const subs = payload && payload.default_subs;
-  if (!Array.isArray(subs)) return [];
-  return subs
-    .filter((s) => s && typeof s.url === 'string' && s.url.length > 0)
-    .map((s) => ({
-      language: s.code || s.lang || '',
-      url: s.url,
-      label: s.lang || s.code || '',
-    }));
-}
-
-// Source ids carry everything resolve() needs to ask again, plus which of the
-// returned URLs this source stands for. The URL itself is deliberately *not*
-// baked in: resolve() has to re-fetch anyway to get the subtitles, which are
-// far too many to carry in an id.
-function encodeVaplayerSourceId(payload) {
-  const json = JSON.stringify({
-    m: payload.tmdbId,
-    k: payload.kind,
-    i: payload.index,
-    ...(payload.season != null
-      ? { s: payload.season, e: payload.episode }
-      : {}),
-  });
-  return base64ToBase64Url(host.codec.textToBase64(json));
-}
-
-function decodeVaplayerSourceId(encoded) {
-  const json = host.codec.base64ToText(base64UrlToBase64(encoded));
-  return JSON.parse(json);
-}
-
-// sources() — one entry per stream URL the upstream offers.
-//
-// This does fetch, unlike videasy.js's server list: how many URLs there are
-// is only known from the response, and offering a fixed number would mean
-// either inventing sources that don't resolve or hiding ones that do.
-async function vaplayerListSources(args) {
-  const item = args.item || {};
-  const refId = (item.ref && item.ref.id) || item.id || '';
-  const parsed = parseVaplayerRef(refId);
-  if (!parsed) return { sources: [] };
-
-  const isSeries = parsed.kind === 'series';
-  if (isSeries && (parsed.season == null || parsed.episode == null)) {
-    return { sources: [] };
-  }
-
-  const payload = await fetchVaplayer(
-    vaplayerApiUrl(parsed.tmdbId, parsed.kind, parsed.season, parsed.episode),
-  );
-  const urls = vaplayerStreamUrls(payload);
-
-  return {
-    sources: urls.map((_, index) => {
-      const id = `${VAPLAYER_PROVIDER_KEY}:${encodeVaplayerSourceId({
-        tmdbId: parsed.tmdbId,
-        kind: parsed.kind,
-        index,
-        season: isSeries ? parsed.season : null,
-        episode: isSeries ? parsed.episode : null,
-      })}`;
-      // The upstream distinguishes them in no way at all — they are
-      // The upstream gives these playlists no distinct names.
-      return {
-        id,
-        label: `VaPlayer ${index + 1}`,
-        provider: 'Nimora',
-        providerId: 'nimora.vaplayer',
-      };
-    }),
-  };
-}
-
-async function vaplayerResolveSource(sourceId) {
-  const prefix = `${VAPLAYER_PROVIDER_KEY}:`;
-  if (!sourceId.startsWith(prefix)) {
-    throw new Error(`Invalid VaPlayer sourceId: ${sourceId}`);
-  }
-  const payloadId = decodeVaplayerSourceId(sourceId.slice(prefix.length));
-  const { m: tmdbId, k: kind, i: index, s: season, e: episode } = payloadId;
-
-  const payload = await fetchVaplayer(
-    vaplayerApiUrl(tmdbId, kind, season, episode),
-  );
-  if (!payload) throw new Error('VaPlayer: failed to fetch sources');
-
-  const urls = vaplayerStreamUrls(payload);
-  // Re-fetched, so the list can be shorter than when the id was minted.
-  if (index >= urls.length) {
-    throw new Error('VaPlayer: stream no longer offered');
-  }
-
-  return {
-    url: urls[index],
-    format: 'hls',
-    headers: {
-      Referer: VAPLAYER_REFERER,
-      'User-Agent': VAPLAYER_UA,
-    },
-    subtitles: vaplayerSubtitles(payload),
-  };
-}
-
-// ---- registration — see kora.js's tail for the shared aggregator ----
-
-globalThis.__streamProviders = globalThis.__streamProviders || [];
-globalThis.__streamProviders.push({
-  providerKey: VAPLAYER_PROVIDER_KEY,
-  sources: vaplayerListSources,
-  resolve: (sourceId) => vaplayerResolveSource(sourceId),
-});
 
 // Sokuja anime streams, exposed as a stream provider for Nimora's VOD items.
 //

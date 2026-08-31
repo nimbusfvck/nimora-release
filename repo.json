@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.91",
+      "version": "0.6.92",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Reordered the movie and TV sources so VaPlayer and vidrock lead, FlyStream follows for the 4K ladder nothing else offers, and VidEasy trails after most of its entries failed to resolve; FlyStream's label no longer carries the ladder's top rung, which named a rendition the player does not open.",
         "Added the protocol-v2 segments role backed by IntroDB for TMDB episodes and AniSkip for AniList anime episodes.",
         "Added FlyStream as the first movie/TV source with fresh session-gated adaptive HLS resolution, and expanded source health checks to cover provider-specific endpoints and smoke flows.",
         "Switched FotMob's popular league curation to the US market while retaining Indonesian match localization and the WIB calendar, preventing domestic Indonesian competitions from being promoted into Football.",
@@ -111,7 +112,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "a39c19e6aab02b5d961a45cdb157f36db21b8ab1862281e58d9266b031b38448"
+      "bundleSha256": "baf8071829767f4e8358edc748ca2e880c1b610dde47232bc8a93d8c396be9e2"
     }
   ]
 }
