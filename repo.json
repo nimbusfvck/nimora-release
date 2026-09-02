@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.96",
+      "version": "0.6.97",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added external subtitle lookup for AniList episodes: Nimora maps the selected AniList episode through FlyStream's identity route, then fetches Shegu's direct subtitle tracks for the mapped TMDB season and episode.",
         "Fixed Sokuja returning no source for AniList episodes whose title is only `Shingeki no Kyojin`: a season-qualified Sokuja result such as `Shingeki no Kyojin Season 1` is now accepted even when AniList provides no episode air date.",
         "Fixed Attack on Titan episodes returning no anime sources: Sokuja now accepts its season-qualified title (`Shingeki no Kyojin Season 1`), and FlyStream resolves AniList episode IDs through its identity mapping before requesting streams.",
         "Removed MeteGol's fake per-stream quality claims: AlAngulo and FutbolLibre both printed the same \"720p\" on every single channel regardless of what actually played, so the label no longer states a quality the source never measured. Merged stream labels now also tag their origin site (Agenda18/AlAngulo/FutbolLibre/Deporflix), so identically named channels pulled from different sources under the same fixture (e.g. two \"Disney+\" entries) are no longer indistinguishable. Deporflix and FutbolLibre are disabled for now: Deporflix for its two-request chain and loose title matching, FutbolLibre for mostly relabeling AlAngulo's own channel pool (la18hd.su, streamtp-golden1.click) under a second near-identical name while covering fewer matches and streams.",
@@ -116,7 +117,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "20ecd46cff8e77be4c6dfa47d00de30fefeb0aa16900fc76f7ecf1bd776fd864"
+      "bundleSha256": "9b2eea21d2bb5ebdd2aecef05c6172707ea34c71a5cec2ce001e3a105be8ad2d"
     }
   ]
 }

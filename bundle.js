@@ -6815,11 +6815,50 @@ function parseSheguRef(refId) {
   return { kind, tmdbId, season: null, episode: null };
 }
 
+function parseSheguAnilistEpisode(refId, item) {
+  if (typeof refId !== 'string') return null;
+  const match = /^anilist:episode:(\d+):(\d+)$/.exec(refId);
+  if (match == null) return null;
+
+  const groupId = item && item.episode && typeof item.episode.groupId === 'string'
+    ? item.episode.groupId
+    : '';
+  const seasonMatch = /(?:^|:)season:(\d+)/i.exec(groupId);
+  return {
+    anilistId: match[1],
+    episode: match[2],
+    season: seasonMatch == null ? '1' : seasonMatch[1],
+  };
+}
+
 async function sheguExternalSubtitles(args) {
   const item = args.item || {};
   const refId = (item.ref && item.ref.id) || item.id || '';
   const parsed = parseSheguRef(refId);
-  if (!parsed) return { subtitles: [] };
+  if (!parsed) {
+    const anilistEpisode = parseSheguAnilistEpisode(refId, item);
+    if (
+      anilistEpisode == null ||
+      typeof flystreamResolveAnilistIdentity !== 'function'
+    ) {
+      return { subtitles: [] };
+    }
+    let identity;
+    try {
+      identity = await flystreamResolveAnilistIdentity(anilistEpisode, item);
+    } catch (_) {
+      return { subtitles: [] };
+    }
+    if (identity == null || typeof identity.tmdbId !== 'string') {
+      return { subtitles: [] };
+    }
+    const tracks = await fetchMovieSubtitles(
+      identity.tmdbId,
+      identity.season || anilistEpisode.season,
+      anilistEpisode.episode,
+    );
+    return { subtitles: tracks };
+  }
 
   const isSeries = parsed.kind === 'series';
   if (isSeries && (parsed.season == null || parsed.episode == null)) {
