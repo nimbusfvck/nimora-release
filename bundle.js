@@ -7159,11 +7159,14 @@ async function sokujaFindAnime(title, season, availableAt) {
   if (detail == null) return null;
   // A loose title match with dated episodes is a split-cour candidate. Without
   // an aired date, refusing it is safer than silently playing another cour.
+  // A title qualified with the requested season is not loose: Sokuja uses that
+  // form for the exact AniList cour when AniList does not provide an episode
+  // air date.
   const hasDatedEpisodes = sokujaEpisodes(detail.body).some(
     (entry) => sokujaDateKey(entry && entry.createdAt) != null,
   );
   const exact = sokujaNormalizeTitle(selected.result.title) === wanted;
-  if (!exact && hasDatedEpisodes) return null;
+  if (!exact && !selected.seasonExact && hasDatedEpisodes) return null;
   return { result: selected.result, detailBody: detail.body };
 }
 
