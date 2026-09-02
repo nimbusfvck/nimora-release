@@ -1319,7 +1319,9 @@ if (!globalThis.__extension.sources) {
 // FlyStream as a stream provider, over the host `fetch` API.
 //
 // flystream.net serves one adaptive HLS playlist per title from
-// `/api/streams`, keyed by TMDB id. It is worth the file because of what is
+// `/api/streams`, keyed by TMDB id. AniList episode refs use the site's
+// `/api/anilist/identity` mapping first, then enter the same TMDB-keyed flow.
+// It is worth the file because of what is
 // behind that playlist: a real 4K ladder (hvc1 2160p / avc1 1080p / 720p /
 // 360p, fMP4 segments) rather than the single re-encode most of the other
 // upstreams here hand back — verified by summing `#EXTINF` durations against
@@ -1589,6 +1591,10 @@ let flystreamCooldownUntilMs = 0;
 // One request, with a single retry reserved for the one failure a retry can
 // fix: a cookie the upstream no longer accepts.
 async function flystreamRequestStreams(query, { allowRetry = true } = {}) {
+  return flystreamRequestJson(flystreamStreamsUrl(query), { allowRetry });
+}
+
+async function flystreamRequestJson(url, { allowRetry = true } = {}) {
   if (Date.now() < flystreamCooldownUntilMs) return null;
 
   const cookie = await flystreamCookie();
@@ -1596,7 +1602,7 @@ async function flystreamRequestStreams(query, { allowRetry = true } = {}) {
 
   let response;
   try {
-    response = await fetch(flystreamStreamsUrl(query), {
+    response = await fetch(url, {
       headers: flystreamApiHeaders(cookie),
     });
   } catch (_) {
@@ -1621,7 +1627,7 @@ async function flystreamRequestStreams(query, { allowRetry = true } = {}) {
     // The cookie is the only thing a 403 here is ever about; mint a new one
     // and give the request exactly one more go.
     flystreamForgetCookie();
-    return flystreamRequestStreams(query, { allowRetry: false });
+    return flystreamRequestJson(url, { allowRetry: false });
   }
 
   if (response.status < 200 || response.status >= 300) return null;
@@ -1695,8 +1701,26 @@ function decodeFlystreamSourceId(encoded) {
 
 // ---- references ----
 
-// Reads `movie:<tmdbId>` and `series:<tmdbId>:season:<s>:episode:<e>`.
-function parseFlystreamRef(refId) {
+function flystreamEpisodeSeason(item) {
+  const episode = item && item.episode;
+  const groupId = episode && typeof episode.groupId === 'string'
+    ? episode.groupId
+    : '';
+  const match = /(?:^|:)season:(\d+)/i.exec(groupId);
+  return match == null ? '1' : match[1];
+}
+
+function flystreamSeriesTitle(item) {
+  const subtitle = item && typeof item.subtitle === 'string'
+    ? item.subtitle.trim()
+    : '';
+  if (subtitle) return subtitle;
+  return item && typeof item.title === 'string' ? item.title : '';
+}
+
+// Reads `movie:<tmdbId>`, `series:<tmdbId>:season:<s>:episode:<e>`, and
+// AniList's `anilist:episode:<id>:<episode>` protocol-v2 refs.
+function parseFlystreamRef(refId, item) {
   if (typeof refId !== 'string') return null;
   const episode = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
   if (episode != null) {
@@ -1707,12 +1731,68 @@ function parseFlystreamRef(refId) {
       episode: episode[3],
     };
   }
+  const anilistEpisode = /^anilist:episode:(\d+):(\d+)$/.exec(refId);
+  if (anilistEpisode != null) {
+    return {
+      type: 'tv',
+      tmdbId: null,
+      anilistId: anilistEpisode[1],
+      season: flystreamEpisodeSeason(item),
+      episode: anilistEpisode[2],
+    };
+  }
   const prefix = 'movie:';
   if (!refId.startsWith(prefix)) return null;
   const tmdbId = refId.slice(prefix.length);
   return tmdbId.length > 0
     ? { type: 'movie', tmdbId, season: null, episode: null }
     : null;
+}
+
+function flystreamAnilistIdentityUrl(parsed, item) {
+  const parts = [
+    `anilistId=${encodeURIComponent(parsed.anilistId)}`,
+    `title=${encodeURIComponent(flystreamSeriesTitle(item) || parsed.anilistId)}`,
+  ];
+  if (Number.isInteger(item && item.releaseYear)) {
+    parts.push(`year=${encodeURIComponent(String(item.releaseYear))}`);
+  }
+  return `${FLYSTREAM_BASE}/api/anilist/identity?${parts.join('&')}`;
+}
+
+function flystreamIdentity(payload) {
+  const candidates = [
+    payload,
+    payload && payload.data,
+    payload && payload.identity,
+    payload && payload.result,
+  ];
+  for (const candidate of candidates) {
+    if (candidate == null || typeof candidate !== 'object') continue;
+    for (const key of ['tmdbId', 'tmdb_id', 'tmdb']) {
+      const value = candidate[key];
+      let tmdbId = null;
+      if (Number.isInteger(value) && value > 0) tmdbId = String(value);
+      if (typeof value === 'string' && /^\d+$/.test(value)) tmdbId = value;
+      if (tmdbId == null) continue;
+
+      const season = candidate.season;
+      const mappedSeason = Number.isInteger(season) && season > 0
+        ? String(season)
+        : typeof season === 'string' && /^\d+$/.test(season)
+          ? season
+          : null;
+      return { tmdbId, season: mappedSeason };
+    }
+  }
+  return null;
+}
+
+async function flystreamResolveAnilistIdentity(parsed, item) {
+  const payload = await flystreamRequestJson(
+    flystreamAnilistIdentityUrl(parsed, item),
+  );
+  return flystreamIdentity(payload);
 }
 
 // ---- provider ----
@@ -1725,8 +1805,17 @@ async function flystreamListSources(args) {
 
   const item = args.item || {};
   const refId = (item.ref && item.ref.id) || item.id || '';
-  const parsed = parseFlystreamRef(refId);
+  const parsed = parseFlystreamRef(refId, item);
   if (parsed === null) return { sources: [] };
+
+  let tmdbId = parsed.tmdbId;
+  let season = parsed.season;
+  if (tmdbId == null) {
+    const identity = await flystreamResolveAnilistIdentity(parsed, item);
+    if (identity == null) return { sources: [] };
+    tmdbId = identity.tmdbId;
+    if (identity.season != null) season = identity.season;
+  }
 
   const payload = await flystreamRequestStreams({
     type: parsed.type,
@@ -1737,10 +1826,10 @@ async function flystreamListSources(args) {
     title:
       typeof item.title === 'string' && item.title.length > 0
         ? item.title
-        : parsed.tmdbId,
-    tmdbId: parsed.tmdbId,
+        : tmdbId,
+    tmdbId,
     year: Number.isInteger(item.releaseYear) ? item.releaseYear : null,
-    season: parsed.season,
+    season,
     episode: parsed.episode,
   });
 
@@ -6853,6 +6942,14 @@ function sokujaNormalizeTitle(title) {
     .toLowerCase();
 }
 
+function sokujaSeasonTitleMatch(title, wanted, season) {
+  if (!Number.isInteger(season) || season < 1) return false;
+  const normalized = sokujaNormalizeTitle(title);
+  const base = sokujaNormalizeTitle(wanted);
+  return normalized === `${base} season ${season}` ||
+    normalized === `${base} s${season}`;
+}
+
 function sokujaSearchResults(html) {
   const results = [];
   const cardPattern =
@@ -6884,6 +6981,7 @@ function sokujaSearchCandidates(results, title, season) {
       const normalized = sokujaNormalizeTitle(result.title);
       if (!normalized) return null;
       const exact = normalized === wanted;
+      const seasonExact = sokujaSeasonTitleMatch(result.title, wanted, season);
       const startsWith = normalized.startsWith(wanted);
       if (!exact && !startsWith) return null;
       const seasonMatch = season != null &&
@@ -6891,7 +6989,9 @@ function sokujaSearchCandidates(results, title, season) {
           .test(result.title);
       return {
         result,
-        score: (exact ? 0 : 10) + (seasonMatch ? -2 : 0) + index / 1000,
+        score: (seasonExact ? -4 : exact ? 0 : 10) +
+          (seasonMatch ? -2 : 0) + index / 1000,
+        seasonExact,
       };
     })
     .filter((entry) => entry != null)
@@ -7038,10 +7138,9 @@ async function sokujaFindAnime(title, season, availableAt) {
           matchedByDate: true,
         };
       }
-      if (
-        exactMatch == null &&
-        sokujaNormalizeTitle(candidate.result.title) === wanted
-      ) {
+      if (exactMatch == null &&
+          (sokujaNormalizeTitle(candidate.result.title) === wanted ||
+            candidate.seasonExact)) {
         exactMatch = { result: candidate.result, detailBody: detail.body };
       }
     }
