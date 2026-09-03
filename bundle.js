@@ -1318,7 +1318,7 @@ if (!globalThis.__extension.sources) {
 
 // FlyStream as a stream provider, over the host `fetch` API.
 //
-// flystream.net serves one adaptive HLS playlist per title from
+// flystream.net serves one or more adaptive HLS playlists per title from
 // `/api/streams`, keyed by TMDB id. AniList episode refs use the site's
 // `/api/anilist/identity` mapping first, then enter the same TMDB-keyed flow.
 // It is worth the file because of what is
@@ -1673,12 +1673,39 @@ function flystreamFormat(stream) {
 // `videoCodec` is deliberately ignored. The API reports "h264" for playlists
 // whose 2160p variant is plainly `hvc1`, so surfacing it would be stating
 // something wrong with more confidence than the API has earned.
-function flystreamLabel(index, total) {
-  // The API's `quality` names the top rung of the ladder, not what plays:
-  // the player opens at its own ceiling, so putting "2160p" on the label
-  // promised something the source does not keep. The counter is all that is
-  // left to carry, and only when there is more than one entry to tell apart.
-  return total > 1 ? `FlyStream ${index + 1}` : 'FlyStream';
+function flystreamQualityScore(stream) {
+  const explicit = stream && stream.quality;
+  const values = typeof explicit === 'string' && explicit.trim() !== ''
+    ? [explicit]
+    : Array.isArray(stream && stream.resolutions)
+      ? stream.resolutions
+      : [];
+  let score = 0;
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const match = /(?:^|[^0-9])(\d{3,4})\s*p?(?=$|[^a-z0-9])/i.exec(value);
+    if (match != null) {
+      score = Math.max(score, Number(match[1]));
+      continue;
+    }
+    if (/^4k$/i.test(value.trim())) score = Math.max(score, 2160);
+    if (/^2k$/i.test(value.trim())) score = Math.max(score, 1440);
+  }
+  return score;
+}
+
+function flystreamBestStream(streams) {
+  const candidates = [];
+  const seenUrls = new Set();
+  for (const [index, stream] of streams.entries()) {
+    if (stream == null || typeof stream !== 'object') continue;
+    const url = flystreamPlaybackUrl(stream.url);
+    if (url === null || seenUrls.has(url)) continue;
+    seenUrls.add(url);
+    candidates.push({ stream, url, index, quality: flystreamQualityScore(stream) });
+  }
+  candidates.sort((a, b) => b.quality - a.quality || a.index - b.index);
+  return candidates[0] || null;
 }
 
 // ---- source ids ----
@@ -1836,30 +1863,22 @@ async function flystreamListSources(args) {
   const streams =
     payload && Array.isArray(payload.streams) ? payload.streams : [];
 
-  const sources = [];
-  for (const stream of streams) {
-    if (stream == null || typeof stream !== 'object') continue;
-    const url = flystreamPlaybackUrl(stream.url);
-    if (url === null) continue;
+  const selected = flystreamBestStream(streams);
+  if (selected === null) return { sources: [] };
 
-    const format = flystreamFormat(stream);
-    const sourceId = `${FLYSTREAM_PROVIDER_KEY}:${encodeFlystreamSourceId({
-      url,
-      format,
-    })}`;
-    sources.push({
+  const format = flystreamFormat(selected.stream);
+  const sourceId = `${FLYSTREAM_PROVIDER_KEY}:${encodeFlystreamSourceId({
+    url: selected.url,
+    format,
+  })}`;
+  return {
+    sources: [{
       id: sourceId,
-      label: sourceAliasWithQuality(
-        sourceId,
-        'FlyStream',
-        flystreamLabel(sources.length, streams.length),
-      ),
+      label: sourceAliasWithQuality(sourceId, 'FlyStream', 'FlyStream'),
       provider: 'Nimora',
       providerId: FLYSTREAM_PROVIDER_ID,
-    });
-  }
-
-  return { sources };
+    }],
+  };
 }
 
 async function flystreamResolveSource(sourceId) {
