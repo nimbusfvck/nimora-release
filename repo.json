@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.98",
+      "version": "0.6.99",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added partial source discovery: playback starts from the first non-empty provider result while the complete provider fan-out continues in the background for source switching and fallback.",
         "Reduced FlyStream to one de-duplicated highest-quality source per title while keeping the source label generic so quality remains a player-level choice.",
         "Added external subtitle lookup for AniList episodes: Nimora maps the selected AniList episode through FlyStream's identity route, then fetches Shegu's direct subtitle tracks for the mapped TMDB season and episode.",
         "Fixed Sokuja returning no source for AniList episodes whose title is only `Shingeki no Kyojin`: a season-qualified Sokuja result such as `Shingeki no Kyojin Season 1` is now accepted even when AniList provides no episode air date.",
@@ -118,7 +119,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "00a2724930420570f56328a727bebf09d130136384aa62452a37ba9f3025516b"
+      "bundleSha256": "5e8b4f5b71c7ccd57e2e74b0a2d7041c47ee5c76de2bd80adf42c0eb0ecfdbe9"
     }
   ]
 }

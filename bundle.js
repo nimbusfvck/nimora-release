@@ -1300,10 +1300,32 @@ globalThis.__streamProviders.push({
 globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.sources) {
   globalThis.__extension.sources = async (args) => {
-    const perProvider = await Promise.all(
-      globalThis.__streamProviders.map((p) => p.sources(args).catch(() => ({ sources: [] }))),
+    const calls = globalThis.__streamProviders.map((p) =>
+      Promise.resolve()
+        .then(() => p.sources(args))
+        .catch(() => ({ sources: [] })),
     );
-    return { sources: perProvider.flatMap((r) => r.sources) };
+    if (args.fast !== true) {
+      const perProvider = await Promise.all(calls);
+      return { sources: perProvider.flatMap((r) => r.sources) };
+    }
+    return new Promise((resolve) => {
+      let remaining = calls.length;
+      let returned = false;
+      for (const call of calls) {
+        call.then((result) => {
+          if (returned) return;
+          const sources = Array.isArray(result.sources) ? result.sources : [];
+          if (sources.length > 0) {
+            returned = true;
+            resolve({ sources });
+            return;
+          }
+          remaining -= 1;
+          if (remaining === 0) resolve({ sources: [] });
+        });
+      }
+    });
   };
   globalThis.__extension.resolve = async (args) => {
     const sourceId = args.sourceId;
@@ -1916,12 +1938,32 @@ globalThis.__streamProviders.push({
 globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.sources) {
   globalThis.__extension.sources = async (args) => {
-    const perProvider = await Promise.all(
-      globalThis.__streamProviders.map((p) =>
-        p.sources(args).catch(() => ({ sources: [] })),
-      ),
+    const calls = globalThis.__streamProviders.map((p) =>
+      Promise.resolve()
+        .then(() => p.sources(args))
+        .catch(() => ({ sources: [] })),
     );
-    return { sources: perProvider.flatMap((r) => r.sources) };
+    if (args.fast !== true) {
+      const perProvider = await Promise.all(calls);
+      return { sources: perProvider.flatMap((r) => r.sources) };
+    }
+    return new Promise((resolve) => {
+      let remaining = calls.length;
+      let returned = false;
+      for (const call of calls) {
+        call.then((result) => {
+          if (returned) return;
+          const sources = Array.isArray(result.sources) ? result.sources : [];
+          if (sources.length > 0) {
+            returned = true;
+            resolve({ sources });
+            return;
+          }
+          remaining -= 1;
+          if (remaining === 0) resolve({ sources: [] });
+        });
+      }
+    });
   };
   globalThis.__extension.resolve = async (args) => {
     const sourceId = args.sourceId;
@@ -2813,12 +2855,32 @@ globalThis.__streamProviders.push({
 globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.sources) {
   globalThis.__extension.sources = async (args) => {
-    const perProvider = await Promise.all(
-      globalThis.__streamProviders.map((p) =>
-        p.sources(args).catch(() => ({ sources: [] })),
-      ),
+    const calls = globalThis.__streamProviders.map((p) =>
+      Promise.resolve()
+        .then(() => p.sources(args))
+        .catch(() => ({ sources: [] })),
     );
-    return { sources: perProvider.flatMap((r) => r.sources) };
+    if (args.fast !== true) {
+      const perProvider = await Promise.all(calls);
+      return { sources: perProvider.flatMap((r) => r.sources) };
+    }
+    return new Promise((resolve) => {
+      let remaining = calls.length;
+      let returned = false;
+      for (const call of calls) {
+        call.then((result) => {
+          if (returned) return;
+          const sources = Array.isArray(result.sources) ? result.sources : [];
+          if (sources.length > 0) {
+            returned = true;
+            resolve({ sources });
+            return;
+          }
+          remaining -= 1;
+          if (remaining === 0) resolve({ sources: [] });
+        });
+      }
+    });
   };
   globalThis.__extension.resolve = async (args) => {
     const sourceId = args.sourceId;
@@ -4694,10 +4756,32 @@ globalThis.__streamProviders.push({
 globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.sources) {
   globalThis.__extension.sources = async (args) => {
-    const perProvider = await Promise.all(
-      globalThis.__streamProviders.map((p) => p.sources(args).catch(() => ({ sources: [] }))),
+    const calls = globalThis.__streamProviders.map((p) =>
+      Promise.resolve()
+        .then(() => p.sources(args))
+        .catch(() => ({ sources: [] })),
     );
-    return { sources: perProvider.flatMap((r) => r.sources) };
+    if (args.fast !== true) {
+      const perProvider = await Promise.all(calls);
+      return { sources: perProvider.flatMap((r) => r.sources) };
+    }
+    return new Promise((resolve) => {
+      let remaining = calls.length;
+      let returned = false;
+      for (const call of calls) {
+        call.then((result) => {
+          if (returned) return;
+          const sources = Array.isArray(result.sources) ? result.sources : [];
+          if (sources.length > 0) {
+            returned = true;
+            resolve({ sources });
+            return;
+          }
+          remaining -= 1;
+          if (remaining === 0) resolve({ sources: [] });
+        });
+      }
+    });
   };
   globalThis.__extension.resolve = async (args) => {
     const sourceId = args.sourceId;
@@ -5422,12 +5506,32 @@ globalThis.__streamProviders.push({
 globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.sources) {
   globalThis.__extension.sources = async (args) => {
-    const perProvider = await Promise.all(
-      globalThis.__streamProviders.map((provider) =>
-        provider.sources(args).catch(() => ({ sources: [] })),
-      ),
+    const calls = globalThis.__streamProviders.map((provider) =>
+      Promise.resolve()
+        .then(() => provider.sources(args))
+        .catch(() => ({ sources: [] })),
     );
-    return { sources: perProvider.flatMap((result) => result.sources) };
+    if (args.fast !== true) {
+      const perProvider = await Promise.all(calls);
+      return { sources: perProvider.flatMap((result) => result.sources) };
+    }
+    return new Promise((resolve) => {
+      let remaining = calls.length;
+      let returned = false;
+      for (const call of calls) {
+        call.then((result) => {
+          if (returned) return;
+          const sources = Array.isArray(result.sources) ? result.sources : [];
+          if (sources.length > 0) {
+            returned = true;
+            resolve({ sources });
+            return;
+          }
+          remaining -= 1;
+          if (remaining === 0) resolve({ sources: [] });
+        });
+      }
+    });
   };
   globalThis.__extension.resolve = async (args) => {
     const sourceId = args.sourceId;
@@ -7562,12 +7666,32 @@ globalThis.__streamProviders.push({
 globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.sources) {
   globalThis.__extension.sources = async (args) => {
-    const perProvider = await Promise.all(
-      globalThis.__streamProviders.map((provider) =>
-        provider.sources(args).catch(() => ({ sources: [] })),
-      ),
+    const calls = globalThis.__streamProviders.map((provider) =>
+      Promise.resolve()
+        .then(() => provider.sources(args))
+        .catch(() => ({ sources: [] })),
     );
-    return { sources: perProvider.flatMap((result) => result.sources) };
+    if (args.fast !== true) {
+      const perProvider = await Promise.all(calls);
+      return { sources: perProvider.flatMap((result) => result.sources) };
+    }
+    return new Promise((resolve) => {
+      let remaining = calls.length;
+      let returned = false;
+      for (const call of calls) {
+        call.then((result) => {
+          if (returned) return;
+          const sources = Array.isArray(result.sources) ? result.sources : [];
+          if (sources.length > 0) {
+            returned = true;
+            resolve({ sources });
+            return;
+          }
+          remaining -= 1;
+          if (remaining === 0) resolve({ sources: [] });
+        });
+      }
+    });
   };
   globalThis.__extension.resolve = async (args) => {
     const sourceId = args.sourceId;
@@ -9662,12 +9786,32 @@ if (!globalThis.__extension.catalog) {
 }
 if (!globalThis.__extension.sources) {
   globalThis.__extension.sources = async (args) => {
-    const perProvider = await Promise.all(
-      globalThis.__streamProviders.map((provider) =>
-        provider.sources(args).catch(() => ({ sources: [] })),
-      ),
+    const calls = globalThis.__streamProviders.map((provider) =>
+      Promise.resolve()
+        .then(() => provider.sources(args))
+        .catch(() => ({ sources: [] })),
     );
-    return { sources: perProvider.flatMap((result) => result.sources) };
+    if (args.fast !== true) {
+      const perProvider = await Promise.all(calls);
+      return { sources: perProvider.flatMap((result) => result.sources) };
+    }
+    return new Promise((resolve) => {
+      let remaining = calls.length;
+      let returned = false;
+      for (const call of calls) {
+        call.then((result) => {
+          if (returned) return;
+          const sources = Array.isArray(result.sources) ? result.sources : [];
+          if (sources.length > 0) {
+            returned = true;
+            resolve({ sources });
+            return;
+          }
+          remaining -= 1;
+          if (remaining === 0) resolve({ sources: [] });
+        });
+      }
+    });
   };
   globalThis.__extension.resolve = async (args) => {
     const sourceId = args.sourceId;
