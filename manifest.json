@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "0.6.103",
+  "version": "0.6.104",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -82,6 +82,22 @@
       "name": "MeteGol",
       "roles": [
         "stream"
+      ]
+    },
+    {
+      "id": "nimora.klikxxi",
+      "name": "KlikXXi",
+      "roles": [
+        "catalog",
+        "stream"
+      ],
+      "catalogs": [
+        {
+          "id": "dracin_shorts",
+          "name": "Dracin Shorts",
+          "categories": [],
+          "surface": "preview"
+        }
       ]
     },
     {
@@ -196,22 +212,6 @@
           "kind": "movie",
           "display": "row",
           "contentRating": "mature"
-        }
-      ]
-    },
-    {
-      "id": "nimora.klikxxi",
-      "name": "KlikXXi",
-      "roles": [
-        "catalog",
-        "stream"
-      ],
-      "catalogs": [
-        {
-          "id": "dracin_shorts",
-          "name": "Dracin Shorts",
-          "categories": [],
-          "surface": "preview"
         }
       ]
     },

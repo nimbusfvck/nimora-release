@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.103",
+      "version": "0.6.104",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Put Dracin Shorts ahead of TMDB in the Shorts feed so the first item is no longer a TMDB coming-soon title.",
         "Hardened the KlikXXi Dracin release health smoke to try every player tab and select a supported Hexload stream when the first tab uses another server.",
         "Added Dracin Shorts from KlikXXi: the latest portrait episodes are exposed as Shorts items and resolved through Muvipro AJAX to direct Hexload MP4 streams, with provider-specific health coverage.",
         "Replaced the all-time popular movie and series shelves with Top Movies All Time and Top Series All Time, ranked by TMDB rating with a minimum of 1,000 votes.",
