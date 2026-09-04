@@ -5919,6 +5919,23 @@ async function fetchTopRated(mediaType) {
   return page.items;
 }
 
+// A minimum vote count keeps a tiny number of perfect scores from defining
+// the all-time shelves. This is deliberately higher than the country shelves
+// because these lists promise a broad, established ranking.
+const TMDB_ALL_TIME_MIN_VOTE_COUNT = 1000;
+
+async function fetchTopRatedAllTimePage(mediaType, page) {
+  return fetchDiscoverPage(mediaType, {
+    sort_by: 'vote_average.desc',
+    'vote_count.gte': TMDB_ALL_TIME_MIN_VOTE_COUNT,
+  }, tmdbRequestedPage(page));
+}
+
+async function fetchTopRatedAllTime(mediaType) {
+  const page = await fetchTopRatedAllTimePage(mediaType, 1);
+  return page.items;
+}
+
 async function fetchPopularPage(mediaType, page) {
   const requestedPage = tmdbRequestedPage(page);
   const data = await tmdbGetJson(`/${mediaType}/popular`, {
@@ -6202,11 +6219,11 @@ const HIGHLIGHT_GROUPS = [
     },
   },
   {
-    id: 'popular_movie_all_time',
-    name: 'Popular Movies All Time',
-    fetch: () => fetchPopular('movie'),
+    id: 'top_movie_all_time',
+    name: 'Top Movies All Time',
+    fetch: () => fetchTopRatedAllTime('movie'),
     fetchPage: async (page) => {
-      const result = await fetchPopularPage('movie', page);
+      const result = await fetchTopRatedAllTimePage('movie', page);
       return {
         items: result.items,
         nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
@@ -6214,11 +6231,11 @@ const HIGHLIGHT_GROUPS = [
     },
   },
   {
-    id: 'popular_tv_all_time',
-    name: 'Popular Series All Time',
-    fetch: () => fetchPopular('tv'),
+    id: 'top_tv_all_time',
+    name: 'Top Series All Time',
+    fetch: () => fetchTopRatedAllTime('tv'),
     fetchPage: async (page) => {
-      const result = await fetchPopularPage('tv', page);
+      const result = await fetchTopRatedAllTimePage('tv', page);
       return {
         items: result.items,
         nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
