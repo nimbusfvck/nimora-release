@@ -9082,6 +9082,14 @@ function klikxxiDecode(value) {
   try { return JSON.parse(host.codec.base64ToText(encoded)); } catch (_) { return null; }
 }
 
+function klikxxiSeriesRef(series) {
+  return {
+    extensionId: 'nimora',
+    providerId: KLIKXXI_PROVIDER_ID,
+    id: `${KLIKXXI_PROVIDER_KEY}:series:${klikxxiEncode({ u: series.url })}`,
+  };
+}
+
 function klikxxiEpisodeItem(series, episode) {
   const payload = {
     u: episode.url,
@@ -9100,6 +9108,7 @@ function klikxxiEpisodeItem(series, episode) {
     title: `${series.title} · Episode ${episode.episode}`,
     subtitle: `Season ${episode.season} · Episode ${episode.episode}`,
     episode: {
+      parentRef: klikxxiSeriesRef(series),
       groupId: `season:${episode.season}`,
       position: episode.episode,
     },

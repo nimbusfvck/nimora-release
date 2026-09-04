@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.104",
+      "version": "0.6.105",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Dracin Shorts items being discarded by the app because episode metadata was missing its protocol-v2 parent reference.",
         "Put Dracin Shorts ahead of TMDB in the Shorts feed so the first item is no longer a TMDB coming-soon title.",
         "Hardened the KlikXXi Dracin release health smoke to try every player tab and select a supported Hexload stream when the first tab uses another server.",
         "Added Dracin Shorts from KlikXXi: the latest portrait episodes are exposed as Shorts items and resolved through Muvipro AJAX to direct Hexload MP4 streams, with provider-specific health coverage.",
@@ -125,7 +126,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "b82b36c8e024ba951db4da994749c41fedf67d358c5cdb4b415d694c8632d974"
+      "bundleSha256": "ae5b14f1d936f01ebc5d3f86c5fc7227ec2808dbe9cf79b395dd8363ac1ce185"
     }
   ]
 }
