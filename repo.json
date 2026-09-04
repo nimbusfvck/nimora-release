@@ -3,13 +3,15 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.99",
+      "version": "0.6.100",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added paginated Popular Movies All Time and Popular Series All Time shelves, lowered the Korean and Indonesian shelf vote threshold to 5, and added movie collection metadata above recommendations in detail.",
+        "Switched TMDB detail recommendations to the dedicated recommendations endpoint, with similar titles retained only as a fallback.",
         "Added partial source discovery: playback starts from the first non-empty provider result while the complete provider fan-out continues in the background for source switching and fallback.",
         "Reduced FlyStream to one de-duplicated highest-quality source per title while keeping the source label generic so quality remains a player-level choice.",
         "Added external subtitle lookup for AniList episodes: Nimora maps the selected AniList episode through FlyStream's identity route, then fetches Shegu's direct subtitle tracks for the mapped TMDB season and episode.",
@@ -119,7 +121,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "5e8b4f5b71c7ccd57e2e74b0a2d7041c47ee5c76de2bd80adf42c0eb0ecfdbe9"
+      "bundleSha256": "ade59f751d61d0d99304a46396906d5d0779564b98ad5c82724c47d621c63e56"
     }
   ]
 }

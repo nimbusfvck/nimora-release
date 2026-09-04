@@ -5919,6 +5919,25 @@ async function fetchTopRated(mediaType) {
   return page.items;
 }
 
+async function fetchPopularPage(mediaType, page) {
+  const requestedPage = tmdbRequestedPage(page);
+  const data = await tmdbGetJson(`/${mediaType}/popular`, {
+    page: requestedPage,
+    include_adult: 'false',
+  });
+  const results = Array.isArray(data.results) ? data.results : [];
+  return {
+    items: results.map((r) => tmdbToMediaItem(r, mediaType)),
+    page: typeof data.page === 'number' ? data.page : requestedPage,
+    totalPages: typeof data.total_pages === 'number' ? data.total_pages : requestedPage,
+  };
+}
+
+async function fetchPopular(mediaType) {
+  const page = await fetchPopularPage(mediaType, 1);
+  return page.items;
+}
+
 // TMDB does not expose a dedicated "popular by country" list. Keep the
 // country-specific values in data so adding another country only needs one
 // entry here. Shelf titles intentionally follow `Popular <Country> Series &
@@ -5940,7 +5959,7 @@ async function fetchPopularCountryMediaTypePage(country, mediaType, page) {
     with_origin_country: country.originCountry,
     with_original_language: country.originalLanguage,
     sort_by: 'popularity.desc',
-    'vote_count.gte': 50,
+    'vote_count.gte': 5,
   });
   const results = Array.isArray(data.results) ? data.results : [];
   return {
@@ -6176,6 +6195,30 @@ const HIGHLIGHT_GROUPS = [
     fetch: () => fetchTopRated('tv'),
     fetchPage: async (page) => {
       const result = await fetchTopRatedPage('tv', page);
+      return {
+        items: result.items,
+        nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
+      };
+    },
+  },
+  {
+    id: 'popular_movie_all_time',
+    name: 'Popular Movies All Time',
+    fetch: () => fetchPopular('movie'),
+    fetchPage: async (page) => {
+      const result = await fetchPopularPage('movie', page);
+      return {
+        items: result.items,
+        nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
+      };
+    },
+  },
+  {
+    id: 'popular_tv_all_time',
+    name: 'Popular Series All Time',
+    fetch: () => fetchPopular('tv'),
+    fetchPage: async (page) => {
+      const result = await fetchPopularPage('tv', page);
       return {
         items: result.items,
         nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
@@ -6540,11 +6583,9 @@ async function tmdbSeasonsOf(tvId, showData) {
   );
 }
 
-// Similar results are optional metadata. Keep the detail response usable when
-// TMDB's recommendation endpoint is unavailable or returns an empty page.
-async function tmdbSimilarOf(tmdbId, mediaType) {
+async function tmdbRelatedPage(tmdbId, mediaType, relation) {
   try {
-    const data = await tmdbGetJson(`/${mediaType}/${tmdbId}/similar`, {
+    const data = await tmdbGetJson(`/${mediaType}/${tmdbId}/${relation}`, {
       page: 1,
       include_adult: 'false',
     });
@@ -6557,6 +6598,36 @@ async function tmdbSimilarOf(tmdbId, mediaType) {
   } catch (_) {
     return [];
   }
+}
+
+async function tmdbCollectionOf(collectionId) {
+  if (collectionId == null) return null;
+  try {
+    const data = await tmdbGetJson(`/collection/${collectionId}`, {
+      include_adult: 'false',
+    });
+    const parts = Array.isArray(data.parts) ? data.parts : [];
+    const items = parts
+      .filter((part) => part && part.id != null)
+      .map((part) => tmdbToMediaItem(part, 'movie'));
+    if (items.length === 0) return null;
+    return {
+      id: String(data.id || collectionId),
+      name: data.name || 'Collection',
+      items,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+// Recommendations are the primary detail shelf. Similar is only a fallback:
+// TMDB's similar endpoint is based on genres and keywords and can be loose.
+async function tmdbRecommendationsOf(tmdbId, mediaType) {
+  const recommendations = await tmdbRelatedPage(tmdbId, mediaType, 'recommendations');
+  return recommendations.length > 0
+    ? recommendations
+    : tmdbRelatedPage(tmdbId, mediaType, 'similar');
 }
 
 async function tmdbMovieMeta(tmdbId) {
@@ -6574,13 +6645,16 @@ async function tmdbMovieMeta(tmdbId) {
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;
   const trailers = tmdbTrailers(data);
-  const [previewResponse, recommendations] = await Promise.all([
+  const collectionId = data.belongs_to_collection && data.belongs_to_collection.id;
+  const [previewResponse, recommendations, collection] = await Promise.all([
     sheguVideoTrailer(tmdbId, 'movie'),
-    tmdbSimilarOf(tmdbId, 'movie'),
+    tmdbRecommendationsOf(tmdbId, 'movie'),
+    tmdbCollectionOf(collectionId),
   ]);
   const preview = sheguPreviewWithThumbnail(previewResponse, trailers);
   if (preview != null) trailers.unshift(preview);
   if (trailers.length > 0) detail.trailers = trailers;
+  if (collection != null) detail.collection = collection;
   if (recommendations.length > 0) detail.recommendations = recommendations;
   return detail;
 }
@@ -6602,7 +6676,7 @@ async function tmdbTvMeta(tmdbId) {
   const trailers = tmdbTrailers(data);
   const [previewResponse, recommendations] = await Promise.all([
     sheguVideoTrailer(tmdbId, 'tv'),
-    tmdbSimilarOf(tmdbId, 'tv'),
+    tmdbRecommendationsOf(tmdbId, 'tv'),
   ]);
   const preview = sheguPreviewWithThumbnail(previewResponse, trailers);
   if (preview != null) trailers.unshift(preview);
@@ -7908,7 +7982,7 @@ function indomaxDetailTrailer(html) {
 }
 
 async function indomaxTmdbRecommendations(title, detailUrl) {
-  if (typeof tmdbSearchType !== 'function' || typeof tmdbSimilarOf !== 'function') return [];
+  if (typeof tmdbSearchType !== 'function' || typeof tmdbRecommendationsOf !== 'function') return [];
   const mediaType = /\/tv\//i.test(detailUrl) ? 'tv' : 'movie';
   const extraParams = mediaType === 'movie' ? { region: 'US' } : {};
   const searchResults = await tmdbSearchType(mediaType, title, 1, extraParams);
@@ -7929,7 +8003,7 @@ async function indomaxTmdbRecommendations(title, detailUrl) {
     .filter((entry) => entry != null)
     .sort((a, b) => a.score - b.score);
   if (matches.length === 0) return [];
-  return tmdbSimilarOf(String(matches[0].id), mediaType);
+  return tmdbRecommendationsOf(String(matches[0].id), mediaType);
 }
 
 function indomaxSeasonNumber(value) {
