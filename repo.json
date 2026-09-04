@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.109",
+      "version": "0.6.110",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added an active Indomax catalog mirror fallback so the NSFW catalog still loads when `idmxl.ink` returns a blocked response before redirecting.",
         "Changed Savefilm to an NSFW catalog-only provider: matched titles now use TMDB refs so the regular movie/TV stream providers handle playback, while Indomax keeps its own NSFW catalog and streams.",
         "Refined the Savefilm health smoke to validate a current homepage movie through its active player tab and TurboVidHLS HLS playlist.",
         "Fixed the Savefilm source health smoke to follow the active homepage movie and its `?player=N` tabs before validating the TurboVidHLS HLS playlist.",
@@ -130,7 +131,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "481397f69ff6b446d10d1c633a518db5a53338b7d47ce30e5ca961d75f237440"
+      "bundleSha256": "c5194ac297126eb3b60d8e2568a307ca8ecb5323c15da71a0fa7bc529683ba60"
     }
   ]
 }

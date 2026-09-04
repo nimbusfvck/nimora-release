@@ -7802,6 +7802,9 @@ if (!globalThis.__extension.sources) {
 // ImaxStreams; this file owns both the discovery path and that extractor.
 
 const INDOMAX_DEFAULT_BASE = 'https://idmxl.ink';
+const INDOMAX_CATALOG_FALLBACK_BASES = [
+  'https://akses5.indomax21.xyz',
+];
 const INDOMAX_DIRECTORY =
   globalThis.__indomaxDirectoryUrl ||
   'https://raw.githubusercontent.com/Asm0d3usX/CloudX/builds/Website.json';
@@ -8200,12 +8203,25 @@ async function indomaxCategoryCatalog(query, categoryId, title, subCategories) {
     : categoryId;
   const requestedPage = Number(query && query.page);
   const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
-  const url = indomaxCategoryUrl(base, selectedCategoryId, page);
-  const response = await indomaxGet(url, `${base}/`);
+  const candidates = [
+    base,
+    ...INDOMAX_CATALOG_FALLBACK_BASES.filter((candidate) => candidate !== base),
+  ];
+  let response = null;
+  let activeBase = base;
+  for (const candidate of candidates) {
+    const url = indomaxCategoryUrl(candidate, selectedCategoryId, page);
+    response = await indomaxGet(url, `${candidate}/`);
+    if (response != null) {
+      activeBase = candidate;
+      break;
+    }
+  }
   if (response == null) {
     return { sections: [], subCategories };
   }
-  const results = indomaxSearchResults(response.body, base);
+  indomaxBase = activeBase;
+  const results = indomaxSearchResults(response.body, activeBase);
   const result = {
     sections: [{
       id: selectedCategoryId,
