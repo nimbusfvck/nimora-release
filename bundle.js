@@ -7802,9 +7802,10 @@ if (!globalThis.__extension.sources) {
 // ImaxStreams; this file owns both the discovery path and that extractor.
 
 const INDOMAX_DEFAULT_BASE = 'https://idmxl.ink';
-const INDOMAX_CATALOG_FALLBACK_BASES = [
-  'https://akses5.indomax21.xyz',
-];
+const INDOMAX_CATALOG_FALLBACK_BASES = Array.from(
+  { length: 10 },
+  (_, index) => `https://akses${index + 1}.indomax21.xyz`,
+);
 const INDOMAX_DIRECTORY =
   globalThis.__indomaxDirectoryUrl ||
   'https://raw.githubusercontent.com/Asm0d3usX/CloudX/builds/Website.json';
@@ -8110,7 +8111,12 @@ function indomaxDetailEpisodeGroups(html, parentRef, poster, base) {
 async function indomaxGet(url, referer) {
   try {
     const response = await fetch(url, { headers: indomaxHeaders(referer) });
-    return response.status >= 200 && response.status < 300 ? response : null;
+    if (response.status < 200 || response.status >= 300) return null;
+    if (typeof response.url === 'string') {
+      const finalBase = /^(https?:\/\/[^/]+)/i.exec(response.url)?.[1];
+      if (finalBase) indomaxBase = finalBase;
+    }
+    return response;
   } catch (_) {
     return null;
   }
