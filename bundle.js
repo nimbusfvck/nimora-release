@@ -9312,12 +9312,11 @@ globalThis.__previewProviders.push({
   preview: klikxxiPreview,
 });
 
-// Savefilm21 catalogue and direct TurboVidHLS streams.
+// Savefilm21 NSFW catalogue.
 //
-// CloudX's Savefilm extension delegates every player iframe to CloudStream's
-// generic extractor registry. Nimora does not ship that registry, so this
-// adapter keeps the stable, directly discoverable TurboVidHLS path and returns
-// its HLS playlist to the native player.
+// Savefilm pages are used for discovery only. Their player chain is not a
+// stable Nimora stream source, so catalog items are mapped to TMDB refs and
+// the regular movie/TV stream providers own playback.
 
 const SAVEFILM_DEFAULT_BASE = 'https://new13.savefilm21info.com';
 const SAVEFILM_DIRECTORY =
@@ -9473,19 +9472,45 @@ function savefilmDecode(value) {
   try { return JSON.parse(host.codec.base64ToText(encoded)); } catch (_) { return null; }
 }
 
-function savefilmCatalogItem(result) {
-  const item = {
-    ref: {
-      extensionId: 'nimora',
-      providerId: SAVEFILM_PROVIDER_ID,
-      id: `${SAVEFILM_PROVIDER_KEY}:catalog:${savefilmEncode({ u: result.url })}`,
-    },
-    kind: /\/tv\//i.test(result.url) ? 'series' : 'video',
-    title: result.title,
-  };
-  if (result.poster) item.artwork = { portrait: { url: result.poster } };
-  if (Number.isFinite(result.rating)) item.rating = result.rating;
-  if (Number.isInteger(result.year)) item.releaseYear = result.year;
+function savefilmTmdbYear(result) {
+  const value = result && (result.release_date || result.first_air_date);
+  const year = typeof value === 'string' ? Number(value.slice(0, 4)) : NaN;
+  return Number.isInteger(year) && year > 0 ? year : null;
+}
+
+async function savefilmCatalogItem(result) {
+  const mediaType = /\/tv\//i.test(result.url) ? 'tv' : 'movie';
+  if (typeof tmdbSearchType !== 'function' || typeof tmdbToMediaItem !== 'function') {
+    return null;
+  }
+  const matches = await tmdbSearchType(mediaType, result.title, 1, {
+    include_adult: 'true',
+  });
+  const wanted = savefilmNormalize(result.title);
+  const scored = matches.map((entry, index) => {
+    const candidate = entry && entry.result;
+    const candidateTitle = savefilmNormalize(candidate && (candidate.title || candidate.name));
+    if (!candidate || candidate.id == null || !candidateTitle) return null;
+    const exact = candidateTitle === wanted;
+    const overlap = candidateTitle.includes(wanted) || wanted.includes(candidateTitle);
+    if (!exact && !overlap) return null;
+    const candidateYear = savefilmTmdbYear(candidate);
+    const yearDelta = Number.isInteger(result.year) && candidateYear != null
+      ? Math.abs(result.year - candidateYear) : 0;
+    return {
+      result: candidate,
+      score: (exact ? 0 : 20) + yearDelta + index / 1000,
+    };
+  }).filter((entry) => entry != null).sort((a, b) => a.score - b.score);
+  if (scored.length === 0) return null;
+
+  const item = tmdbToMediaItem(scored[0].result, mediaType);
+  if (!item || !item.ref || typeof item.ref.id !== 'string') return null;
+  if (!item.artwork && result.poster) {
+    item.artwork = { portrait: { url: result.poster } };
+  } else if (result.poster && !item.artwork.portrait) {
+    item.artwork.portrait = { url: result.poster };
+  }
   return item;
 }
 
@@ -9508,11 +9533,13 @@ async function savefilmNsfwCatalog(query) {
   const response = await savefilmGet(url, `${base}/`);
   if (response == null) return { sections: [{ id: 'savefilm-adult', title: 'Savefilm Adult', items: [] }] };
   const results = savefilmParseArticles(response.body, base);
+  const items = (await Promise.all(results.map(savefilmCatalogItem)))
+    .filter((item) => item != null);
   const result = {
     sections: [{
       id: 'savefilm-adult',
       title: 'Savefilm Adult',
-      items: results.map(savefilmCatalogItem),
+      items,
     }],
   };
   if (savefilmHasNextPage(response.body)) result.nextPage = String(page + 1);
@@ -9831,19 +9858,6 @@ async function savefilmResolveSource(sourceId) {
     },
   };
 }
-
-globalThis.__streamProviders = globalThis.__streamProviders || [];
-globalThis.__streamProviders.push({
-  providerKey: SAVEFILM_PROVIDER_KEY,
-  sources: savefilmSources,
-  resolve: savefilmResolveSource,
-});
-
-globalThis.__metaProviders = globalThis.__metaProviders || [];
-globalThis.__metaProviders.push({
-  providerId: SAVEFILM_PROVIDER_ID,
-  meta: savefilmMeta,
-});
 
 globalThis.__catalogProviders = globalThis.__catalogProviders || [];
 globalThis.__catalogProviders.push({
