@@ -9458,9 +9458,9 @@ globalThis.__previewProviders.push({
 
 // Savefilm21 NSFW catalogue.
 //
-// Savefilm pages are used for discovery only. Their player chain is not a
-// stable Nimora stream source, so catalog items are mapped to TMDB refs and
-// the regular movie/TV stream providers own playback.
+// Savefilm pages provide both the NSFW catalogue and the player pages used to
+// discover the site's HLS/MP4 sources. Catalogue items still use TMDB refs so
+// the other movie/TV providers remain available as fallbacks.
 
 const SAVEFILM_DEFAULT_BASE = 'https://new13.savefilm21info.com';
 const SAVEFILM_DIRECTORY =
@@ -9469,8 +9469,6 @@ const SAVEFILM_DIRECTORY =
 const SAVEFILM_PROVIDER_KEY = 'savefilm';
 const SAVEFILM_PROVIDER_ID = 'nimora.savefilm';
 const SAVEFILM_NSFW_CATALOG_ID = 'savefilm_nsfw';
-const SAVEFILM_TURBO_BASE =
-  globalThis.__savefilmTurboBaseUrl || 'https://turbovidhls.com';
 const SAVEFILM_ADULT_QUERY =
   's=&search=advanced&post_type=&index=&orderby=&genre=adult&movieyear=&country=&quality=';
 const SAVEFILM_UA =
@@ -9909,26 +9907,54 @@ function savefilmIframeUrls(html, base) {
   return urls;
 }
 
-function savefilmPlaylistUrls(html, base) {
+// Several Savefilm players put the media URL in a Dean Edwards
+// P.A.C.K.E.R.-wrapped JWPlayer configuration. Decode only the substitution
+// table; never evaluate the upstream script.
+function savefilmUnpack(script) {
+  const packed = /}\(\s*'((?:\\.|[^'])*)'\s*,\s*(\d+)\s*,\s*\d+\s*,\s*'((?:\\.|[^'])*)'\.split\('\|'\)/i.exec(script || '');
+  if (packed == null) return String(script || '');
+  const payload = packed[1].replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+  const radix = Number(packed[2]);
+  const words = packed[3].replace(/\\'/g, "'").split('|');
+  if (!Number.isInteger(radix) || radix < 2 || words.length === 0) return String(script || '');
+  const digits = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const token = (index) => {
+    let value = index;
+    let result = '';
+    do {
+      result = digits[value % radix] + result;
+      value = Math.floor(value / radix);
+    } while (value > 0);
+    return result;
+  };
+  let unpacked = payload;
+  for (let index = words.length - 1; index >= 0; index -= 1) {
+    if (!words[index]) continue;
+    const escapedToken = token(index).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    unpacked = unpacked.replace(new RegExp(`\\b${escapedToken}\\b`, 'g'), words[index]);
+  }
+  return unpacked;
+}
+
+function savefilmMediaUrls(html, base) {
   const values = [];
   const add = (value) => {
     const url = savefilmUrl(value, base);
-    if (url && /\.m3u8(?:[?#]|$)/i.test(url) && !values.includes(url)) values.push(url);
+    if (!url || !/\.(?:m3u8|mp4)(?:[?#]|$)/i.test(url) || values.some((entry) => entry.url === url)) return;
+    values.push({
+      url,
+      format: /\.m3u8(?:[?#]|$)/i.test(url) ? 'hls' : 'mp4',
+    });
   };
-  const dataHash = /data-hash\s*=\s*["']([^"']*\.m3u8[^"']*)/i.exec(html || '');
-  if (dataHash) add(dataHash[1]);
-  const urlPlay = /(?:urlPlay|file|source)\s*=\s*["']([^"']*\.m3u8[^"']*)/i.exec(html || '');
-  if (urlPlay) add(urlPlay[1]);
-  const general = /https?:\/\/[^"'\\\s]+\.m3u8(?:\?[^"'\\\s<]*)?/gi;
-  let match;
-  while ((match = general.exec(html || '')) != null) add(match[0]);
+  const scripts = [String(html || ''), savefilmUnpack(html)];
+  scripts.forEach((script) => {
+    const assigned = /(?:data-hash|urlPlay|file|source)\s*[:=]\s*["']([^"']+\.(?:m3u8|mp4)(?:[?#][^"']*)?)/gi;
+    let match;
+    while ((match = assigned.exec(script)) != null) add(match[1]);
+    const general = /(?:https?:\/\/|\/)[^"'\\\s<>]+\.(?:m3u8|mp4)(?:[?#][^"'\\\s<>]*)?/gi;
+    while ((match = general.exec(script)) != null) add(match[0]);
+  });
   return values;
-}
-
-async function savefilmTurboPlaylist(iframeUrl, referer) {
-  if (!iframeUrl.startsWith(SAVEFILM_TURBO_BASE.replace(/\/$/, '') + '/')) return [];
-  const response = await savefilmGet(iframeUrl, referer);
-  return response == null ? [] : savefilmPlaylistUrls(response.body, iframeUrl);
 }
 
 async function savefilmPlayerStreams(detailUrl) {
@@ -9940,12 +9966,14 @@ async function savefilmPlayerStreams(detailUrl) {
     const page = pageUrl === detailUrl ? detail : await savefilmGet(pageUrl, detailUrl);
     if (page == null) continue;
     for (const iframeUrl of savefilmIframeUrls(page.body, pageUrl)) {
-      const playlists = /\.m3u8(?:[?#]|$)/i.test(iframeUrl)
-        ? [iframeUrl]
-        : await savefilmTurboPlaylist(iframeUrl, pageUrl);
-      for (const playlist of playlists) {
-        if (streams.some((entry) => entry.url === playlist)) continue;
-        streams.push({ url: playlist, referer: iframeUrl });
+      let media = savefilmMediaUrls(iframeUrl, pageUrl);
+      if (media.length === 0) {
+        const iframe = await savefilmGet(iframeUrl, pageUrl);
+        media = iframe == null ? [] : savefilmMediaUrls(iframe.body, iframeUrl);
+      }
+      for (const entry of media) {
+        if (streams.some((stream) => stream.url === entry.url)) continue;
+        streams.push({ ...entry, referer: iframeUrl });
       }
     }
   }
@@ -9979,7 +10007,7 @@ async function savefilmSources(args) {
   return {
     sources: streams.map((stream, index) => ({
       id: `${SAVEFILM_PROVIDER_KEY}:${savefilmEncode({ u: stream.url, r: stream.referer })}`,
-      label: `Savefilm · TurboVidHLS ${index + 1}`,
+      label: `Savefilm · ${stream.format === 'hls' ? 'HLS' : 'MP4'} ${index + 1}`,
       provider: 'Nimora',
       providerId: SAVEFILM_PROVIDER_ID,
     })),
@@ -9990,18 +10018,25 @@ async function savefilmResolveSource(sourceId) {
   const prefix = `${SAVEFILM_PROVIDER_KEY}:`;
   if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) throw new Error('Invalid Savefilm source id');
   const payload = savefilmDecode(sourceId.slice(prefix.length));
-  if (!payload || typeof payload.u !== 'string' || !/^https?:\/\/[^\s]+\.m3u8(?:[?#].*)?$/i.test(payload.u)) {
+  if (!payload || typeof payload.u !== 'string' || !/^https?:\/\/[^\s]+\.(?:m3u8|mp4)(?:[?#].*)?$/i.test(payload.u)) {
     throw new Error('Malformed Savefilm source id');
   }
   return {
     url: payload.u,
-    format: 'hls',
+    format: /\.m3u8(?:[?#]|$)/i.test(payload.u) ? 'hls' : 'mp4',
     headers: {
       Referer: payload.r || `${savefilmBase || SAVEFILM_DEFAULT_BASE}/`,
       'User-Agent': SAVEFILM_UA,
     },
   };
 }
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: SAVEFILM_PROVIDER_KEY,
+  sources: savefilmSources,
+  resolve: (sourceId) => savefilmResolveSource(sourceId),
+});
 
 globalThis.__catalogProviders = globalThis.__catalogProviders || [];
 globalThis.__catalogProviders.push({

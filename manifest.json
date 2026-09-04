@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "0.6.112",
+  "version": "0.7.0",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -104,7 +104,8 @@
       "id": "nimora.savefilm",
       "name": "Savefilm",
       "roles": [
-        "catalog"
+        "catalog",
+        "stream"
       ],
       "catalogs": [
         {
