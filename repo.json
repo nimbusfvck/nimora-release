@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.111",
+      "version": "0.6.112",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Indomax anime episode matching so year-suffixed search results do not select a same-title movie, and expanded NSFW source discovery to scan all player tabs including Peytonepre and IPlayerHLS fallback streams.",
         "Follow Indomax's final redirect URL and probe the rotating `akses1`–`akses10` mirrors so the NSFW catalog survives mirror rotation.",
         "Added an active Indomax catalog mirror fallback so the NSFW catalog still loads when `idmxl.ink` returns a blocked response before redirecting.",
         "Changed Savefilm to an NSFW catalog-only provider: matched titles now use TMDB refs so the regular movie/TV stream providers handle playback, while Indomax keeps its own NSFW catalog and streams.",
@@ -132,7 +133,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "57b08fe0a1a97ebbdcfbd6e34bdc37bd6b6331ffdc8c311c42b235bb9cfb64d7"
+      "bundleSha256": "5c471063b63301161295c6625cee54bed4c9afe2e3833619dfcd196d6ae927c9"
     }
   ]
 }
