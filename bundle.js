@@ -8865,6 +8865,444 @@ globalThis.__extension.search = async (args) => {
   return hasIndomaxItems ? indomax : existing;
 };
 
+// KlikXXi Dracin episode shorts. The catalogue is a WordPress archive; each
+// series detail page exposes its episode links, and the episode page exposes
+// several player tabs through the Muvipro AJAX endpoint.
+
+const KLIKXXI_DEFAULT_BASE = 'https://klikxxi.shop';
+const KLIKXXI_DIRECTORY =
+  globalThis.__klikxxiDirectoryUrl ||
+  'https://raw.githubusercontent.com/Asm0d3usX/CloudX/builds/Website.json';
+const KLIKXXI_PROVIDER_ID = 'nimora.klikxxi';
+const KLIKXXI_PROVIDER_KEY = 'klikxxi';
+const KLIKXXI_CATALOG_ID = 'dracin_shorts';
+const KLIKXXI_HEXLOAD_BASE =
+  globalThis.__klikxxiHexloadBaseUrl || 'https://hexload.com';
+const KLIKXXI_UA =
+  'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
+const KLIKXXI_MAX_SERIES_PER_PAGE = 12;
+const KLIKXXI_EPISODES_PER_SERIES = 3;
+
+let klikxxiBase = globalThis.__klikxxiBaseUrl || null;
+
+function klikxxiHeaders(referer) {
+  return {
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    Referer: referer || `${klikxxiBase || KLIKXXI_DEFAULT_BASE}/`,
+    'User-Agent': KLIKXXI_UA,
+  };
+}
+
+function klikxxiUrl(value, base) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const raw = value.trim();
+  let url = raw;
+  if (raw.startsWith('//')) url = `https:${raw}`;
+  else if (!/^https?:\/\//i.test(raw)) {
+    const root = (base || klikxxiBase || KLIKXXI_DEFAULT_BASE).replace(/\/$/, '');
+    url = raw.startsWith('/') ? `${root}${raw}` : `${root}/${raw}`;
+  }
+  try { return encodeURI(url); } catch (_) { return url.replace(/ /g, '%20'); }
+}
+
+function klikxxiText(value) {
+  const entities = {
+    amp: '&', apos: "'", gt: '>', hellip: '…', lt: '<', mdash: '—',
+    nbsp: ' ', ndash: '–', quot: '"',
+  };
+  return String(value || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&#(x[0-9a-f]+|[0-9]+);?/gi, (match, code) => {
+      const value = code[0].toLowerCase() === 'x'
+        ? parseInt(code.slice(1), 16)
+        : parseInt(code, 10);
+      return Number.isInteger(value) && value >= 0 && value <= 0x10ffff
+        ? String.fromCodePoint(value)
+        : match;
+    })
+    .replace(/&([a-z]+);/gi, (match, name) => entities[name.toLowerCase()] || match)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function klikxxiAttr(attributes, name) {
+  const match = new RegExp(`${name}\\s*=\\s*["']([^"']+)`, 'i').exec(attributes || '');
+  return match == null ? null : match[1];
+}
+
+function klikxxiDivBlocks(html, classPattern) {
+  const blocks = [];
+  const stack = [];
+  const tags = /<div\b([^>]*)>|<\/div\s*>/gi;
+  let match;
+  while ((match = tags.exec(html || '')) != null) {
+    if (match[1] != null) {
+      stack.push({
+        start: tags.lastIndex,
+        matched: classPattern.test(klikxxiAttr(match[1], 'class') || ''),
+      });
+      continue;
+    }
+    const block = stack.pop();
+    if (block != null && block.matched) {
+      blocks.push((html || '').slice(block.start, match.index));
+    }
+  }
+  return blocks;
+}
+
+async function klikxxiGet(url, referer) {
+  try {
+    const response = await fetch(url, { headers: klikxxiHeaders(referer) });
+    return response.status >= 200 && response.status < 300 ? response : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function klikxxiPost(url, body, referer) {
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        ...klikxxiHeaders(referer),
+        Accept: '*/*',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body,
+    });
+    return response.status >= 200 && response.status < 300 ? response : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function klikxxiActiveBase() {
+  if (klikxxiBase) return klikxxiBase;
+  const response = await klikxxiGet(KLIKXXI_DIRECTORY, KLIKXXI_DEFAULT_BASE);
+  if (response != null) {
+    try {
+      const urls = JSON.parse(response.body).klikxxi;
+      if (Array.isArray(urls) && typeof urls[0] === 'string' && /^https?:\/\//i.test(urls[0])) {
+        klikxxiBase = urls[0].replace(/\/$/, '');
+      }
+    } catch (_) {}
+  }
+  return klikxxiBase || KLIKXXI_DEFAULT_BASE;
+}
+
+function klikxxiPoster(article, base) {
+  const image = /<img\b([^>]*)>/i.exec(article || '');
+  if (image == null) return null;
+  const attributes = image[1];
+  const srcset = klikxxiAttr(attributes, 'data-lazy-srcset') ||
+    klikxxiAttr(attributes, 'data-srcset') || klikxxiAttr(attributes, 'srcset');
+  const candidate = srcset
+    ? srcset.split(',')[0].trim().split(/\s+/)[0]
+    : klikxxiAttr(attributes, 'data-lazy-src') ||
+      klikxxiAttr(attributes, 'data-src') || klikxxiAttr(attributes, 'src');
+  if (!candidate || candidate.startsWith('data:image')) return null;
+  return klikxxiUrl(candidate, base);
+}
+
+function klikxxiCategoryResults(html, base) {
+  const results = [];
+  const articles = /<article\b([^>]*\bitem-infinite\b[^>]*)>([\s\S]*?)<\/article>/gi;
+  let match;
+  while ((match = articles.exec(html || '')) != null) {
+    const content = match[2];
+    const titleMatch = /<h2\b[^>]*\bentry-title\b[^>]*>[\s\S]*?<a\b([^>]*)>([\s\S]*?)<\/a>/i.exec(content);
+    const hrefMatch = /<div\b[^>]*\bcontent-thumbnail\b[^>]*>[\s\S]*?<a\b([^>]*)>/i.exec(content);
+    if (titleMatch == null || hrefMatch == null) continue;
+    const title = klikxxiText(titleMatch[2]);
+    const url = klikxxiUrl(klikxxiAttr(hrefMatch[1], 'href'), base);
+    if (!title || !url || !/\/tv\//i.test(url)) continue;
+    const episodeMatch = /<div\b[^>]*\bgmr-numbeps\b[^>]*>[\s\S]*?<span[^>]*>(\d+)/i.exec(content);
+    results.push({
+      title,
+      url,
+      poster: klikxxiPoster(content, base),
+      episodeCount: episodeMatch == null ? null : Number(episodeMatch[1]),
+    });
+  }
+  return results;
+}
+
+function klikxxiHasNextPage(html) {
+  return /<a\b[^>]*\bclass\s*=\s*["'][^"']*\bnext\b[^"']*["'][^>]*>/i.test(html || '');
+}
+
+function klikxxiCategoryUrl(base, page) {
+  const path = '/category/dracin/';
+  return page > 1 ? `${base}${path}page/${page}/` : `${base}${path}`;
+}
+
+function klikxxiEpisodeNumber(value) {
+  const text = klikxxiText(value);
+  const explicit = /\bS\s*(\d+)\s*E(?:ps|pisode)?\s*(\d+)\b/i.exec(text);
+  if (explicit != null) return { season: Number(explicit[1]), episode: Number(explicit[2]) };
+  const episode = /\bE(?:ps|pisode)?\s*(\d+)\b/i.exec(text);
+  return episode == null ? null : { season: null, episode: Number(episode[1]) };
+}
+
+function klikxxiEpisodeGroups(html, base) {
+  const groups = [];
+  const containers = klikxxiDivBlocks(html, /\bgmr-season-block\b/i);
+  containers.forEach((container, index) => {
+    const titleMatch = /<h[2-4]\b[^>]*\bseason-title\b[^>]*>([\s\S]*?)<\/h[2-4]>/i.exec(container);
+    const season = Number(/\d+/.exec(klikxxiText(titleMatch == null ? '' : titleMatch[1]))?.[0]) || index + 1;
+    const episodes = [];
+    const links = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+    let link;
+    while ((link = links.exec(container)) != null) {
+      const parsed = klikxxiEpisodeNumber(`${klikxxiAttr(link[1], 'title') || ''} ${link[2]}`);
+      const url = klikxxiUrl(klikxxiAttr(link[1], 'href'), base);
+      if (parsed == null || url == null || !Number.isInteger(parsed.episode) || parsed.episode < 1) continue;
+      episodes.push({ url, season, episode: parsed.episode });
+    }
+    const unique = episodes.filter((episode, itemIndex, entries) =>
+      entries.findIndex((other) => other.url === episode.url) === itemIndex,
+    ).sort((a, b) => a.episode - b.episode);
+    if (unique.length > 0) groups.push({ season, episodes: unique });
+  });
+  return groups.sort((a, b) => a.season - b.season);
+}
+
+function klikxxiEncode(payload) {
+  return host.codec.textToBase64(JSON.stringify(payload))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function klikxxiDecode(value) {
+  let encoded = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const remainder = encoded.length % 4;
+  if (remainder) encoded += '='.repeat(4 - remainder);
+  try { return JSON.parse(host.codec.base64ToText(encoded)); } catch (_) { return null; }
+}
+
+function klikxxiEpisodeItem(series, episode) {
+  const payload = {
+    u: episode.url,
+    p: series.url,
+    t: series.title,
+    s: episode.season,
+    e: episode.episode,
+  };
+  const item = {
+    ref: {
+      extensionId: 'nimora',
+      providerId: KLIKXXI_PROVIDER_ID,
+      id: `${KLIKXXI_PROVIDER_KEY}:${klikxxiEncode(payload)}`,
+    },
+    kind: 'episode',
+    title: `${series.title} · Episode ${episode.episode}`,
+    subtitle: `Season ${episode.season} · Episode ${episode.episode}`,
+    episode: {
+      groupId: `season:${episode.season}`,
+      position: episode.episode,
+    },
+  };
+  if (series.poster) item.artwork = { portrait: { url: series.poster } };
+  return item;
+}
+
+async function klikxxiLatestEpisodes(series) {
+  const response = await klikxxiGet(series.url, `${klikxxiBase}/`);
+  if (response == null) return [];
+  const groups = klikxxiEpisodeGroups(response.body, klikxxiBase);
+  const latest = groups[groups.length - 1];
+  if (latest == null) return [];
+  return latest.episodes
+    .slice(-KLIKXXI_EPISODES_PER_SERIES)
+    .reverse()
+    .map((episode) => klikxxiEpisodeItem(series, episode));
+}
+
+async function klikxxiShortsCatalog(query) {
+  const base = await klikxxiActiveBase();
+  const requested = Number(query && query.page);
+  const page = Number.isInteger(requested) && requested > 0 ? requested : 1;
+  const response = await klikxxiGet(klikxxiCategoryUrl(base, page), `${base}/`);
+  if (response == null) return { sections: [{ id: 'dracin', title: 'Dracin', items: [] }] };
+  const series = klikxxiCategoryResults(response.body, base).slice(0, KLIKXXI_MAX_SERIES_PER_PAGE);
+  const itemGroups = await Promise.all(series.map((entry) => klikxxiLatestEpisodes(entry).catch(() => [])));
+  const items = itemGroups.flat();
+  const result = { sections: [{ id: 'dracin', title: 'Dracin Shorts', items }] };
+  if (klikxxiHasNextPage(response.body)) result.nextPage = String(page + 1);
+  return result;
+}
+
+function klikxxiIframeUrls(html) {
+  const urls = [];
+  const frames = /<iframe\b([^>]*)>/gi;
+  let match;
+  while ((match = frames.exec(html || '')) != null) {
+    const value = klikxxiAttr(match[1], 'data-litespeed-src') || klikxxiAttr(match[1], 'src');
+    const url = klikxxiUrl(value, klikxxiBase);
+    if (url && urls.indexOf(url) === -1) urls.push(url);
+  }
+  return urls;
+}
+
+async function klikxxiPlayerFrames(episodeUrl) {
+  const page = await klikxxiGet(episodeUrl, `${klikxxiBase}/`);
+  if (page == null) return [];
+  let postId = null;
+  const divs = /<div\b([^>]*)>/gi;
+  let div;
+  while ((div = divs.exec(page.body)) != null) {
+    if (klikxxiAttr(div[1], 'id') !== 'muvipro_player_content_id') continue;
+    postId = klikxxiAttr(div[1], 'data-id');
+    break;
+  }
+  if (!postId) return klikxxiIframeUrls(page.body);
+  const tabs = [];
+  const tabBlocks = /<div\b([^>]*\btab-content-ajax\b[^>]*)>/gi;
+  let tab;
+  while ((tab = tabBlocks.exec(page.body)) != null) {
+    const id = klikxxiAttr(tab[1], 'id');
+    if (id && tabs.indexOf(id) === -1) tabs.push(id);
+  }
+  if (tabs.length === 0) return klikxxiIframeUrls(page.body);
+  const urls = [];
+  for (const tabId of tabs) {
+    const response = await klikxxiPost(
+      `${klikxxiBase}/wp-admin/admin-ajax.php`,
+      `action=muvipro_player_content&tab=${encodeURIComponent(tabId)}&post_id=${encodeURIComponent(postId)}`,
+      episodeUrl,
+    );
+    if (response == null) continue;
+    for (const url of klikxxiIframeUrls(response.body)) {
+      if (urls.indexOf(url) === -1) urls.push(url);
+    }
+  }
+  return urls;
+}
+
+function klikxxiHexloadId(url) {
+  const configuredBase = KLIKXXI_HEXLOAD_BASE.replace(/\/$/, '');
+  if (configuredBase !== 'https://hexload.com') {
+    const prefix = `${configuredBase}/embed-`;
+    if (!String(url || '').startsWith(prefix)) return null;
+    const value = String(url).slice(prefix.length).replace(/\.html\/?$/, '').replace(/\/?$/, '');
+    return value && !/[/?#]/.test(value) ? value : null;
+  }
+  const match = /^https?:\/\/(?:www\.)?hexload\.com\/embed-([^/?#]+?)(?:\.html)?\/?$/i.exec(url || '');
+  return match == null ? null : match[1];
+}
+
+function klikxxiStreamHeaders(referer) {
+  return {
+    Referer: referer || `${KLIKXXI_HEXLOAD_BASE}/`,
+    'User-Agent': KLIKXXI_UA,
+  };
+}
+
+async function klikxxiResolveHexload(url, referer) {
+  const id = klikxxiHexloadId(url);
+  if (id == null) return null;
+  const page = await klikxxiGet(url, referer);
+  if (page == null) return null;
+  const response = await klikxxiPost(
+    `${KLIKXXI_HEXLOAD_BASE}/download`,
+    `op=download3&id=${encodeURIComponent(id)}&ajax=1&method_free=1&dataType=json`,
+    url,
+  );
+  if (response == null) return null;
+  try {
+    const data = JSON.parse(response.body);
+    const result = data && data.result;
+    const rawUrl = result && result.url;
+    if (data.msg !== 'OK' || typeof rawUrl !== 'string' || !/^https?:\/\//i.test(rawUrl)) return null;
+    const streamUrl = klikxxiUrl(rawUrl);
+    if (streamUrl == null) return null;
+    return {
+      url: streamUrl,
+      format: /\.m3u8(?:[?#]|$)/i.test(streamUrl) ? 'hls' : 'other',
+      headers: klikxxiStreamHeaders(url),
+      label: result.content_type === 'video/mp4' ? 'KlikXXi MP4' : 'KlikXXi',
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function klikxxiPayloadFromRef(ref) {
+  const id = ref && typeof ref.id === 'string' ? ref.id : '';
+  const prefix = `${KLIKXXI_PROVIDER_KEY}:`;
+  return id.startsWith(prefix) ? klikxxiDecode(id.slice(prefix.length)) : null;
+}
+
+async function klikxxiSources(args) {
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && enabled.indexOf(KLIKXXI_PROVIDER_ID) === -1) return { sources: [] };
+  const item = args && args.item;
+  if (!item || item.ref?.providerId !== KLIKXXI_PROVIDER_ID || item.kind !== 'episode') return { sources: [] };
+  const payload = klikxxiPayloadFromRef(item.ref);
+  if (!payload || typeof payload.u !== 'string') return { sources: [] };
+  const frames = await klikxxiPlayerFrames(payload.u);
+  return {
+    sources: frames
+      .filter((url) => klikxxiHexloadId(url) != null)
+      .map((url, index) => ({
+        id: `${KLIKXXI_PROVIDER_KEY}:${klikxxiEncode({ u: url, r: payload.u })}`,
+        label: `KlikXXi ${index + 1}`,
+        provider: 'Nimora',
+        providerId: KLIKXXI_PROVIDER_ID,
+      })),
+  };
+}
+
+async function klikxxiResolveSource(sourceId) {
+  const prefix = `${KLIKXXI_PROVIDER_KEY}:`;
+  if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) throw new Error('Invalid KlikXXi source id');
+  const payload = klikxxiDecode(sourceId.slice(prefix.length));
+  if (!payload || typeof payload.u !== 'string') throw new Error('Malformed KlikXXi source id');
+  const stream = await klikxxiResolveHexload(payload.u, payload.r);
+  if (stream == null) throw new Error('KlikXXi Hexload returned no playable stream');
+  return stream;
+}
+
+async function klikxxiPreview(args) {
+  const item = args && args.item;
+  const payload = klikxxiPayloadFromRef(item && item.ref);
+  if (!payload || typeof payload.u !== 'string') return { sources: [] };
+  const frames = await klikxxiPlayerFrames(payload.u);
+  for (const frame of frames) {
+    const stream = await klikxxiResolveHexload(frame, payload.u);
+    if (stream == null) continue;
+    return {
+      sources: [{
+        id: `preview:${KLIKXXI_PROVIDER_KEY}:${klikxxiEncode({ u: frame, r: payload.u })}`,
+        type: 'direct',
+        stream,
+      }],
+    };
+  }
+  return { sources: [] };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: KLIKXXI_PROVIDER_KEY,
+  sources: klikxxiSources,
+  resolve: klikxxiResolveSource,
+});
+
+globalThis.__catalogProviders = globalThis.__catalogProviders || [];
+globalThis.__catalogProviders.push({
+  catalogId: KLIKXXI_CATALOG_ID,
+  catalog: klikxxiShortsCatalog,
+});
+
+globalThis.__previewProviders = globalThis.__previewProviders || [];
+globalThis.__previewProviders.push({
+  providerId: KLIKXXI_PROVIDER_ID,
+  preview: klikxxiPreview,
+});
+
 // AniList anime catalog, search, and meta.
 //
 // TMDB backs everything else here, and deliberately does not back anime. The
