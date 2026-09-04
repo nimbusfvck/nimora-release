@@ -9312,6 +9312,545 @@ globalThis.__previewProviders.push({
   preview: klikxxiPreview,
 });
 
+// Savefilm21 catalogue and direct TurboVidHLS streams.
+//
+// CloudX's Savefilm extension delegates every player iframe to CloudStream's
+// generic extractor registry. Nimora does not ship that registry, so this
+// adapter keeps the stable, directly discoverable TurboVidHLS path and returns
+// its HLS playlist to the native player.
+
+const SAVEFILM_DEFAULT_BASE = 'https://new13.savefilm21info.com';
+const SAVEFILM_DIRECTORY =
+  globalThis.__savefilmDirectoryUrl ||
+  'https://raw.githubusercontent.com/Asm0d3usX/CloudX/builds/Website.json';
+const SAVEFILM_PROVIDER_KEY = 'savefilm';
+const SAVEFILM_PROVIDER_ID = 'nimora.savefilm';
+const SAVEFILM_NSFW_CATALOG_ID = 'savefilm_nsfw';
+const SAVEFILM_TURBO_BASE =
+  globalThis.__savefilmTurboBaseUrl || 'https://turbovidhls.com';
+const SAVEFILM_ADULT_QUERY =
+  's=&search=advanced&post_type=&index=&orderby=&genre=adult&movieyear=&country=&quality=';
+const SAVEFILM_UA =
+  'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
+
+let savefilmBase = globalThis.__savefilmBaseUrl || null;
+
+function savefilmHeaders(referer) {
+  return {
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    Referer: referer || `${savefilmBase || SAVEFILM_DEFAULT_BASE}/`,
+    'User-Agent': SAVEFILM_UA,
+  };
+}
+
+async function savefilmGet(url, referer) {
+  try {
+    const response = await fetch(url, { headers: savefilmHeaders(referer) });
+    return response.status >= 200 && response.status < 300 ? response : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function savefilmActiveBase() {
+  if (savefilmBase) return savefilmBase;
+  const response = await savefilmGet(SAVEFILM_DIRECTORY, SAVEFILM_DEFAULT_BASE);
+  if (response != null) {
+    try {
+      const urls = JSON.parse(response.body).savefilm;
+      if (Array.isArray(urls) && typeof urls[0] === 'string' && /^https?:\/\//i.test(urls[0])) {
+        savefilmBase = urls[0].replace(/\/$/, '');
+      }
+    } catch (_) {}
+  }
+  return savefilmBase || SAVEFILM_DEFAULT_BASE;
+}
+
+function savefilmUrl(value, base) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const raw = value.trim();
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const root = (base || savefilmBase || SAVEFILM_DEFAULT_BASE).replace(/\/$/, '');
+  if (raw.startsWith('//')) return `https:${raw}`;
+  return raw.startsWith('/') ? `${root}${raw}` : `${root}/${raw}`;
+}
+
+function savefilmText(value) {
+  const entities = {
+    amp: '&', apos: "'", gt: '>', hellip: '…', lt: '<', mdash: '—',
+    nbsp: ' ', ndash: '–', quot: '"', rsquo: '’', lsquo: '‘', ldquo: '“',
+    rdquo: '”', copy: '©', reg: '®',
+  };
+  return String(value || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&#(x[0-9a-f]+|[0-9]+);?/gi, (match, code) => {
+      const point = code[0].toLowerCase() === 'x'
+        ? parseInt(code.slice(1), 16) : parseInt(code, 10);
+      return Number.isInteger(point) && point >= 0 && point <= 0x10ffff
+        ? String.fromCodePoint(point) : match;
+    })
+    .replace(/&([a-z]+);/gi, (match, name) => entities[name.toLowerCase()] || match)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function savefilmAttr(attributes, name) {
+  const match = new RegExp(`${name}\\s*=\\s*["']([^"']+)`, 'i').exec(attributes || '');
+  return match == null ? null : match[1];
+}
+
+function savefilmMetaContent(html, name) {
+  const match = new RegExp(
+    `<meta\\b[^>]*(?:name|property)\\s*=\\s*["']${name}["'][^>]*>`, 'i',
+  ).exec(html || '');
+  return match == null ? null : savefilmAttr(match[0], 'content');
+}
+
+function savefilmNormalize(value) {
+  return savefilmText(value)
+    .replace(/[([]\s*(?:19|20)\d{2}\s*[)\]]/g, ' ')
+    .replace(/\b(?:19|20)\d{2}\b/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function savefilmTitleAndYear(value) {
+  const title = savefilmText(value);
+  const year = /\b((?:19|20)\d{2})\b/.exec(title);
+  return {
+    title: title.replace(/\s*[-–—|:]?\s*\(?((?:19|20)\d{2})\)?\s*$/i, '').trim() || title,
+    ...(year ? { year: Number(year[1]) } : {}),
+  };
+}
+
+function savefilmParseArticles(html, base) {
+  const results = [];
+  const articles = /<article\b([^>]*\bclass\s*=\s*["'][^"']*\bitem-infinite\b[^"']*["'][^>]*)>([\s\S]*?)<\/article>/gi;
+  let article;
+  while ((article = articles.exec(html || '')) != null) {
+    const body = article[2];
+    const titleMatch = /<h2\b[^>]*\bentry-title\b[^>]*>[\s\S]*?<a\b([^>]*)>([\s\S]*?)<\/a>/i.exec(body);
+    if (!titleMatch) continue;
+    const url = savefilmUrl(savefilmAttr(titleMatch[1], 'href'), base);
+    const parsed = savefilmTitleAndYear(titleMatch[2]);
+    if (!url || !parsed.title) continue;
+    const image = /<img\b([^>]*)>/i.exec(body);
+    const imageAttr = image == null ? null : (
+      savefilmAttr(image[1], 'data-lazy-src') ||
+      savefilmAttr(image[1], 'data-src') ||
+      savefilmAttr(image[1], 'src')
+    );
+    const poster = savefilmUrl(
+      imageAttr == null ? null : imageAttr.split(',')[0].trim().split(/\s+/)[0], base,
+    );
+    const ratingMatch = /<div\b[^>]*\bgmr-rating-item\b[^>]*>([\s\S]*?)<\/div>/i.exec(body);
+    const rating = ratingMatch == null ? null : Number(/\d+(?:\.\d+)?/.exec(savefilmText(ratingMatch[1]))?.[0]);
+    const epsMatch = /<div\b[^>]*\bgmr-numbeps\b[^>]*>[\s\S]*?<span[^>]*>(\d+)/i.exec(body);
+    results.push({
+      url,
+      title: parsed.title,
+      ...(parsed.year ? { year: parsed.year } : {}),
+      ...(poster ? { poster } : {}),
+      ...(Number.isFinite(rating) ? { rating } : {}),
+      ...(epsMatch ? { episodes: Number(epsMatch[1]) } : {}),
+    });
+  }
+  return results;
+}
+
+function savefilmEncode(value) {
+  return host.codec.textToBase64(JSON.stringify(value))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function savefilmDecode(value) {
+  let encoded = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const remainder = encoded.length % 4;
+  if (remainder) encoded += '='.repeat(4 - remainder);
+  try { return JSON.parse(host.codec.base64ToText(encoded)); } catch (_) { return null; }
+}
+
+function savefilmCatalogItem(result) {
+  const item = {
+    ref: {
+      extensionId: 'nimora',
+      providerId: SAVEFILM_PROVIDER_ID,
+      id: `${SAVEFILM_PROVIDER_KEY}:catalog:${savefilmEncode({ u: result.url })}`,
+    },
+    kind: /\/tv\//i.test(result.url) ? 'series' : 'video',
+    title: result.title,
+  };
+  if (result.poster) item.artwork = { portrait: { url: result.poster } };
+  if (Number.isFinite(result.rating)) item.rating = result.rating;
+  if (Number.isInteger(result.year)) item.releaseYear = result.year;
+  return item;
+}
+
+function savefilmAdultUrl(base, page) {
+  const root = base.replace(/\/$/, '');
+  return page > 1
+    ? `${root}/page/${page}/?${SAVEFILM_ADULT_QUERY}`
+    : `${root}/?${SAVEFILM_ADULT_QUERY}`;
+}
+
+function savefilmHasNextPage(html) {
+  return /<a\b[^>]*\bclass\s*=\s*["'][^"']*\bnext\b[^"']*["'][^>]*>/i.test(html || '');
+}
+
+async function savefilmNsfwCatalog(query) {
+  const base = await savefilmActiveBase();
+  const requested = Number(query && query.page);
+  const page = Number.isInteger(requested) && requested > 0 ? requested : 1;
+  const url = savefilmAdultUrl(base, page);
+  const response = await savefilmGet(url, `${base}/`);
+  if (response == null) return { sections: [{ id: 'savefilm-adult', title: 'Savefilm Adult', items: [] }] };
+  const results = savefilmParseArticles(response.body, base);
+  const result = {
+    sections: [{
+      id: 'savefilm-adult',
+      title: 'Savefilm Adult',
+      items: results.map(savefilmCatalogItem),
+    }],
+  };
+  if (savefilmHasNextPage(response.body)) result.nextPage = String(page + 1);
+  return result;
+}
+
+function savefilmRefPayload(ref) {
+  const id = ref && typeof ref.id === 'string' ? ref.id : '';
+  const prefix = `${SAVEFILM_PROVIDER_KEY}:`;
+  if (!id.startsWith(prefix)) return null;
+  return savefilmDecode(id.slice(prefix.length).replace(/^(?:catalog|episode|search):/, ''));
+}
+
+function savefilmDescription(html) {
+  const block = /<(?:div|p)\b[^>]*\b(?:itemprop\s*=\s*["']description["']|class\s*=\s*["'][^"']*entry-content-single[^"']*)[^>]*>([\s\S]*?)<\/(?:div|p)>/i.exec(html || '');
+  return block ? savefilmText(block[1]) : savefilmText(savefilmMetaContent(html, 'description'));
+}
+
+function savefilmDetailYear(html) {
+  const labelled = /<(?:div|span|p)\b[^>]*class\s*=\s*["'][^"']*gmr-moviedata[^"']*["'][^>]*>([\s\S]*?)<\/\w+>/gi;
+  let row;
+  while ((row = labelled.exec(html || '')) != null) {
+    if (/(?:year|release|tahun)\s*:/i.test(savefilmText(row[1]))) {
+      const year = /\b((?:19|20)\d{2})\b/.exec(savefilmText(row[1]));
+      if (year) return Number(year[1]);
+    }
+  }
+  const date = /datetime\s*=\s*["']((?:19|20)\d{2})/i.exec(html || '');
+  return date ? Number(date[1]) : null;
+}
+
+function savefilmDetailRating(html) {
+  const value = /itemprop\s*=\s*["']ratingValue["'][^>]*content\s*=\s*["']([^"']+)/i.exec(html || '')
+    || /<div\b[^>]*\bgmr-rating-item\b[^>]*>([\s\S]*?)<\/div>/i.exec(html || '');
+  const rating = value == null ? NaN : Number(/\d+(?:\.\d+)?/.exec(savefilmText(value[1]))?.[0]);
+  return Number.isFinite(rating) ? rating : null;
+}
+
+function savefilmDetailItem(ref, html, fallbackUrl) {
+  const titleMatch = /<h1\b[^>]*\bentry-title\b[^>]*>([\s\S]*?)<\/h1>/i.exec(html || '');
+  const parsed = savefilmTitleAndYear(
+    titleMatch ? titleMatch[1] : savefilmMetaContent(html, 'og:title') || 'Savefilm video',
+  );
+  const payload = savefilmRefPayload(ref);
+  const url = payload && payload.u || fallbackUrl || '';
+  const item = {
+    ref,
+    kind: /\/tv\//i.test(url) ? 'series' : 'video',
+    title: parsed.title,
+  };
+  const image = savefilmMetaContent(html, 'og:image');
+  if (image) item.artwork = { portrait: { url: savefilmUrl(image) } };
+  const year = savefilmDetailYear(html) || parsed.year;
+  if (Number.isInteger(year)) item.releaseYear = year;
+  const rating = savefilmDetailRating(html);
+  if (Number.isFinite(rating)) item.rating = rating;
+  return item;
+}
+
+function savefilmEpisodeNumber(value) {
+  const text = savefilmText(value);
+  const match = /(?:s\d{1,2}\s*)?(?:e|eps?|episode)\s*[-_: ]*(\d+)/i.exec(text)
+    || /(?:^|\D)(\d+)(?:\D|$)/.exec(text);
+  return match ? Number(match[1]) : null;
+}
+
+function savefilmSeasonNumber(value) {
+  const match = /(?:season|musim|s)\s*[-_: ]*(\d{1,2})/i.exec(savefilmText(value));
+  return match ? Number(match[1]) : null;
+}
+
+function savefilmEpisodeGroups(html, parentRef, poster, base, parentUrl) {
+  const groups = new Map();
+  const links = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = links.exec(html || '')) != null) {
+    const attributes = match[1];
+    const href = savefilmAttr(attributes, 'href');
+    const raw = `${savefilmAttr(attributes, 'title') || ''} ${match[2]}`;
+    if (!href || !/(?:episode|eps?|\be\d+\b|season|musim)/i.test(raw)) continue;
+    const position = savefilmEpisodeNumber(raw);
+    if (!Number.isInteger(position) || position < 1) continue;
+    const season = savefilmSeasonNumber(raw) || 1;
+    const url = savefilmUrl(href, base);
+    if (!url) continue;
+    const groupId = `season:${season}`;
+    const group = groups.get(groupId) || { id: groupId, title: `Season ${season}`, episodes: [] };
+    const ref = {
+      extensionId: 'nimora',
+      providerId: SAVEFILM_PROVIDER_ID,
+      id: `${SAVEFILM_PROVIDER_KEY}:episode:${savefilmEncode({ u: url, p: parentUrl, s: season, e: position })}`,
+    };
+    if (!group.episodes.some((episode) => episode.ref.id === ref.id)) {
+      group.episodes.push({
+        ref,
+        title: `Episode ${position}`,
+        position,
+        ...(poster ? { artwork: { portrait: { url: poster } } } : {}),
+      });
+    }
+    groups.set(groupId, group);
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      episodes: group.episodes.sort((a, b) => a.position - b.position),
+    }))
+    .filter((group) => group.episodes.length > 0)
+    .sort((a, b) => Number(a.id.split(':')[1]) - Number(b.id.split(':')[1]));
+}
+
+async function savefilmMeta(args) {
+  const ref = args && args.ref;
+  const payload = savefilmRefPayload(ref);
+  if (!payload || typeof payload.u !== 'string') throw new Error('Malformed Savefilm media ref');
+  const base = await savefilmActiveBase();
+  const response = await savefilmGet(payload.u, `${base}/`);
+  if (response == null) throw new Error('Savefilm detail request failed');
+  const detail = { item: savefilmDetailItem(ref, response.body, payload.u) };
+  const description = savefilmDescription(response.body);
+  if (description) detail.description = description;
+  const year = detail.item.releaseYear;
+  if (Number.isInteger(year)) detail.facts = [{ label: 'Year', value: String(year) }];
+  const poster = detail.item.artwork?.portrait?.url || null;
+  if (/\/tv\//i.test(payload.u)) {
+    const groups = savefilmEpisodeGroups(response.body, ref, poster, base, payload.u);
+    if (groups.length > 0) {
+      const last = groups[groups.length - 1];
+      detail.episodeGuide = {
+        groups,
+        defaultEpisodeRef: last.episodes[last.episodes.length - 1].ref,
+      };
+    }
+  }
+  return detail;
+}
+
+function savefilmItemQuery(item) {
+  const extra = item && item.extra && typeof item.extra === 'object' ? item.extra : {};
+  const episode = item && item.episode && typeof item.episode === 'object' ? item.episode : null;
+  const group = episode && typeof episode.groupId === 'string' ? episode.groupId : '';
+  const season = /(?:^|:)season:(\d+)/i.exec(group);
+  return {
+    title: String(extra.seriesTitle || (episode && item.subtitle) || item && item.title || '').trim(),
+    season: Number.isInteger(extra.season) ? extra.season : season ? Number(season[1]) : null,
+    episode: Number.isInteger(extra.episode) ? extra.episode : episode && Number.isInteger(episode.position) ? episode.position : null,
+    isEpisode: item && item.kind === 'episode',
+  };
+}
+
+function savefilmSearchTitleVariants(title) {
+  const raw = String(title || '').trim();
+  const clean = raw.replace(/[([]\s*(?:19|20)\d{2}\s*[)\]]/g, ' ')
+    .replace(/\b(?:19|20)\d{2}\b/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  return [raw, clean].filter((value, index, values) => value && values.indexOf(value) === index);
+}
+
+async function savefilmFindResult(title, base) {
+  for (const variant of savefilmSearchTitleVariants(title)) {
+    const url = `${base}/?s=${encodeURIComponent(variant)}&post_type[]=post&post_type[]=tv`;
+    const response = await savefilmGet(url, `${base}/`);
+    if (response == null) continue;
+    const results = savefilmParseArticles(response.body, base);
+    const wanted = savefilmNormalize(variant);
+    const scored = results.map((result, index) => {
+      const candidate = savefilmNormalize(result.title);
+      if (!candidate) return null;
+      const exact = candidate === wanted;
+      const overlap = candidate.includes(wanted) || wanted.includes(candidate);
+      return !exact && !overlap ? null : { result, score: (exact ? 0 : 10) + index / 1000 };
+    }).filter((entry) => entry != null).sort((a, b) => a.score - b.score);
+    if (scored.length > 0) return { result: scored[0].result, results };
+  }
+  return null;
+}
+
+function savefilmEpisodeUrl(html, season, episode, base) {
+  const links = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = links.exec(html || '')) != null) {
+    const raw = `${savefilmAttr(match[1], 'title') || ''} ${match[2]}`;
+    const foundSeason = savefilmSeasonNumber(raw) || 1;
+    const foundEpisode = savefilmEpisodeNumber(raw);
+    if (foundSeason === season && foundEpisode === episode) return savefilmUrl(savefilmAttr(match[1], 'href'), base);
+  }
+  return null;
+}
+
+function savefilmPlayerPageUrls(html, detailUrl, base) {
+  const urls = [detailUrl];
+  const tabLists = /<ul\b[^>]*\bmuvipro-player-tabs\b[^>]*>([\s\S]*?)<\/ul>/gi;
+  let tabList;
+  while ((tabList = tabLists.exec(html || '')) != null) {
+    const tabLinks = /<a\b([^>]*)>/gi;
+    let tab;
+    while ((tab = tabLinks.exec(tabList[1])) != null) {
+      const tabUrl = savefilmUrl(savefilmAttr(tab[1], 'href'), detailUrl || base);
+      if (tabUrl && !urls.includes(tabUrl)) urls.push(tabUrl);
+    }
+  }
+  const tabs = /<a\b([^>]*)>/gi;
+  let match;
+  while ((match = tabs.exec(html || '')) != null) {
+    const classes = savefilmAttr(match[1], 'class') || '';
+    const href = savefilmAttr(match[1], 'href');
+    if (!href || (!/muvipro-player-tabs|player-tab|server|turbovidhls\.com/i.test(classes + ' ' + href))) continue;
+    const url = savefilmUrl(href, detailUrl || base);
+    if (url && !urls.includes(url)) urls.push(url);
+  }
+  return urls;
+}
+
+function savefilmIframeUrls(html, base) {
+  const urls = [];
+  const frames = /<iframe\b([^>]*)>/gi;
+  let match;
+  while ((match = frames.exec(html || '')) != null) {
+    const value = savefilmAttr(match[1], 'data-litespeed-src') || savefilmAttr(match[1], 'src');
+    const url = savefilmUrl(value, base);
+    if (url && !urls.includes(url)) urls.push(url);
+  }
+  return urls;
+}
+
+function savefilmPlaylistUrls(html, base) {
+  const values = [];
+  const add = (value) => {
+    const url = savefilmUrl(value, base);
+    if (url && /\.m3u8(?:[?#]|$)/i.test(url) && !values.includes(url)) values.push(url);
+  };
+  const dataHash = /data-hash\s*=\s*["']([^"']*\.m3u8[^"']*)/i.exec(html || '');
+  if (dataHash) add(dataHash[1]);
+  const urlPlay = /(?:urlPlay|file|source)\s*=\s*["']([^"']*\.m3u8[^"']*)/i.exec(html || '');
+  if (urlPlay) add(urlPlay[1]);
+  const general = /https?:\/\/[^"'\\\s]+\.m3u8(?:\?[^"'\\\s<]*)?/gi;
+  let match;
+  while ((match = general.exec(html || '')) != null) add(match[0]);
+  return values;
+}
+
+async function savefilmTurboPlaylist(iframeUrl, referer) {
+  if (!iframeUrl.startsWith(SAVEFILM_TURBO_BASE.replace(/\/$/, '') + '/')) return [];
+  const response = await savefilmGet(iframeUrl, referer);
+  return response == null ? [] : savefilmPlaylistUrls(response.body, iframeUrl);
+}
+
+async function savefilmPlayerStreams(detailUrl) {
+  const detail = await savefilmGet(detailUrl, `${savefilmBase || SAVEFILM_DEFAULT_BASE}/`);
+  if (detail == null) return [];
+  const playerPages = savefilmPlayerPageUrls(detail.body, detailUrl, savefilmBase);
+  const streams = [];
+  for (const pageUrl of playerPages) {
+    const page = pageUrl === detailUrl ? detail : await savefilmGet(pageUrl, detailUrl);
+    if (page == null) continue;
+    for (const iframeUrl of savefilmIframeUrls(page.body, pageUrl)) {
+      const playlists = /\.m3u8(?:[?#]|$)/i.test(iframeUrl)
+        ? [iframeUrl]
+        : await savefilmTurboPlaylist(iframeUrl, pageUrl);
+      for (const playlist of playlists) {
+        if (streams.some((entry) => entry.url === playlist)) continue;
+        streams.push({ url: playlist, referer: iframeUrl });
+      }
+    }
+  }
+  return streams;
+}
+
+async function savefilmSources(args) {
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && enabled.indexOf(SAVEFILM_PROVIDER_ID) === -1) return { sources: [] };
+  const item = args && args.item;
+  if (!item || (item.kind !== 'video' && item.kind !== 'episode')) return { sources: [] };
+  const payload = savefilmRefPayload(item.ref);
+  const query = savefilmItemQuery(item);
+  const base = await savefilmActiveBase();
+  let watchUrl = payload && typeof payload.u === 'string' ? payload.u : null;
+  if (!watchUrl) {
+    if (!query.title || (query.isEpisode && !Number.isInteger(query.episode))) return { sources: [] };
+    const found = await savefilmFindResult(query.title, base);
+    if (found == null) return { sources: [] };
+    watchUrl = found.result.url;
+    if (query.isEpisode) {
+      const detail = await savefilmGet(watchUrl, `${base}/`);
+      if (detail == null) return { sources: [] };
+      watchUrl = savefilmEpisodeUrl(detail.body, query.season || 1, query.episode, base);
+      if (!watchUrl) return { sources: [] };
+    }
+  } else if (query.isEpisode && payload.e != null && Number(payload.e) !== query.episode) {
+    return { sources: [] };
+  }
+  const streams = await savefilmPlayerStreams(watchUrl);
+  return {
+    sources: streams.map((stream, index) => ({
+      id: `${SAVEFILM_PROVIDER_KEY}:${savefilmEncode({ u: stream.url, r: stream.referer })}`,
+      label: `Savefilm · TurboVidHLS ${index + 1}`,
+      provider: 'Nimora',
+      providerId: SAVEFILM_PROVIDER_ID,
+    })),
+  };
+}
+
+async function savefilmResolveSource(sourceId) {
+  const prefix = `${SAVEFILM_PROVIDER_KEY}:`;
+  if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) throw new Error('Invalid Savefilm source id');
+  const payload = savefilmDecode(sourceId.slice(prefix.length));
+  if (!payload || typeof payload.u !== 'string' || !/^https?:\/\/[^\s]+\.m3u8(?:[?#].*)?$/i.test(payload.u)) {
+    throw new Error('Malformed Savefilm source id');
+  }
+  return {
+    url: payload.u,
+    format: 'hls',
+    headers: {
+      Referer: payload.r || `${savefilmBase || SAVEFILM_DEFAULT_BASE}/`,
+      'User-Agent': SAVEFILM_UA,
+    },
+  };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: SAVEFILM_PROVIDER_KEY,
+  sources: savefilmSources,
+  resolve: savefilmResolveSource,
+});
+
+globalThis.__metaProviders = globalThis.__metaProviders || [];
+globalThis.__metaProviders.push({
+  providerId: SAVEFILM_PROVIDER_ID,
+  meta: savefilmMeta,
+});
+
+globalThis.__catalogProviders = globalThis.__catalogProviders || [];
+globalThis.__catalogProviders.push({
+  catalogId: SAVEFILM_NSFW_CATALOG_ID,
+  catalog: savefilmNsfwCatalog,
+});
+
 // AniList anime catalog, search, and meta.
 //
 // TMDB backs everything else here, and deliberately does not back anime. The

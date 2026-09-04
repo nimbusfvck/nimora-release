@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "0.6.105",
+  "version": "0.6.106",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -97,6 +97,27 @@
           "name": "Dracin Shorts",
           "categories": [],
           "surface": "preview"
+        }
+      ]
+    },
+    {
+      "id": "nimora.savefilm",
+      "name": "Savefilm",
+      "roles": [
+        "stream",
+        "catalog",
+        "meta"
+      ],
+      "catalogs": [
+        {
+          "id": "savefilm_nsfw",
+          "name": "Savefilm Adult",
+          "categories": [
+            "nsfw"
+          ],
+          "kind": "movie",
+          "display": "row",
+          "contentRating": "mature"
         }
       ]
     },

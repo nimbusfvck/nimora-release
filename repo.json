@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.6.105",
+      "version": "0.6.106",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added Savefilm Adult to the NSFW catalog and Savefilm movie/series source resolution through TurboVidHLS HLS streams, including paginated listings and series episode guides.",
         "Fixed Dracin Shorts items being discarded by the app because episode metadata was missing its protocol-v2 parent reference.",
         "Put Dracin Shorts ahead of TMDB in the Shorts feed so the first item is no longer a TMDB coming-soon title.",
         "Hardened the KlikXXi Dracin release health smoke to try every player tab and select a supported Hexload stream when the first tab uses another server.",
@@ -126,7 +127,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "ae5b14f1d936f01ebc5d3f86c5fc7227ec2808dbe9cf79b395dd8363ac1ce185"
+      "bundleSha256": "974e1e87586319136cb7722f7392ba192e5b1ffed6e8a05a4db96d7e21bd24d3"
     }
   ]
 }
