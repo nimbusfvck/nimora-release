@@ -9573,7 +9573,7 @@ function savefilmParseArticles(html, base) {
   let article;
   while ((article = articles.exec(html || '')) != null) {
     const body = article[2];
-    const titleMatch = /<h2\b[^>]*\bentry-title\b[^>]*>[\s\S]*?<a\b([^>]*)>([\s\S]*?)<\/a>/i.exec(body);
+    const titleMatch = /<h2\b[^>]*\b(?:entry-title|headline)\b[^>]*>[\s\S]*?<a\b([^>]*)>([\s\S]*?)<\/a>/i.exec(body);
     if (!titleMatch) continue;
     const url = savefilmUrl(savefilmAttr(titleMatch[1], 'href'), base);
     const parsed = savefilmTitleAndYear(titleMatch[2]);
@@ -9648,6 +9648,14 @@ async function savefilmCatalogItem(result) {
 
   const item = tmdbToMediaItem(scored[0].result, mediaType);
   if (!item || !item.ref || typeof item.ref.id !== 'string') return null;
+  // Keep the provider-owned detail URL alongside the shared TMDB identity.
+  // Savefilm titles are often shorter than TMDB's adult aliases, so resolving
+  // by the mapped title alone can lose the article we just found.
+  item.extra = {
+    ...(item.extra && typeof item.extra === 'object' ? item.extra : {}),
+    savefilmDetailUrl: result.url,
+    savefilmTitle: result.title,
+  };
   if (!item.artwork && result.poster) {
     item.artwork = { portrait: { url: result.poster } };
   } else if (result.poster && !item.artwork.portrait) {
@@ -9693,6 +9701,13 @@ function savefilmRefPayload(ref) {
   const prefix = `${SAVEFILM_PROVIDER_KEY}:`;
   if (!id.startsWith(prefix)) return null;
   return savefilmDecode(id.slice(prefix.length).replace(/^(?:catalog|episode|search):/, ''));
+}
+
+function savefilmItemDetailUrl(item) {
+  const extra = item && item.extra && typeof item.extra === 'object' ? item.extra : {};
+  const value = extra.savefilmDetailUrl;
+  return typeof value === 'string' && /^https?:\/\/[^\s]+$/i.test(value)
+    ? value : null;
 }
 
 function savefilmDescription(html) {
@@ -9879,7 +9894,7 @@ function savefilmPlayerPageUrls(html, detailUrl, base) {
     const tabLinks = /<a\b([^>]*)>/gi;
     let tab;
     while ((tab = tabLinks.exec(tabList[1])) != null) {
-      const tabUrl = savefilmUrl(savefilmAttr(tab[1], 'href'), detailUrl || base);
+      const tabUrl = savefilmPageUrl(savefilmAttr(tab[1], 'href'), detailUrl, base);
       if (tabUrl && !urls.includes(tabUrl)) urls.push(tabUrl);
     }
   }
@@ -9889,19 +9904,32 @@ function savefilmPlayerPageUrls(html, detailUrl, base) {
     const classes = savefilmAttr(match[1], 'class') || '';
     const href = savefilmAttr(match[1], 'href');
     if (!href || (!/muvipro-player-tabs|player-tab|server|turbovidhls\.com/i.test(classes + ' ' + href))) continue;
-    const url = savefilmUrl(href, detailUrl || base);
+    const url = savefilmPageUrl(href, detailUrl, base);
     if (url && !urls.includes(url)) urls.push(url);
   }
   return urls;
 }
 
-function savefilmIframeUrls(html, base) {
+function savefilmPageUrl(value, pageUrl, base) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const raw = value.trim();
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('//')) return savefilmUrl(raw, base);
+  const page = typeof pageUrl === 'string' && pageUrl
+    ? pageUrl.split(/[?#]/, 1)[0] : null;
+  if (raw.startsWith('?') && page) return `${page}${raw}`;
+  if (raw.startsWith('#') && page) return `${page}${raw}`;
+  if (raw.startsWith('/')) return savefilmUrl(raw, base);
+  if (page) return savefilmUrl(raw, page.slice(0, page.lastIndexOf('/') + 1));
+  return savefilmUrl(raw, base);
+}
+
+function savefilmIframeUrls(html, pageUrl) {
   const urls = [];
   const frames = /<iframe\b([^>]*)>/gi;
   let match;
   while ((match = frames.exec(html || '')) != null) {
     const value = savefilmAttr(match[1], 'data-litespeed-src') || savefilmAttr(match[1], 'src');
-    const url = savefilmUrl(value, base);
+    const url = savefilmPageUrl(value, pageUrl, savefilmBase || SAVEFILM_DEFAULT_BASE);
     if (url && !urls.includes(url)) urls.push(url);
   }
   return urls;
@@ -9988,7 +10016,8 @@ async function savefilmSources(args) {
   const payload = savefilmRefPayload(item.ref);
   const query = savefilmItemQuery(item);
   const base = await savefilmActiveBase();
-  let watchUrl = payload && typeof payload.u === 'string' ? payload.u : null;
+  let watchUrl = payload && typeof payload.u === 'string'
+    ? payload.u : savefilmItemDetailUrl(item);
   if (!watchUrl) {
     if (!query.title || (query.isEpisode && !Number.isInteger(query.episode))) return { sources: [] };
     const found = await savefilmFindResult(query.title, base);
