@@ -9936,6 +9936,239 @@ function savefilmIframeUrls(html, pageUrl) {
   return urls;
 }
 
+// Some Savefilm-compatible hosts return a tiny HTML shell that forwards the
+// request with window.location.replace(). CloudStream's loadExtractor follows
+// that shell before handing the page to its extractor; do the same here while
+// keeping the redirect depth bounded.
+function savefilmPlayerRedirectUrl(html, pageUrl) {
+  const match = /(?:window\.)?location(?:\.href)?\s*=\s*['"]([^'"]+)|(?:window\.)?location\.replace\(\s*['"]([^'"]+)['"]\s*\)/i.exec(html || '');
+  const value = match && (match[1] || match[2]);
+  return value ? savefilmPageUrl(value, pageUrl, savefilmBase) : null;
+}
+
+async function savefilmPlayerResponse(url, referer, depth = 0) {
+  const response = await savefilmGet(url, referer);
+  if (response == null) return null;
+  if (depth >= 3) return { url, response };
+  // Only follow a redirect from a small shell. Full player pages often have
+  // ad/anti-frame location assignments that are not the media redirect.
+  const redirected = response.body.length <= 2048
+    ? savefilmPlayerRedirectUrl(response.body, url) : null;
+  if (!redirected || redirected === url) return { url, response };
+  return savefilmPlayerResponse(redirected, url, depth + 1);
+}
+
+// Abyss embeds its media as a binary string inside a Base64 JSON envelope.
+// The browser player derives an ASCII MD5 key and decrypts that string with
+// AES-256-CTR. Keep this small, deterministic implementation local to the
+// provider so we never execute the remote player bundle.
+function savefilmMd5Hex(value) {
+  const bytes = [...String(value)].map((char) => char.charCodeAt(0) & 0xff);
+  const bitLength = bytes.length * 8;
+  bytes.push(0x80);
+  while (bytes.length % 64 !== 56) bytes.push(0);
+  for (let shift = 0; shift < 8; shift += 1) bytes.push((bitLength / (2 ** (8 * shift))) & 0xff);
+  let a = 0x67452301;
+  let b = 0xefcdab89;
+  let c = 0x98badcfe;
+  let d = 0x10325476;
+  const shifts = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+  ];
+  const constants = Array.from(
+    { length: 64 }, (_, index) => Math.floor(Math.abs(Math.sin(index + 1)) * 0x100000000) >>> 0,
+  );
+  for (let offset = 0; offset < bytes.length; offset += 64) {
+    const words = Array.from({ length: 16 }, (_, index) => {
+      const position = offset + index * 4;
+      return bytes[position] |
+        (bytes[position + 1] << 8) |
+        (bytes[position + 2] << 16) |
+        (bytes[position + 3] << 24);
+    });
+    const original = [a, b, c, d];
+    for (let index = 0; index < 64; index += 1) {
+      let f;
+      let g;
+      if (index < 16) {
+        f = (b & c) | (~b & d);
+        g = index;
+      } else if (index < 32) {
+        f = (d & b) | (~d & c);
+        g = (5 * index + 1) % 16;
+      } else if (index < 48) {
+        f = b ^ c ^ d;
+        g = (3 * index + 5) % 16;
+      } else {
+        f = c ^ (b | ~d);
+        g = (7 * index) % 16;
+      }
+      const next = d;
+      const sum = (a + f + constants[index] + words[g]) >>> 0;
+      d = c;
+      c = b;
+      b = (b + ((sum << shifts[index]) | (sum >>> (32 - shifts[index])))) >>> 0;
+      a = next;
+    }
+    a = (a + original[0]) >>> 0;
+    b = (b + original[1]) >>> 0;
+    c = (c + original[2]) >>> 0;
+    d = (d + original[3]) >>> 0;
+  }
+  const littleEndian = (word) => Array.from({ length: 4 }, (_, index) => (word >>> (8 * index)) & 0xff);
+  return [...littleEndian(a), ...littleEndian(b), ...littleEndian(c), ...littleEndian(d)]
+    .map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+const SAVEFILM_AES_SBOX =
+  ('637c777bf26b6fc53001672bfed7ab76' +
+    'ca82c97dfa5947f0add4a2af9ca472c0' +
+    'b7fd9326363ff7cc34a5e5f171d83115' +
+    '04c723c31896059a071280e2eb27b275' +
+    '09832c1a1b6e5aa0523bd6b329e32f84' +
+    '53d100ed20fcb15b6acbbe394a4c58cf' +
+    'd0efaa fb434d338545f9027f503c9fa8'.replace(/\s/g, '') +
+    '51a3408f929d38f5bcb6da2110fff3d2' +
+    'cd0c13ec5f974417c4a77e3d645d1973' +
+    '60814fdc222a908846eeb814de5e0bdb' +
+    'e0323a0a4906245cc2d3ac629195e479' +
+    'e7c8376d8dd54ea96c56f4ea657aae08' +
+    'ba78252e1ca6b4c6e8dd741f4bbd8b8a' +
+    '703eb5664803f60e613557b986c11d9e' +
+    'e1f8981169d98e949b1e87e9ce5528df' +
+    '8ca1890dbfe6426841992d0fb054bb16')
+    .match(/../g).map((value) => parseInt(value, 16));
+
+function savefilmAesSubWord(word) {
+  return (SAVEFILM_AES_SBOX[(word >>> 24) & 0xff] << 24) |
+    (SAVEFILM_AES_SBOX[(word >>> 16) & 0xff] << 16) |
+    (SAVEFILM_AES_SBOX[(word >>> 8) & 0xff] << 8) |
+    SAVEFILM_AES_SBOX[word & 0xff];
+}
+
+function savefilmAesSchedule(key) {
+  const words = new Array(60);
+  for (let index = 0; index < 8; index += 1) {
+    const offset = index * 4;
+    words[index] = ((key[offset] << 24) | (key[offset + 1] << 16) |
+      (key[offset + 2] << 8) | key[offset + 3]) >>> 0;
+  }
+  let rcon = 1;
+  for (let index = 8; index < words.length; index += 1) {
+    let previous = words[index - 1];
+    if (index % 8 === 0) {
+      previous = savefilmAesSubWord((previous << 8) | (previous >>> 24)) ^ (rcon << 24);
+      rcon = (rcon << 1) ^ (rcon & 0x80 ? 0x11b : 0);
+    } else if (index % 8 === 4) {
+      previous = savefilmAesSubWord(previous);
+    }
+    words[index] = (words[index - 8] ^ previous) >>> 0;
+  }
+  return words;
+}
+
+function savefilmAesEncryptBlock(input, schedule) {
+  const state = input.slice();
+  const addRoundKey = (round) => {
+    for (let column = 0; column < 4; column += 1) {
+      const word = schedule[round * 4 + column];
+      const offset = column * 4;
+      state[offset] ^= word >>> 24;
+      state[offset + 1] ^= (word >>> 16) & 0xff;
+      state[offset + 2] ^= (word >>> 8) & 0xff;
+      state[offset + 3] ^= word & 0xff;
+    }
+  };
+  const subBytes = () => {
+    for (let index = 0; index < 16; index += 1) state[index] = SAVEFILM_AES_SBOX[state[index]];
+  };
+  const shiftRows = () => {
+    const copy = state.slice();
+    for (let row = 0; row < 4; row += 1) {
+      for (let column = 0; column < 4; column += 1) {
+        state[column * 4 + row] = copy[((column + row) % 4) * 4 + row];
+      }
+    }
+  };
+  const mixColumns = () => {
+    for (let column = 0; column < 4; column += 1) {
+      const offset = column * 4;
+      const a0 = state[offset];
+      const a1 = state[offset + 1];
+      const a2 = state[offset + 2];
+      const a3 = state[offset + 3];
+      const xtime = (value) => ((value << 1) ^ ((value & 0x80) ? 0x1b : 0)) & 0xff;
+      state[offset] = xtime(a0) ^ (xtime(a1) ^ a1) ^ a2 ^ a3;
+      state[offset + 1] = a0 ^ xtime(a1) ^ (xtime(a2) ^ a2) ^ a3;
+      state[offset + 2] = a0 ^ a1 ^ xtime(a2) ^ (xtime(a3) ^ a3);
+      state[offset + 3] = (xtime(a0) ^ a0) ^ a1 ^ a2 ^ xtime(a3);
+    }
+  };
+  addRoundKey(0);
+  for (let round = 1; round <= 14; round += 1) {
+    subBytes();
+    shiftRows();
+    if (round !== 14) mixColumns();
+    addRoundKey(round);
+  }
+  return state;
+}
+
+function savefilmAesCtrDecrypt(value, seed) {
+  const key = [...savefilmMd5Hex(seed)].map((char) => char.charCodeAt(0));
+  const schedule = savefilmAesSchedule(key);
+  const counter = key.slice(0, 16);
+  const encrypted = [...String(value)].map((char) => char.charCodeAt(0) & 0xff);
+  const plain = [];
+  for (let offset = 0; offset < encrypted.length; offset += 16) {
+    const stream = savefilmAesEncryptBlock(counter, schedule);
+    const length = Math.min(16, encrypted.length - offset);
+    for (let index = 0; index < length; index += 1) plain.push(encrypted[offset + index] ^ stream[index]);
+    for (let index = 15; index >= 0; index -= 1) {
+      counter[index] = (counter[index] + 1) & 0xff;
+      if (counter[index] !== 0) break;
+    }
+  }
+  const hex = plain.map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return host.codec.base64ToText(host.codec.hexToBase64(hex));
+}
+
+function savefilmBase64Binary(value) {
+  const hex = host.codec.base64ToHex(value);
+  let result = '';
+  for (let index = 0; index < hex.length; index += 2) {
+    result += String.fromCharCode(parseInt(hex.slice(index, index + 2), 16));
+  }
+  return result;
+}
+
+function savefilmAbyssMediaUrls(html) {
+  const match = /\b(?:const|let|var)\s+datas\s*=\s*["']([^"']+)["']/i.exec(html || '');
+  if (!match) return [];
+  try {
+    const payload = JSON.parse(savefilmBase64Binary(match[1]));
+    if (typeof payload.media !== 'string' || payload.slug == null || payload.md5_id == null || payload.user_id == null) return [];
+    const media = JSON.parse(savefilmAesCtrDecrypt(
+      payload.media,
+      `${payload.user_id}:${payload.slug}:${payload.md5_id}`,
+    ));
+    const values = [];
+    const add = (entry, format) => {
+      const url = entry && typeof entry.url === 'string' ? entry.url.trim() : '';
+      if (!/^https?:\/\/[^\s]+$/i.test(url) || values.some((value) => value.url === url)) return;
+      values.push({ url, format });
+    };
+    for (const entry of media.mp4?.fristDatas || []) add(entry, 'mp4');
+    for (const entry of media.hls?.fristDatas || []) add(entry, 'hls');
+    return values;
+  } catch (_) {
+    return [];
+  }
+}
+
 // Several Savefilm players put the media URL in a Dean Edwards
 // P.A.C.K.E.R.-wrapped JWPlayer configuration. Decode only the substitution
 // table; never evaluate the upstream script.
@@ -9975,11 +10208,18 @@ function savefilmMediaUrls(html, base) {
       format: /\.m3u8(?:[?#]|$)/i.test(url) ? 'hls' : 'mp4',
     });
   };
-  const scripts = [String(html || ''), savefilmUnpack(html)];
+  const scripts = [String(html || ''), savefilmUnpack(html)]
+    .map((script) => String(script || '').replace(/\\\//g, '/'));
   scripts.forEach((script) => {
     const assigned = /(?:data-hash|urlPlay|file|source)\s*[:=]\s*["']([^"']+\.(?:m3u8|mp4)(?:[?#][^"']*)?)/gi;
     let match;
     while ((match = assigned.exec(script)) != null) add(match[1]);
+    // CloudX's Dingtezuni extractor accepts any quoted value containing a
+    // media extension from a `links`/`sources` object, not only `file` or
+    // `source` assignments. Restrict this fallback to URL-like values so a
+    // page title ending in `.mp4` is never exposed as a stream.
+    const cloudX = /:\s*["']((?:https?:\/\/|\/\/|\/)[^"']+\.(?:m3u8|mp4)(?:[?#][^"']*)?)["']/gi;
+    while ((match = cloudX.exec(script)) != null) add(match[1]);
     const general = /(?:https?:\/\/|\/)[^"'\\\s<>]+\.(?:m3u8|mp4)(?:[?#][^"'\\\s<>]*)?/gi;
     while ((match = general.exec(script)) != null) add(match[0]);
   });
@@ -9997,8 +10237,11 @@ async function savefilmPlayerStreams(detailUrl) {
     for (const iframeUrl of savefilmIframeUrls(page.body, pageUrl)) {
       let media = savefilmMediaUrls(iframeUrl, pageUrl);
       if (media.length === 0) {
-        const iframe = await savefilmGet(iframeUrl, pageUrl);
-        media = iframe == null ? [] : savefilmMediaUrls(iframe.body, iframeUrl);
+        const iframe = await savefilmPlayerResponse(iframeUrl, pageUrl);
+        media = iframe == null ? [] : [
+          ...savefilmMediaUrls(iframe.response.body, iframe.url),
+          ...savefilmAbyssMediaUrls(iframe.response.body),
+        ];
       }
       for (const entry of media) {
         if (streams.some((stream) => stream.url === entry.url)) continue;
@@ -10048,7 +10291,10 @@ async function savefilmResolveSource(sourceId) {
   const prefix = `${SAVEFILM_PROVIDER_KEY}:`;
   if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) throw new Error('Invalid Savefilm source id');
   const payload = savefilmDecode(sourceId.slice(prefix.length));
-  if (!payload || typeof payload.u !== 'string' || !/^https?:\/\/[^\s]+\.(?:m3u8|mp4)(?:[?#].*)?$/i.test(payload.u)) {
+  if (!payload || typeof payload.u !== 'string' || (
+    !/^https?:\/\/[^\s]+\.(?:m3u8|mp4)(?:[?#].*)?$/i.test(payload.u) &&
+    !/^https?:\/\/[^\s]+\.sssrr\.org\/[^\s]+$/i.test(payload.u)
+  )) {
     throw new Error('Malformed Savefilm source id');
   }
   return {

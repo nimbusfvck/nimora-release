@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.7.3",
+      "version": "0.7.4",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Savefilm playback when Abyss player pages hide MP4 sources behind a JavaScript redirect and AES-CTR encrypted payload.",
         "Fixed Savefilm catalog items using the provider's original title so source lookup still works after the app restores a cached item.",
         "Fixed Savefilm Adult catalog loading by keeping provider-private detail URLs out of the strict catalog item protocol.",
         "Fixed Savefilm NSFW source lookup when TMDB's title differs from Savefilm's article title by preserving the detail URL, supporting current headline markup, and resolving relative player tabs correctly.",
@@ -137,7 +138,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "174fd2d6645e75bdca3f5e762956faea4400701a47167c75c37b5304363d9626"
+      "bundleSha256": "57b9a60a9ae0d8c260fe2ed0379d4620c5155fa4bb739986c45e2b95b19162da"
     }
   ]
 }
