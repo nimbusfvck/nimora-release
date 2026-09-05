@@ -9649,6 +9649,10 @@ async function savefilmCatalogItem(result) {
 
   const item = tmdbToMediaItem(scored[0].result, mediaType);
   if (!item || !item.ref || typeof item.ref.id !== 'string') return null;
+  // The catalog owns the Savefilm title. Keep the TMDB ref for shared
+  // providers, but do not replace the provider's shorter searchable title
+  // with TMDB's often-expanded adult title.
+  item.title = result.title;
   // Keep the provider-owned URL in the resolver process. MediaItemV2 is a
   // strict wire type, so provider-private fields cannot be added to the item.
   // The title-based lookup below remains the restart-safe fallback.

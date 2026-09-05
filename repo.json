@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Savefilm catalog items using the provider's original title so source lookup still works after the app restores a cached item.",
         "Fixed Savefilm Adult catalog loading by keeping provider-private detail URLs out of the strict catalog item protocol.",
         "Fixed Savefilm NSFW source lookup when TMDB's title differs from Savefilm's article title by preserving the detail URL, supporting current headline markup, and resolving relative player tabs correctly.",
         "Fixed Savefilm stream discovery: the provider now scans all Muvipro player tabs, decodes packed player configurations, and exposes direct HLS/MP4 sources with the required referer headers.",
@@ -136,7 +137,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "d405bb368db82936bfe260fd0a47f3233d1085d8eff0c7b17a009875fe4aa515"
+      "bundleSha256": "174fd2d6645e75bdca3f5e762956faea4400701a47167c75c37b5304363d9626"
     }
   ]
 }
