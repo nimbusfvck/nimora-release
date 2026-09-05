@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "0.7.5",
+      "version": "0.7.6",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Cricfy extensionless playlist streams by detecting HLS or DASH from the playback response instead of relying on a URL extension.",
         "Fixed Savefilm native playback by extracting AceFile's direct Google Drive MP4 mirror and filtering Abyss browser-only `.fd` chunks.",
         "Fixed Savefilm playback when Abyss player pages hide MP4 sources behind a JavaScript redirect and AES-CTR encrypted payload.",
         "Fixed Savefilm catalog items using the provider's original title so source lookup still works after the app restores a cached item.",
@@ -139,7 +140,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "583c6349a8a7624932f6d24be9808aaecfbd8c6b60ab1720d7ec4a8113093339"
+      "bundleSha256": "dd59824a01c729de186273dd0112d4e758be89d884233c0806f8a4bc44415f30"
     }
   ]
 }

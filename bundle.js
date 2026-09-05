@@ -3874,23 +3874,60 @@ function cricfyStreamFormatFromUrl(url) {
   return 'other';
 }
 
+function cricfyResponseHeader(response, wanted) {
+  const headers = response && response.headers;
+  if (!headers || typeof headers !== 'object') return '';
+  const lowerWanted = wanted.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === lowerWanted) return String(headers[key] || '');
+  }
+  return '';
+}
+
+function cricfyManifestFormatFromResponse(response) {
+  const contentType = cricfyResponseHeader(response, 'content-type').toLowerCase();
+  const body = String(response && response.body ? response.body : '')
+    .replace(/^\uFEFF/, '')
+    .trimStart();
+  if (
+    contentType.indexOf('mpegurl') !== -1 ||
+    contentType.indexOf('m3u8') !== -1 ||
+    body.startsWith('#EXTM3U')
+  ) {
+    return 'hls';
+  }
+  if (contentType.indexOf('dash+xml') !== -1 || /<MPD(?:\s|>)/i.test(body)) {
+    return 'dash';
+  }
+  return 'other';
+}
+
 // Validate the manifest before handing it to the native player. Upstream
 // mirrors sometimes return an HTML/502 body at a URL that still looks like a
 // playlist; letting that body reach the player produces a misleading
 // "missing #EXTM3U" parser error and can make a bad source look playable.
 async function cricfyValidatePlaybackManifest(url, { headers, format }) {
-  if (format === 'other') return;
+  // Keep ordinary extensionless media (for example MP4 endpoints) on the
+  // native path. A URL that advertises itself as a playlist is cheap to probe,
+  // and its response gives us the authoritative format without a provider or
+  // host-specific exception.
+  const shouldProbeExtensionless =
+    format === 'other' && /(?:^|[\/_-])playlist(?:[\/?#_-]|$)/i.test(url);
+  if (format === 'other' && !shouldProbeExtensionless) return format;
   const response = await fetch(url, { headers });
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`Playback manifest request failed: ${response.status}`);
   }
-  const body = response.body.trim();
-  if (format === 'hls' && !body.startsWith('#EXTM3U')) {
+  const detected =
+    format === 'other' ? cricfyManifestFormatFromResponse(response) : format;
+  const body = String(response.body || '').trim();
+  if (detected === 'hls' && !body.startsWith('#EXTM3U')) {
     throw new Error('Playback response is not an HLS playlist');
   }
-  if (format === 'dash' && !/<MPD(?:\s|>)/i.test(body)) {
+  if (detected === 'dash' && !/<MPD(?:\s|>)/i.test(body)) {
     throw new Error('Playback response is not a DASH manifest');
   }
+  return detected;
 }
 
 // ---- client (port of CricfyClient) ----
@@ -4416,7 +4453,7 @@ async function cricfyResolveStreamAt(link, depth) {
     finalSplit.headers,
   ]);
   const format = cricfyStreamFormatFromUrl(finalSplit.url);
-  await cricfyValidatePlaybackManifest(finalSplit.url, {
+  const validatedFormat = await cricfyValidatePlaybackManifest(finalSplit.url, {
     headers: merged,
     format,
   });
@@ -4424,7 +4461,7 @@ async function cricfyResolveStreamAt(link, depth) {
   return {
     url: finalSplit.url,
     headers: merged,
-    format,
+    format: validatedFormat,
     drm: cricfyBuildDrm(link),
     audioUrl: link.audio.length === 0 ? null : link.audio,
     label: link.name,
