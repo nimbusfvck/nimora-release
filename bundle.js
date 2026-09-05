@@ -9476,6 +9476,7 @@ const SAVEFILM_UA =
   '(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
 
 let savefilmBase = globalThis.__savefilmBaseUrl || null;
+const savefilmDetailUrlsByRef = new Map();
 
 function savefilmHeaders(referer) {
   return {
@@ -9648,14 +9649,10 @@ async function savefilmCatalogItem(result) {
 
   const item = tmdbToMediaItem(scored[0].result, mediaType);
   if (!item || !item.ref || typeof item.ref.id !== 'string') return null;
-  // Keep the provider-owned detail URL alongside the shared TMDB identity.
-  // Savefilm titles are often shorter than TMDB's adult aliases, so resolving
-  // by the mapped title alone can lose the article we just found.
-  item.extra = {
-    ...(item.extra && typeof item.extra === 'object' ? item.extra : {}),
-    savefilmDetailUrl: result.url,
-    savefilmTitle: result.title,
-  };
+  // Keep the provider-owned URL in the resolver process. MediaItemV2 is a
+  // strict wire type, so provider-private fields cannot be added to the item.
+  // The title-based lookup below remains the restart-safe fallback.
+  savefilmDetailUrlsByRef.set(item.ref.id, result.url);
   if (!item.artwork && result.poster) {
     item.artwork = { portrait: { url: result.poster } };
   } else if (result.poster && !item.artwork.portrait) {
@@ -9704,8 +9701,8 @@ function savefilmRefPayload(ref) {
 }
 
 function savefilmItemDetailUrl(item) {
-  const extra = item && item.extra && typeof item.extra === 'object' ? item.extra : {};
-  const value = extra.savefilmDetailUrl;
+  const ref = item && item.ref && typeof item.ref.id === 'string' ? item.ref.id : null;
+  const value = ref == null ? null : savefilmDetailUrlsByRef.get(ref);
   return typeof value === 'string' && /^https?:\/\/[^\s]+$/i.test(value)
     ? value : null;
 }
