@@ -10158,6 +10158,9 @@ function savefilmAbyssMediaUrls(html) {
     const values = [];
     const add = (entry, format) => {
       const url = entry && typeof entry.url === 'string' ? entry.url.trim() : '';
+      // Abyss `.fd` URLs are only the first chunk for its browser service
+      // worker. They are not files that AVFoundation/ExoPlayer can open.
+      if (format === 'mp4' && /\.fd(?:[?#]|$)/i.test(url)) return;
       if (!/^https?:\/\/[^\s]+$/i.test(url) || values.some((value) => value.url === url)) return;
       values.push({ url, format });
     };
@@ -10226,6 +10229,34 @@ function savefilmMediaUrls(html, base) {
   return values;
 }
 
+// AceFile's default mirror is a public Google Drive object. Its page keeps
+// the Drive file id and API key inside the same small P.A.C.K.E.R. script
+// used to select the mirror. Build the media endpoint without evaluating the
+// upstream script or relying on its iframe/service-worker logic.
+function savefilmAcefileMediaUrls(html) {
+  const script = savefilmUnpack(html).replace(/\\\//g, '/');
+  const mirror = /var\s+DUAR\s*=\s*\[\s*\{[^}]*["']?\bcode["']?\s*:\s*["']([^"']+)["']/i.exec(script);
+  const encodedQuery = /atob\(\s*["']([^"']+)["']\s*\)\s*\+\s*atob\(\s*DUAR\.code\s*\)\s*\+\s*atob\(\s*["']([^"']+)["']\s*\)/i.exec(script);
+  if (!mirror || !encodedQuery) return [];
+  try {
+    const fileId = host.codec.base64ToText(mirror[1]).trim();
+    const prefix = host.codec.base64ToText(encodedQuery[1]);
+    const suffix = host.codec.base64ToText(encodedQuery[2]);
+    if (!/^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/$/i.test(prefix) ||
+        !/^[A-Za-z0-9_-]{10,}$/.test(fileId) || !/^\?alt=json&fields=/i.test(suffix)) {
+      return [];
+    }
+    const key = /(?:^|&)key=([^&]+)/i.exec(suffix)?.[1];
+    if (!key) return [];
+    return [{
+      url: `${prefix}${fileId}?alt=media&key=${key}`,
+      format: 'mp4',
+    }];
+  } catch (_) {
+    return [];
+  }
+}
+
 async function savefilmPlayerStreams(detailUrl) {
   const detail = await savefilmGet(detailUrl, `${savefilmBase || SAVEFILM_DEFAULT_BASE}/`);
   if (detail == null) return [];
@@ -10241,6 +10272,7 @@ async function savefilmPlayerStreams(detailUrl) {
         media = iframe == null ? [] : [
           ...savefilmMediaUrls(iframe.response.body, iframe.url),
           ...savefilmAbyssMediaUrls(iframe.response.body),
+          ...savefilmAcefileMediaUrls(iframe.response.body),
         ];
       }
       for (const entry of media) {
@@ -10291,15 +10323,18 @@ async function savefilmResolveSource(sourceId) {
   const prefix = `${SAVEFILM_PROVIDER_KEY}:`;
   if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) throw new Error('Invalid Savefilm source id');
   const payload = savefilmDecode(sourceId.slice(prefix.length));
-  if (!payload || typeof payload.u !== 'string' || (
-    !/^https?:\/\/[^\s]+\.(?:m3u8|mp4)(?:[?#].*)?$/i.test(payload.u) &&
-    !/^https?:\/\/[^\s]+\.sssrr\.org\/[^\s]+$/i.test(payload.u)
-  )) {
+  const isFile = typeof payload?.u === 'string' &&
+    /^https?:\/\/[^\s]+\.(?:m3u8|mp4)(?:[?#].*)?$/i.test(payload.u);
+  const isAcefile = typeof payload?.u === 'string' &&
+    /^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/[A-Za-z0-9_-]{10,}\?alt=media&key=[^\s&]+$/i.test(payload.u);
+  if (!payload || typeof payload.u !== 'string' || (!isFile && !isAcefile)) {
     throw new Error('Malformed Savefilm source id');
   }
   return {
     url: payload.u,
-    format: /\.m3u8(?:[?#]|$)/i.test(payload.u) ? 'hls' : 'mp4',
+    // The shared stream protocol has hls/dash/other, not mp4. Native
+    // players still recognize a genuine MP4 by its URL/MIME type.
+    format: /\.m3u8(?:[?#]|$)/i.test(payload.u) ? 'hls' : 'other',
     headers: {
       Referer: payload.r || `${savefilmBase || SAVEFILM_DEFAULT_BASE}/`,
       'User-Agent': SAVEFILM_UA,
