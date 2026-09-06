@@ -5610,6 +5610,10 @@ const TMDB_WATCH_REGION = globalThis.__tmdbWatchRegion || 'US';
 // Popular Today follows TMDB's paid streaming tab. Rent and purchase offers
 // are separate categories on TMDB and are intentionally not included here.
 const TMDB_STREAMING_TYPES = 'flatrate';
+const TMDB_LEAKS_BASE = globalThis.__flystreamBaseUrl || 'https://flystream.net';
+const TMDB_LEAKS_TTL_MS = 15 * 60 * 1000;
+
+let tmdbLeaksMemo = null;
 
 // --- fetch helpers ---
 
@@ -5626,6 +5630,137 @@ async function tmdbGetJson(path, query) {
     throw new Error(`Request to ${path} failed: ${response.status}`);
   }
   return JSON.parse(response.body);
+}
+
+// FlyStream's leak feed is metadata enrichment, not a playback source. Keep
+// the fetch behind the existing FlyStream cookie/gate when the bundle has
+// loaded flystream.js, and keep a direct fallback for isolated unit tests.
+async function tmdbFetchLeaks() {
+  const url = `${TMDB_LEAKS_BASE}/api/leaks`;
+  if (typeof flystreamRequestJson === 'function') {
+    return flystreamRequestJson(url);
+  }
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+    });
+    if (response.status < 200 || response.status >= 300) return null;
+    return JSON.parse(response.body);
+  } catch (_) {
+    return null;
+  }
+}
+
+const TMDB_MONTHS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+function tmdbDigitalDateFromBody(body, year) {
+  if (typeof body !== 'string' || !Number.isInteger(year)) return null;
+  const match = /\bon\s+digital\s+([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\b/i.exec(body);
+  if (match == null) return null;
+  const month = TMDB_MONTHS.findIndex(
+    (value) => value.toLowerCase() === match[1].toLowerCase(),
+  );
+  const day = Number(match[2]);
+  if (month < 0 || day < 1 || day > 31) return null;
+  const date = new Date(Date.UTC(year, month, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return {
+    iso: `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+    display: `${TMDB_MONTHS[month]} ${day}, ${year}`,
+  };
+}
+
+function tmdbLeakKey(mediaType, tmdbId) {
+  return `${mediaType}:${tmdbId}`;
+}
+
+function tmdbLeakIndexFromResponse(data) {
+  if (data == null || !Array.isArray(data.items)) return null;
+  const index = new Map();
+  for (const entry of data.items) {
+    if (entry == null || typeof entry !== 'object') continue;
+    const mediaType = entry.mediaType === 'movie' || entry.mediaType === 'tv'
+      ? entry.mediaType
+      : null;
+    const tmdbId = Number(entry.tmdbId);
+    if (mediaType == null || !Number.isInteger(tmdbId) || tmdbId < 1) continue;
+    const key = tmdbLeakKey(mediaType, tmdbId);
+    const status = index.get(key) || {
+      onDigital: false,
+      leak: false,
+      digitalDate: null,
+    };
+    const kind = typeof entry.kind === 'string' ? entry.kind.toLowerCase() : '';
+    if (kind === 'digital') status.onDigital = true;
+    if (kind === 'leak') status.leak = true;
+    if (kind === 'upcoming') {
+      const year = Number(entry.year);
+      const date = tmdbDigitalDateFromBody(entry.body, year);
+      if (
+        date != null &&
+        (status.digitalDate == null || date.iso < status.digitalDate.iso)
+      ) {
+        status.digitalDate = date;
+      }
+    }
+    index.set(key, status);
+  }
+  return index;
+}
+
+function tmdbLeakIndex() {
+  const now = Date.now();
+  if (
+    tmdbLeaksMemo != null &&
+    now - tmdbLeaksMemo.fetchedAt < TMDB_LEAKS_TTL_MS
+  ) {
+    return tmdbLeaksMemo.promise;
+  }
+  const promise = tmdbFetchLeaks()
+    .then(tmdbLeakIndexFromResponse)
+    .catch(() => null);
+  tmdbLeaksMemo = { fetchedAt: now, promise };
+  return promise;
+}
+
+async function tmdbLeakMetadata(tmdbId, mediaType) {
+  const index = await tmdbLeakIndex();
+  return index == null ? null : index.get(tmdbLeakKey(mediaType, tmdbId)) || null;
+}
+
+function tmdbApplyLeakMetadata(detail, metadata) {
+  if (metadata == null) return detail;
+  const tags = Array.isArray(detail.tags) ? detail.tags.slice() : [];
+  if (metadata.onDigital && !tags.includes('On Digital')) tags.push('On Digital');
+  if (metadata.leak && !tags.includes('Leak')) tags.push('Leak');
+  if (tags.length > 0) detail.tags = tags;
+  if (metadata.digitalDate != null) {
+    const facts = Array.isArray(detail.facts) ? detail.facts.slice() : [];
+    if (!facts.some((fact) => fact && fact.label === 'Digital release')) {
+      facts.push({ label: 'Digital release', value: metadata.digitalDate.display });
+    }
+    detail.facts = facts;
+  }
+  return detail;
 }
 
 async function sheguGetJson(slug, limit) {
@@ -6700,11 +6835,13 @@ async function tmdbMovieMeta(tmdbId) {
   if (credits.length > 0) detail.credits = credits;
   const trailers = tmdbTrailers(data);
   const collectionId = data.belongs_to_collection && data.belongs_to_collection.id;
-  const [previewResponse, recommendations, collection] = await Promise.all([
+  const [leakMetadata, previewResponse, recommendations, collection] = await Promise.all([
+    tmdbLeakMetadata(tmdbId, 'movie'),
     sheguVideoTrailer(tmdbId, 'movie'),
     tmdbRecommendationsOf(tmdbId, 'movie'),
     tmdbCollectionOf(collectionId),
   ]);
+  tmdbApplyLeakMetadata(detail, leakMetadata);
   const preview = sheguPreviewWithThumbnail(previewResponse, trailers);
   if (preview != null) trailers.unshift(preview);
   if (trailers.length > 0) detail.trailers = trailers;
@@ -6728,10 +6865,12 @@ async function tmdbTvMeta(tmdbId) {
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;
   const trailers = tmdbTrailers(data);
-  const [previewResponse, recommendations] = await Promise.all([
+  const [leakMetadata, previewResponse, recommendations] = await Promise.all([
+    tmdbLeakMetadata(tmdbId, 'tv'),
     sheguVideoTrailer(tmdbId, 'tv'),
     tmdbRecommendationsOf(tmdbId, 'tv'),
   ]);
+  tmdbApplyLeakMetadata(detail, leakMetadata);
   const preview = sheguPreviewWithThumbnail(previewResponse, trailers);
   if (preview != null) trailers.unshift(preview);
   if (trailers.length > 0) detail.trailers = trailers;
