@@ -11364,9 +11364,31 @@ function layarkacaAbyssMediaEntries(media, pageUrl) {
   if (!media || typeof media !== 'object') return [];
   const direct = (entry) => {
     if (!entry || typeof entry !== 'object') return null;
+    // Hydrax's current payload keeps the media host in `url` and the actual
+    // rendition path in `path`. Returning the host root looks like a valid
+    // HTTP URL but cannot play; join both parts before considering shortcuts.
+    if (typeof entry.path === 'string' && entry.path.trim()) {
+      const host = typeof entry.url === 'string' &&
+          /^https?:\/\/[^/]+\/?$/i.test(entry.url.trim())
+        ? entry.url.trim().replace(/\/$/, '')
+        : pageUrl;
+      const path = layarkacaUrl(
+        `/${entry.path.trim().replace(/^\/+/, '')}`,
+        host,
+      );
+      if (path) return path;
+    }
     for (const key of ['file', 'url', 'master', 'src', 'source']) {
       const value = layarkacaAbyssSourceUrl(entry[key], pageUrl);
-      if (value) return value;
+      if (!value) continue;
+      // A source's `url` can be just its storage origin. It is only useful
+      // when no separate path was supplied, or when it already names media.
+      if (key === 'url' &&
+          /^https?:\/\/[^/]+\/?$/i.test(value) &&
+          !(entry.file || entry.master || entry.src || entry.source)) {
+        continue;
+      }
+      return value;
     }
     return null;
   };
@@ -11381,6 +11403,7 @@ function layarkacaAbyssMediaEntries(media, pageUrl) {
         (Number.isFinite(left) ? left : 0);
     });
     return sorted.map((entry) => {
+      if (entry && String(entry.codec || '').toLowerCase() === 'av1') return null;
       const value = direct(entry);
       if (!value) return null;
       return {
