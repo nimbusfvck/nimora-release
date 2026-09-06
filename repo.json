@@ -3,13 +3,16 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added independent LayarKaca HYDRAX, P2P, TURBOVIP, and CAST sources with Indonesian locale metadata and runtime movie-domain discovery through d21.team.",
+        "Exposed Hydrax's fixed 360p, 480p, 720p, and 1080p renditions as real playback variants instead of claiming a quality from a single URL.",
+        "Hardened LayarKaca player extraction across Filesim, Playcdn, Videonode, Abyss, and browser-only fallbacks while preserving required referers.",
         "Added FlyStream leak metadata to TMDB details: `On Digital` and `Leak` tags plus parsed digital release dates.",
         "Fixed Cricfy extensionless playlist streams by detecting HLS or DASH from the playback response instead of relying on a URL extension.",
         "Fixed Savefilm native playback by extracting AceFile's direct Google Drive MP4 mirror and filtering Abyss browser-only `.fd` chunks.",
@@ -141,7 +144,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "b556124de5ff963d09c2ffdcc184d78df8bdb1c02c0f7e261f25eb176830251a"
+      "bundleSha256": "508e6d9ade6def8ee6e48a6d47b345fa3f8397ad96057af59f044b409e0f3deb"
     }
   ]
 }
