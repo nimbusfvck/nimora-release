@@ -11154,18 +11154,38 @@ async function layarkacaValidateMedia(url, headers, label) {
   return {url, format: 'hls', headers: headers || {}, label};
 }
 
-async function layarkacaResolveIframe(url, referer, depth, seen) {
+async function layarkacaResolveIframe(url, referer, depth, seen, label) {
   const response = await layarkacaFetch(url, referer, {skipCloudflare: true});
   if (response == null) {
-    return layarkacaResolveWebViewCandidate(url, referer, depth, seen);
+    const preferred = await layarkacaResolveWebViewCandidate(
+      url, referer, depth, seen, label,
+    );
+    return preferred || (
+      layarkacaWebViewPattern(url, label) === LAYARKACA_WEBVIEW_PATTERN
+        ? null
+        : layarkacaResolveWebViewCandidate(
+          url, referer, depth, seen, null, false,
+        )
+    );
   }
   const pageUrl = response.url || url;
   const players = layarkacaPlayerUrls(response.body, pageUrl);
   for (const player of players) {
-    const resolved = await layarkacaResolveUrl(player.url, pageUrl, depth + 1, seen, player.label);
+    const resolved = await layarkacaResolveUrl(
+      player.url, pageUrl, depth + 1, seen, player.label || label,
+    );
     if (resolved) return resolved;
   }
-  return layarkacaResolveWebViewCandidate(pageUrl, referer, depth, seen);
+  const preferred = await layarkacaResolveWebViewCandidate(
+    pageUrl, referer, depth, seen, label,
+  );
+  return preferred || (
+    layarkacaWebViewPattern(pageUrl, label) === LAYARKACA_WEBVIEW_PATTERN
+      ? null
+      : layarkacaResolveWebViewCandidate(
+        pageUrl, referer, depth, seen, null, false,
+      )
+  );
 }
 
 // The current upstream iframe is a browser-only shell: it loads a nested
@@ -11175,13 +11195,29 @@ async function layarkacaResolveIframe(url, referer, depth, seen) {
 // chain before Playcdn/Abyss gets a chance to resolve it.
 const LAYARKACA_WEBVIEW_PATTERN =
   'm3u8|master\\.txt|playcdn\\.de/video\\.php|abyssplayer\\.com/';
+const LAYARKACA_ABYSS_WEBVIEW_PATTERN =
+  'abyssplayer\\.com/|abysscdn\\.com/|hydraxcdn\\.biz/|embedplayabyss\\.top/';
 
-async function layarkacaResolveWebViewCandidate(url, referer, depth, seen) {
+function layarkacaWebViewPattern(url, label, preferAbyss = true) {
+  const lowerUrl = String(url || '').toLowerCase();
+  return preferAbyss && (
+      /hydrax/i.test(String(label || '')) ||
+      lowerUrl.includes('/iframe/hydrax/') ||
+      lowerUrl.includes('/iframe3/hydrax/')
+    )
+    ? LAYARKACA_ABYSS_WEBVIEW_PATTERN
+    : LAYARKACA_WEBVIEW_PATTERN;
+}
+
+async function layarkacaResolveWebViewCandidate(
+  url, referer, depth, seen, label, preferAbyss = true,
+) {
+  const interceptPattern = layarkacaWebViewPattern(url, label, preferAbyss);
   try {
     const intercepted = await fetch(url, {
       headers: {
         Referer: referer || url,
-        'X-QJSR-WebView-Pattern': LAYARKACA_WEBVIEW_PATTERN,
+        'X-QJSR-WebView-Pattern': interceptPattern,
       },
     });
     const candidate = intercepted.url || '';
@@ -11198,7 +11234,7 @@ async function layarkacaResolveWebViewCandidate(url, referer, depth, seen) {
       url || referer,
       (depth || 0) + 1,
       seen || new Set(),
-      'WebView',
+      label || 'WebView',
     );
   } catch (_) {
     return null;
@@ -11809,7 +11845,9 @@ async function layarkacaResolveUrl(url, referer, depth, seen, label) {
   }
   if (/(?:\/iframe(?:3)?\/p2p\/)/i.test(url)) {
     const p2p = await layarkacaResolveP2pIframe(url, referer);
-    return p2p || layarkacaResolveWebViewCandidate(url, referer, depth, visited);
+    return p2p || layarkacaResolveWebViewCandidate(
+      url, referer, depth, visited, label,
+    );
   }
   if (layarkacaMatches(
     url,
@@ -11835,12 +11873,12 @@ async function layarkacaResolveUrl(url, referer, depth, seen, label) {
     return layarkacaResolveF16(url);
   }
   if (layarkacaMatches(url, LAYARKACA_FILEMOON_PREFIX, /https?:\/\/filemoon\.sx\//i)) {
-    return layarkacaResolveIframe(url, referer, depth, visited);
+    return layarkacaResolveIframe(url, referer, depth, visited, label);
   }
   if (layarkacaMatches(url, LAYARKACA_IFRAME_PREFIX, /https?:\/\/playeriframe\.sbs\//i)) {
-    return layarkacaResolveIframe(url, referer, depth, visited);
+    return layarkacaResolveIframe(url, referer, depth, visited, label);
   }
-  return layarkacaResolveIframe(url, referer, depth, visited);
+  return layarkacaResolveIframe(url, referer, depth, visited, label);
 }
 
 async function layarkacaResolveServerSource(sourceId, server) {
@@ -11871,6 +11909,7 @@ async function layarkacaResolveServerSource(sourceId, server) {
     playerReferer,
     0,
     new Set(),
+    player.label || server.name,
   );
   // Some LayarKaca servers expose a browser-only iframe shell. Opening that
   // shell alone drops the episode-page context that the nested player needs,
@@ -11883,6 +11922,7 @@ async function layarkacaResolveServerSource(sourceId, server) {
       playerReferer,
       0,
       new Set(),
+      player.label || server.name,
     );
   }
   if (!resolved) throw new Error('LayarKaca extractor returned no playable media');
