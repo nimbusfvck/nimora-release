@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.4",
+      "version": "1.0.5",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed LayarKaca P2P Videonode resolution by using the normal HTTP-first extraction path so nested player iframes can resolve without waiting for a WebView timeout.",
         "Fixed Hydrax WebView resolution to stay on the Abyss quality chain instead of falling back to a single Playcdn rendition, including support for `abyss.to` player links.",
         "Fixed Hydrax WebView resolution to prefer the Abyss player quality payload before falling back to the single Playcdn HLS rendition, allowing the available fixed quality variants to reach the player.",
         "Fixed Hydrax fixed-MP4 quality variants by joining each rendition's media host and path, filtering AV1-only entries, and exposing valid H264 480p, 720p, and 1080p streams to the player quality picker.",
@@ -147,7 +148,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "a7aecb835cc6449aa901872695818e15fd003a542bbfe492712643f4d2155101"
+      "bundleSha256": "243091e20a05cc6d4fdfc7b0c846f78f1b0cb13a5d5e04b6cf0a566bd2b82c45"
     }
   ]
 }

@@ -11155,7 +11155,12 @@ async function layarkacaValidateMedia(url, headers, label) {
 }
 
 async function layarkacaResolveIframe(url, referer, depth, seen, label) {
-  const response = await layarkacaFetch(url, referer, {skipCloudflare: true});
+  // CloudStream's P2P extractor loads the player page through the normal
+  // HTTP client first. That lets the Cloudflare layer handle a challenge and
+  // exposes the nested iframe (usually /iframe3/p2p/...) to the extractor
+  // chain. Skipping Cloudflare here incorrectly forced every blocked
+  // Videonode page into the slower WebView path.
+  const response = await layarkacaFetch(url, referer);
   if (response == null) {
     const preferred = await layarkacaResolveWebViewCandidate(
       url, referer, depth, seen, label,
