@@ -1,0 +1,137 @@
+{
+  "apiVersion": 2,
+  "id": "nimora.compact",
+  "name": "Nimora Compact",
+  "version": "1.0.0",
+  "runtime": "js",
+  "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
+  "author": "nimbusfvck",
+  "entry": "bundle.js",
+  "categories": [
+    "all",
+    "live",
+    "sport",
+    "movie",
+    "tv",
+    "anime"
+  ],
+  "providers": [
+    {
+      "id": "nimora.matches",
+      "name": "FotMob",
+      "roles": ["catalog"],
+      "catalogs": [
+        {
+          "id": "fixtures",
+          "name": "Nimora Compact",
+          "categories": ["all", "live", "sport"],
+          "kind": "liveEvent",
+          "display": "row"
+        }
+      ]
+    },
+    {
+      "id": "nimora.moviebox",
+      "name": "MovieBox",
+      "roles": ["stream"]
+    },
+    {
+      "id": "nimora.layarkaca.hydrax",
+      "name": "LayarKaca · HYDRAX",
+      "roles": ["stream"],
+      "locales": {"countries": ["ID"], "languages": ["id"]}
+    },
+    {
+      "id": "nimora.layarkaca.p2p",
+      "name": "LayarKaca · P2P",
+      "roles": ["stream"],
+      "locales": {"countries": ["ID"], "languages": ["id"]}
+    },
+    {
+      "id": "nimora.layarkaca.turbovip",
+      "name": "LayarKaca · TURBOVIP",
+      "roles": ["stream"],
+      "locales": {"countries": ["ID"], "languages": ["id"]}
+    },
+    {
+      "id": "nimora.layarkaca.cast",
+      "name": "LayarKaca · CAST",
+      "roles": ["stream"],
+      "locales": {"countries": ["ID"], "languages": ["id"]}
+    },
+    {
+      "id": "nimora.tmdb",
+      "roles": ["catalog", "meta", "search"],
+      "catalogs": [
+        {
+          "id": "discover",
+          "name": "TMDB",
+          "categories": ["movie", "tv"],
+          "kind": "movie",
+          "display": "grid",
+          "expanded": true
+        },
+        {
+          "id": "highlights",
+          "name": "TMDB",
+          "categories": ["all"],
+          "kind": "movie",
+          "display": "row"
+        },
+        {
+          "id": "previews",
+          "name": "Previews",
+          "categories": [],
+          "surface": "preview"
+        }
+      ]
+    },
+    {
+      "id": "nimora.anilist",
+      "name": "AniList",
+      "roles": ["catalog", "meta", "search"],
+      "catalogs": [
+        {
+          "id": "anilist",
+          "name": "AniList Anime",
+          "categories": ["anime"],
+          "kind": "movie",
+          "display": "grid",
+          "expanded": true,
+          "contentRating": "general"
+        }
+      ]
+    },
+    {
+      "id": "nimora.vidrock",
+      "name": "Vidrock",
+      "roles": ["stream"]
+    },
+    {
+      "id": "nimora.videasy",
+      "name": "Videasy",
+      "roles": ["stream"]
+    },
+    {
+      "id": "nimora.vaplayer",
+      "name": "VaPlayer",
+      "roles": ["stream"]
+    },
+    {
+      "id": "nimora.sokuja",
+      "name": "Sokuja",
+      "roles": ["stream"]
+    },
+    {
+      "id": "nimora.shegu",
+      "name": "Shegu",
+      "roles": ["subtitles"]
+    },
+    {
+      "id": "nimora.skipintro",
+      "name": "Skip Intro",
+      "roles": ["segments"]
+    }
+  ],
+  "permissions": {"hosts": ["*"]}
+}
