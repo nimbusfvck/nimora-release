@@ -10720,7 +10720,7 @@ function layarkacaQueryParam(url, name) {
 function layarkacaUrl(value, base) {
   if (typeof value !== 'string' || !value.trim()) return null;
   const raw = value.trim();
-  if (/^https?:\/\//i.test(raw)) return raw;
+  if (/^https?:\/\//i.test(raw)) return layarkacaIsHttpUrl(raw) ? raw : null;
   if (raw.startsWith('//')) return `https:${raw}`;
   const root = String(base || layarkacaBase).replace(/\/$/, '');
   if (raw.startsWith('/')) return `${layarkacaOrigin(root) || root}${raw}`;
@@ -10730,6 +10730,13 @@ function layarkacaUrl(value, base) {
   }
   const clean = root.split(/[?#]/)[0];
   return `${clean.slice(0, clean.lastIndexOf('/') + 1)}${raw}`;
+}
+
+function layarkacaIsHttpUrl(value) {
+  // QuickJS deliberately exposes no browser `URL` global. Keep this
+  // validation dependency-free: require a non-empty authority and reject
+  // placeholders such as `https://` before they enter the resolver chain.
+  return /^https?:\/\/[^/?#\s]+(?:[/?#]|$)/i.test(String(value || ''));
 }
 
 function layarkacaAttr(attributes, name) {
@@ -10971,7 +10978,7 @@ function layarkacaPlayerUrls(html, pageUrl) {
   const urls = [];
   const add = (url, label) => {
     const absolute = layarkacaUrl(url, pageUrl);
-    if (!absolute || !/^https?:\/\//i.test(absolute) || urls.some((item) => item.url === absolute)) return;
+    if (!absolute || !layarkacaIsHttpUrl(absolute) || urls.some((item) => item.url === absolute)) return;
     urls.push({url: absolute, label: layarkacaText(label) || null});
   };
   const list = /<(?:ul|div)\b[^>]*\bid\s*=\s*["']player-list["'][^>]*>([\s\S]*?)<\/(?:ul|div)>/i
@@ -11174,6 +11181,17 @@ async function layarkacaResolveIframe(url, referer, depth, seen, label) {
     );
   }
   const pageUrl = response.url || url;
+  const requestedOrigin = layarkacaOrigin(url);
+  const responseOrigin = layarkacaOrigin(pageUrl);
+  const refererOrigin = layarkacaOrigin(referer);
+  // A browser challenge can redirect a blocked player back to the parent
+  // catalog homepage. That document is not the requested player and often
+  // contains empty iframe placeholders such as `https://`, which must not
+  // enter the resolver chain.
+  if (requestedOrigin && responseOrigin && refererOrigin &&
+      requestedOrigin !== refererOrigin && responseOrigin === refererOrigin) {
+    return null;
+  }
   const players = layarkacaPlayerUrls(response.body, pageUrl);
   for (const player of players) {
     const resolved = await layarkacaResolveUrl(
@@ -11225,7 +11243,7 @@ async function layarkacaResolveWebViewCandidate(
       },
     });
     const candidate = intercepted.url || '';
-    if (intercepted.status !== 200 || !candidate) return null;
+    if (intercepted.status !== 200 || !layarkacaIsHttpUrl(candidate)) return null;
     if (/(?:m3u8|master\\.txt)/i.test(candidate)) {
       return layarkacaValidateMedia(
         candidate,
@@ -11838,7 +11856,7 @@ async function layarkacaResolveF16(url) {
 }
 
 async function layarkacaResolveUrl(url, referer, depth, seen, label) {
-  if (typeof url !== 'string' || !/^https?:\/\//i.test(url) || depth > 4) return null;
+  if (!layarkacaIsHttpUrl(url) || depth > 4) return null;
   const visited = seen || new Set();
   if (visited.has(url)) return null;
   visited.add(url);
@@ -11916,12 +11934,12 @@ async function layarkacaResolveServerSource(sourceId, server) {
     new Set(),
     player.label || server.name,
   );
-  // Some LayarKaca servers expose a browser-only iframe shell. Opening that
-  // shell alone drops the episode-page context that the nested player needs,
-  // so retry the WebView from the complete watch page. The WebView can then
-  // observe the nested Playcdn/Abyss URL and feed it back into the extractor
-  // chain.
-  if (!resolved && page.watchUrl && page.watchUrl !== player.url) {
+  // The current LayarKaca player links are already direct iframe3 endpoints;
+  // reopening the whole tv12 watch page only creates another WebView and
+  // repeats the same Cloudflare timeout. Keep the parent-page retry for older
+  // browser-only player links that do not carry the iframe3 contract.
+  if (!resolved && !/\/iframe3\//i.test(player.url) &&
+      page.watchUrl && page.watchUrl !== player.url) {
     resolved = await layarkacaResolveWebViewCandidate(
       page.watchUrl,
       playerReferer,
