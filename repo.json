@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.7",
+      "version": "1.0.8",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed LayarKaca browser-only `/iframe3/` players by resolving the nested player from the parent watch page when the direct endpoint is blocked or empty.",
         "Aligned LayarKaca resolution with Nuvio's extractor flow by prioritizing embedded player iframes and decoding packed Abyss/Filemoon JWPlayer configs into validated HLS streams.",
         "Hardened LayarKaca player extraction against Cloudflare redirects to the catalog homepage and invalid placeholder URLs before they reach the resolver.",
         "Fixed LayarKaca P2P Videonode resolution by using the normal HTTP-first extraction path so nested player iframes can resolve without waiting for a WebView timeout.",
@@ -150,7 +151,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "67ebe8acee8486e2f07d1d24a0cb6292326f328f2b0de51104724f3945988f65"
+      "bundleSha256": "2d41a8eab8a4ec4190aa899f9da3cabb944eb73475c9f53932fb0ce292e1a736"
     }
   ]
 }

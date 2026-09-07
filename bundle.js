@@ -12002,12 +12002,13 @@ async function layarkacaResolveServerSource(sourceId, server) {
     new Set(),
     player.label || server.name,
   );
-  // The current LayarKaca player links are already direct iframe3 endpoints;
-  // reopening the whole tv12 watch page only creates another WebView and
-  // repeats the same Cloudflare timeout. Keep the parent-page retry for older
-  // browser-only player links that do not carry the iframe3 contract.
-  if (!resolved && !/\/iframe3\//i.test(player.url) &&
-      page.watchUrl && page.watchUrl !== player.url) {
+  // The /iframe3/ endpoint is a browser-only shell. In a real page it creates
+  // a second iframe (for example an Abyss player) after the parent watch page
+  // has established the embedding context. If the direct request is blocked
+  // or empty, let the generic WebView resolver observe that parent navigation
+  // and return the nested extractor URL. The app still knows nothing about
+  // this provider-specific chain; only this extension supplies the pattern.
+  if (!resolved && page.watchUrl && page.watchUrl !== player.url) {
     resolved = await layarkacaResolveWebViewCandidate(
       page.watchUrl,
       playerReferer,
