@@ -3,18 +3,19 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed LayarKaca `/iframe3/` resolution by parsing the nested player after a browser/Cloudflare fetch, avoiding parent-page timeouts while preserving source and quality extraction.",
         "Initial Nimora Compact bundle with the core catalog, playback, subtitle and LayarKaca providers."
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "995a9712f23f2b2a03405233a3ed01c08381cdfdca30160d9252724c766d5658"
+      "bundleSha256": "c026a9d134881b48ec4ee2d20a08ff0140f7bed8ee3e69e7e13db4e2e394aeb3"
     }
   ]
 }

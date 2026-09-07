@@ -4431,6 +4431,24 @@ const layarkacaSearchBase =
   globalThis.__layarkacaSearchBaseUrl || LAYARKACA_DEFAULT_SEARCH_BASE;
 let layarkacaDiscoveryFlight = null;
 let layarkacaBaseDiscoveryFlight = null;
+const LAYARKACA_WATCH_PAGE_TTL_MS = 15000;
+const layarkacaDiscoveryCache = new Map();
+const layarkacaWatchPageCache = new Map();
+const layarkacaWatchPageFlights = new Map();
+
+function layarkacaWatchPageKey(query, detailUrl, watchUrl) {
+  // Normalize null/omitted episode fields so discovery and source-id resolve
+  // share the page, while different episodes on one series never collide.
+  return JSON.stringify({
+    detailUrl: detailUrl || null,
+    watchUrl: watchUrl || null,
+    title: query && query.title ? String(query.title) : null,
+    year: query && Number.isInteger(query.year) ? query.year : null,
+    isEpisode: query && query.isEpisode === true,
+    season: query && Number.isInteger(query.season) ? query.season : null,
+    episode: query && Number.isInteger(query.episode) ? query.episode : null,
+  });
+}
 
 function layarkacaContentBaseCandidate(value) {
   const url = layarkacaUrl(value, `${LAYARKACA_DIRECTORY_BASE}/`);
@@ -4908,34 +4926,69 @@ function layarkacaDecode(value) {
 }
 
 async function layarkacaWatchPage(query, detailUrl, watchUrl) {
-  let detailResponse = detailUrl == null ? null :
-    await layarkacaFetch(detailUrl, `${layarkacaBase}/`);
-  let detailBody = detailResponse == null ? null : detailResponse.body;
-  let resolvedDetailUrl = detailResponse == null ? detailUrl : (detailResponse.url || detailUrl);
-  if (detailBody == null && query) {
-    const found = await layarkacaSearch(query);
-    if (found) {
-      resolvedDetailUrl = found.url;
-      detailResponse = await layarkacaFetch(found.url, `${layarkacaBase}/`);
-      detailBody = detailResponse == null ? null : detailResponse.body;
+  const cacheKey = layarkacaWatchPageKey(query, detailUrl, watchUrl);
+  const now = Date.now();
+  const cached = layarkacaWatchPageCache.get(cacheKey);
+  if (cached != null && now - cached.fetchedAt < LAYARKACA_WATCH_PAGE_TTL_MS) {
+    return cached.page;
+  }
+  const inFlight = layarkacaWatchPageFlights.get(cacheKey);
+  if (inFlight != null) return inFlight;
+
+  const flight = (async () => {
+    let detailResponse = detailUrl == null ? null :
+      await layarkacaFetch(detailUrl, `${layarkacaBase}/`);
+    let detailBody = detailResponse == null ? null : detailResponse.body;
+    let resolvedDetailUrl = detailResponse == null ? detailUrl : (detailResponse.url || detailUrl);
+    if (detailBody == null && query) {
+      const found = await layarkacaSearch(query);
+      if (found) {
+        resolvedDetailUrl = found.url;
+        detailResponse = await layarkacaFetch(found.url, `${layarkacaBase}/`);
+        detailBody = detailResponse == null ? null : detailResponse.body;
+      }
+    }
+    if (detailBody == null) return null;
+    let resolvedWatchUrl = watchUrl || resolvedDetailUrl;
+    if (query && query.isEpisode) {
+      resolvedWatchUrl = layarkacaEpisodeUrl(
+        detailBody, resolvedDetailUrl, query.season, query.episode,
+      );
+      if (!resolvedWatchUrl) return null;
+    }
+    const page = await layarkacaFetch(resolvedWatchUrl, resolvedDetailUrl);
+    if (page == null) return null;
+    return {
+      detailUrl: resolvedDetailUrl,
+      watchUrl: page.url || resolvedWatchUrl,
+      body: page.body,
+      players: layarkacaPlayerUrls(page.body, page.url || resolvedWatchUrl),
+    };
+  })();
+  layarkacaWatchPageFlights.set(cacheKey, flight);
+  try {
+    const page = await flight;
+    if (page != null) {
+      const fetchedAt = Date.now();
+      const cacheEntry = {fetchedAt, page};
+      layarkacaWatchPageCache.set(cacheKey, cacheEntry);
+      // Discovery starts without a watch URL, while source resolution stores
+      // the resolved watch URL in its restart-safe id. Reuse the fresh page
+      // under both identities so resolving each server does not fetch the
+      // same detail/watch document again.
+      const resolvedKey = layarkacaWatchPageKey(
+        query,
+        page.detailUrl,
+        page.watchUrl,
+      );
+      layarkacaWatchPageCache.set(resolvedKey, cacheEntry);
+    }
+    return page;
+  } finally {
+    if (layarkacaWatchPageFlights.get(cacheKey) === flight) {
+      layarkacaWatchPageFlights.delete(cacheKey);
     }
   }
-  if (detailBody == null) return null;
-  let resolvedWatchUrl = watchUrl || resolvedDetailUrl;
-  if (query && query.isEpisode) {
-    resolvedWatchUrl = layarkacaEpisodeUrl(
-      detailBody, resolvedDetailUrl, query.season, query.episode,
-    );
-    if (!resolvedWatchUrl) return null;
-  }
-  const page = await layarkacaFetch(resolvedWatchUrl, resolvedDetailUrl);
-  if (page == null) return null;
-  return {
-    detailUrl: resolvedDetailUrl,
-    watchUrl: page.url || resolvedWatchUrl,
-    body: page.body,
-    players: layarkacaPlayerUrls(page.body, page.url || resolvedWatchUrl),
-  };
 }
 
 function layarkacaProviderEnabled(enabled, server) {
@@ -4968,12 +5021,18 @@ async function layarkacaDiscover(item) {
 
 async function layarkacaDiscoverForItem(item) {
   const key = JSON.stringify({
-    id: item && (item.id || item.refId || item.slug || item.title),
+    ref: item && item.ref,
     kind: item && item.kind,
+    title: item && item.title,
+    subtitle: item && item.subtitle,
     year: item && item.year,
-    season: item && (item.season ?? item.seasonNumber),
-    episode: item && (item.episode ?? item.episodeNumber),
+    episode: item && item.episode,
   });
+  const now = Date.now();
+  const cached = layarkacaDiscoveryCache.get(key);
+  if (cached != null && now - cached.fetchedAt < LAYARKACA_WATCH_PAGE_TTL_MS) {
+    return cached.value;
+  }
   if (layarkacaDiscoveryFlight && layarkacaDiscoveryFlight.key === key) {
     return layarkacaDiscoveryFlight.promise;
   }
@@ -4987,7 +5046,17 @@ async function layarkacaDiscoverForItem(item) {
     }
   })();
   layarkacaDiscoveryFlight = {key, promise};
-  return promise;
+  try {
+    const value = await promise;
+    if (value != null) {
+      layarkacaDiscoveryCache.set(key, {fetchedAt: Date.now(), value});
+    }
+    return value;
+  } finally {
+    if (layarkacaDiscoveryFlight && layarkacaDiscoveryFlight.promise === promise) {
+      layarkacaDiscoveryFlight = null;
+    }
+  }
 }
 
 async function layarkacaSourcesForServer(args, server) {
@@ -5095,24 +5164,11 @@ async function layarkacaResolveIframe(
       requestedOrigin !== refererOrigin && responseOrigin === refererOrigin) {
     return null;
   }
-  // Hydrax is different from the other Videonode servers: its /iframe3/
-  // document creates the Abyss player only when embedded by the watch page.
-  // Let the generic WebView host select Hydrax in that parent DOM so it keeps
-  // the same frame context as a real browser click.
-  if (parentUrl && parentUrl !== url && /\/iframe3\/hydrax\//i.test(url) &&
-      layarkacaPrefersAbyss(url, label)) {
-    return layarkacaResolveWebViewCandidate(
-      parentUrl, referer, depth, seen, label, true, url,
-    );
-  }
-  // All /iframe3/ endpoints are browser-only shells. Select the requested
-  // endpoint in the parent DOM so P2P/TurboVIP/CAST do not resolve the
-  // default P2P iframe by accident.
-  if (parentUrl && parentUrl !== url && /\/iframe3\//i.test(url)) {
-    return layarkacaResolveWebViewCandidate(
-      parentUrl, referer, depth, seen, label, true, url,
-    );
-  }
+  // CloudStream first parses nested iframe/source URLs from the response and
+  // only falls back to a browser when the document contains no usable child.
+  // Do the same here: a 200 iframe3 response can already expose the Abyss
+  // player, and sending it back to the parent WebView unconditionally turns a
+  // playable Hydrax response into a 45-second parent-page timeout.
   const players = layarkacaPlayerUrls(response.body, pageUrl);
   for (const player of players) {
     const resolved = await layarkacaResolveUrl(
