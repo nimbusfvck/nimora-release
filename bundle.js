@@ -10138,8 +10138,10 @@ async function savefilmPlayerResponse(url, referer, depth = 0) {
 // The browser player derives an ASCII MD5 key and decrypts that string with
 // AES-256-CTR. Keep this small, deterministic implementation local to the
 // provider so we never execute the remote player bundle.
-function savefilmMd5Hex(value) {
-  const bytes = [...String(value)].map((char) => char.charCodeAt(0) & 0xff);
+function savefilmMd5HexBytes(input) {
+  const bytes = Array.isArray(input)
+    ? input.map((value) => Number(value) & 0xff)
+    : [...String(input)].map((char) => char.charCodeAt(0) & 0xff);
   const bitLength = bytes.length * 8;
   bytes.push(0x80);
   while (bytes.length % 64 !== 56) bytes.push(0);
@@ -10197,6 +10199,10 @@ function savefilmMd5Hex(value) {
   const littleEndian = (word) => Array.from({ length: 4 }, (_, index) => (word >>> (8 * index)) & 0xff);
   return [...littleEndian(a), ...littleEndian(b), ...littleEndian(c), ...littleEndian(d)]
     .map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function savefilmMd5Hex(value) {
+  return savefilmMd5HexBytes(value);
 }
 
 const SAVEFILM_AES_SBOX =
@@ -10293,23 +10299,60 @@ function savefilmAesEncryptBlock(input, schedule) {
   return state;
 }
 
-function savefilmAesCtrDecrypt(value, seed) {
-  const key = [...savefilmMd5Hex(seed)].map((char) => char.charCodeAt(0));
+function savefilmAesCtrTransform(input, key, iv) {
   const schedule = savefilmAesSchedule(key);
-  const counter = key.slice(0, 16);
-  const encrypted = [...String(value)].map((char) => char.charCodeAt(0) & 0xff);
-  const plain = [];
-  for (let offset = 0; offset < encrypted.length; offset += 16) {
+  const counter = iv.slice(0, 16);
+  const output = [];
+  for (let offset = 0; offset < input.length; offset += 16) {
     const stream = savefilmAesEncryptBlock(counter, schedule);
-    const length = Math.min(16, encrypted.length - offset);
-    for (let index = 0; index < length; index += 1) plain.push(encrypted[offset + index] ^ stream[index]);
+    const length = Math.min(16, input.length - offset);
+    for (let index = 0; index < length; index += 1) {
+      output.push(input[offset + index] ^ stream[index]);
+    }
     for (let index = 15; index >= 0; index -= 1) {
       counter[index] = (counter[index] + 1) & 0xff;
       if (counter[index] !== 0) break;
     }
   }
+  return output;
+}
+
+function savefilmAesCtrDecrypt(value, seed) {
+  const key = [...savefilmMd5Hex(seed)].map((char) => char.charCodeAt(0));
+  const encrypted = [...String(value)].map((char) => char.charCodeAt(0) & 0xff);
+  const plain = savefilmAesCtrTransform(encrypted, key, key);
   const hex = plain.map((byte) => byte.toString(16).padStart(2, '0')).join('');
   return host.codec.base64ToText(host.codec.hexToBase64(hex));
+}
+
+function savefilmUtf8Bytes(value) {
+  const hex = host.codec.base64ToHex(host.codec.textToBase64(String(value)));
+  const bytes = [];
+  for (let index = 0; index < hex.length; index += 2) {
+    bytes.push(parseInt(hex.slice(index, index + 2), 16));
+  }
+  return bytes;
+}
+
+function savefilmAsciiBytes(value) {
+  return [...String(value)].map((char) => char.charCodeAt(0) & 0xff);
+}
+
+function savefilmAbyssDoubleBase64(bytes) {
+  const hex = bytes.map((byte) => (Number(byte) & 0xff).toString(16).padStart(2, '0')).join('');
+  const first = host.codec.hexToBase64(hex).replace(/=+$/g, '');
+  return host.codec.textToBase64(first).replace(/=+$/g, '');
+}
+
+// CloudStream's AbyssplayerExtractor rebuilds the final `/sora` URL from the
+// encrypted path. The rendition's `path` field is only the browser player's
+// storage hint and is not directly playable by native clients.
+function savefilmAbyssPathToken(path, size) {
+  const sizeInput = [...String(size)].map((char) => char.charCodeAt(0) - 48);
+  const digest = savefilmMd5HexBytes(sizeInput);
+  const key = savefilmAsciiBytes(digest);
+  const encrypted = savefilmAesCtrTransform(savefilmUtf8Bytes(path), key, key);
+  return savefilmAbyssDoubleBase64(encrypted);
 }
 
 function savefilmBase64Binary(value) {
@@ -11214,7 +11257,9 @@ async function layarkacaValidateMedia(url, headers, label) {
   return {url, format: 'hls', headers: headers || {}, label};
 }
 
-async function layarkacaResolveIframe(url, referer, depth, seen, label) {
+async function layarkacaResolveIframe(
+  url, referer, depth, seen, label, parentUrl,
+) {
   // CloudStream's P2P extractor loads the player page through the normal
   // HTTP client first. That lets the Cloudflare layer handle a challenge and
   // exposes the nested iframe (usually /iframe3/p2p/...) to the extractor
@@ -11222,6 +11267,14 @@ async function layarkacaResolveIframe(url, referer, depth, seen, label) {
   // Videonode page into the slower WebView path.
   const response = await layarkacaFetch(url, referer);
   if (response == null) {
+    // Videonode /iframe3/ endpoints are browser-only shells. When the
+    // extension still has the selected player URL, load the watch page and
+    // ask the generic WebView host to select that iframe in its DOM.
+    if (parentUrl && parentUrl !== url && /\/iframe3\//i.test(url)) {
+      return layarkacaResolveWebViewCandidate(
+        parentUrl, referer, depth, seen, label, true, url,
+      );
+    }
     const preferred = await layarkacaResolveWebViewCandidate(
       url, referer, depth, seen, label,
     );
@@ -11244,6 +11297,24 @@ async function layarkacaResolveIframe(url, referer, depth, seen, label) {
   if (requestedOrigin && responseOrigin && refererOrigin &&
       requestedOrigin !== refererOrigin && responseOrigin === refererOrigin) {
     return null;
+  }
+  // Hydrax is different from the other Videonode servers: its /iframe3/
+  // document creates the Abyss player only when embedded by the watch page.
+  // Let the generic WebView host select Hydrax in that parent DOM so it keeps
+  // the same frame context as a real browser click.
+  if (parentUrl && parentUrl !== url && /\/iframe3\/hydrax\//i.test(url) &&
+      layarkacaPrefersAbyss(url, label)) {
+    return layarkacaResolveWebViewCandidate(
+      parentUrl, referer, depth, seen, label, true, url,
+    );
+  }
+  // All /iframe3/ endpoints are browser-only shells. Select the requested
+  // endpoint in the parent DOM so P2P/TurboVIP/CAST do not resolve the
+  // default P2P iframe by accident.
+  if (parentUrl && parentUrl !== url && /\/iframe3\//i.test(url)) {
+    return layarkacaResolveWebViewCandidate(
+      parentUrl, referer, depth, seen, label, true, url,
+    );
   }
   const players = layarkacaPlayerUrls(response.body, pageUrl);
   for (const player of players) {
@@ -11285,7 +11356,7 @@ function layarkacaWebViewPattern(url, label, preferAbyss = true) {
 }
 
 async function layarkacaResolveWebViewCandidate(
-  url, referer, depth, seen, label, preferAbyss = true,
+  url, referer, depth, seen, label, preferAbyss = true, clickUrl,
 ) {
   const interceptPattern = layarkacaWebViewPattern(url, label, preferAbyss);
   try {
@@ -11293,6 +11364,7 @@ async function layarkacaResolveWebViewCandidate(
       headers: {
         Referer: referer || url,
         'X-QJSR-WebView-Pattern': interceptPattern,
+        ...(clickUrl ? {'X-QJSR-WebView-Click-Url': clickUrl} : {}),
       },
     });
     const candidate = intercepted.url || '';
@@ -11472,10 +11544,26 @@ function layarkacaAbyssQualityHeight(entry) {
   return match == null ? null : Number(match[1]);
 }
 
-function layarkacaAbyssMediaEntries(media, pageUrl) {
+function layarkacaAbyssGeneratedUrl(entry, payload, media) {
+  if (!entry || !payload || payload.md5_id == null || payload.slug == null ||
+      entry.res_id == null || entry.size == null || typeof entry.sub !== 'string' ||
+      typeof savefilmAbyssPathToken !== 'function') return null;
+  const domains = media && media.mp4 && media.mp4.domains;
+  if (!Array.isArray(domains)) return null;
+  const domain = domains.find((value) => String(value || '').includes(entry.sub));
+  if (!domain) return null;
+  const path = `/mp4/${payload.md5_id}/${entry.res_id}/${entry.size}?v=${payload.slug}`;
+  const token = savefilmAbyssPathToken(path, entry.size);
+  const host = String(domain).replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  return `https://${host}/sora/${entry.size}/${token}`;
+}
+
+function layarkacaAbyssMediaEntries(media, pageUrl, payload) {
   if (!media || typeof media !== 'object') return [];
   const direct = (entry) => {
     if (!entry || typeof entry !== 'object') return null;
+    const generated = layarkacaAbyssGeneratedUrl(entry, payload, media);
+    if (generated) return generated;
     // Hydrax's current payload keeps the media host in `url` and the actual
     // rendition path in `path`. Returning the host root looks like a valid
     // HTTP URL but cannot play; join both parts before considering shortcuts.
@@ -11516,11 +11604,12 @@ function layarkacaAbyssMediaEntries(media, pageUrl) {
     });
     return sorted.map((entry) => {
       if (entry && String(entry.codec || '').toLowerCase() === 'av1') return null;
-      const value = direct(entry);
+      const generated = layarkacaAbyssGeneratedUrl(entry, payload, media);
+      const value = generated || direct(entry);
       if (!value) return null;
       return {
         url: value,
-        format: layarkacaMediaFormat(value),
+        format: generated ? 'mp4' : layarkacaMediaFormat(value),
         label: String(entry && (entry.label || entry.quality || '') || ''),
         width: Number.isFinite(Number(entry && entry.width))
           ? Number(entry.width) : null,
@@ -11674,11 +11763,15 @@ async function layarkacaResolveAbyss(url, referer, depth, seen) {
   const media = payload && (typeof payload.media === 'object'
     ? payload.media : layarkacaAbyssDecryptMedia(payload));
   const localEntries = media && typeof media === 'object'
-    ? layarkacaAbyssMediaEntries(media, pageUrl) : [];
+    ? layarkacaAbyssMediaEntries(media, pageUrl, payload) : [];
   if (localEntries.length > 0) {
+    const hasGeneratedAbyssUrl = localEntries.some((entry) => /\/sora\/\d+\//i.test(entry.url));
+    const abyssHeaders = hasGeneratedAbyssUrl
+      ? {...baseHeaders, Referer: pageUrl}
+      : baseHeaders;
     const resolved = await layarkacaValidateAbyssEntries(
       localEntries,
-      baseHeaders,
+      abyssHeaders,
       'Abyss',
     );
     if (resolved) return resolved;
@@ -11923,7 +12016,9 @@ async function layarkacaResolveF16(url) {
   return null;
 }
 
-async function layarkacaResolveUrl(url, referer, depth, seen, label) {
+async function layarkacaResolveUrl(
+  url, referer, depth, seen, label, parentUrl,
+) {
   if (!layarkacaIsHttpUrl(url) || depth > 4) return null;
   const visited = seen || new Set();
   if (visited.has(url)) return null;
@@ -11936,7 +12031,15 @@ async function layarkacaResolveUrl(url, referer, depth, seen, label) {
   }
   if (/(?:\/iframe(?:3)?\/p2p\/)/i.test(url)) {
     const p2p = await layarkacaResolveP2pIframe(url, referer);
-    return p2p || layarkacaResolveWebViewCandidate(
+    if (p2p) return p2p;
+    // A failed P2P API can still resolve the selected player in a browser
+    // context. Ask the host to select it in the parent page's DOM.
+    if (parentUrl && parentUrl !== url) {
+      return layarkacaResolveWebViewCandidate(
+        parentUrl, referer, depth, seen, label, true, url,
+      );
+    }
+    return layarkacaResolveWebViewCandidate(
       url, referer, depth, visited, label,
     );
   }
@@ -11969,7 +12072,9 @@ async function layarkacaResolveUrl(url, referer, depth, seen, label) {
   if (layarkacaMatches(url, LAYARKACA_IFRAME_PREFIX, /https?:\/\/playeriframe\.sbs\//i)) {
     return layarkacaResolveIframe(url, referer, depth, visited, label);
   }
-  return layarkacaResolveIframe(url, referer, depth, visited, label);
+  return layarkacaResolveIframe(
+    url, referer, depth, visited, label, parentUrl,
+  );
 }
 
 async function layarkacaResolveServerSource(sourceId, server) {
@@ -11992,15 +12097,16 @@ async function layarkacaResolveServerSource(sourceId, server) {
   if (!page || !page.players[payload.i]) throw new Error('LayarKaca player is unavailable');
   const player = page.players[payload.i];
   const playerReferer = page.watchUrl || page.detailUrl;
-  // Match LayarKacaProvider: every selected server href is opened as a
-  // generic player page, its iframe is extracted, then the iframe URL is
-  // dispatched to the extractor chain. No server host is special-cased.
-  let resolved = await layarkacaResolveIframe(
+  // Match LayarKacaProvider: dispatch the selected URL through the extractor
+  // chain. In particular, /iframe3/p2p/ must reach the P2P api2.php path
+  // instead of being parsed as an ad-bearing HTML shell.
+  let resolved = await layarkacaResolveUrl(
     player.url,
     playerReferer,
     0,
     new Set(),
     player.label || server.name,
+    page.watchUrl,
   );
   // The /iframe3/ endpoint is a browser-only shell. In a real page it creates
   // a second iframe (for example an Abyss player) after the parent watch page
@@ -12008,7 +12114,8 @@ async function layarkacaResolveServerSource(sourceId, server) {
   // or empty, let the generic WebView resolver observe that parent navigation
   // and return the nested extractor URL. The app still knows nothing about
   // this provider-specific chain; only this extension supplies the pattern.
-  if (!resolved && page.watchUrl && page.watchUrl !== player.url) {
+  if (!resolved && page.watchUrl && page.watchUrl !== player.url &&
+      !/\/iframe3\//i.test(player.url)) {
     resolved = await layarkacaResolveWebViewCandidate(
       page.watchUrl,
       playerReferer,
