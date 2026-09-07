@@ -10739,6 +10739,53 @@ function layarkacaIsHttpUrl(value) {
   return /^https?:\/\/[^/?#\s]+(?:[/?#]|$)/i.test(String(value || ''));
 }
 
+// Older Abyss/Filemoon pages use Dean Edwards' P.A.C.K.E.R. around their
+// JWPlayer config. Decode only the substitution table; never evaluate the
+// remote script. Keep this local so the LayarKaca source also works when it is
+// loaded by itself during tests, before the generated bundle adds Savefilm.
+function layarkacaUnpack(script) {
+  const text = String(script || '');
+  const patterns = [
+    /}\(\s*'((?:\\.|[^'])*)'\s*,\s*(\d+)\s*,\s*\d+\s*,\s*'((?:\\.|[^'])*)'\.split\('\|'\)/i,
+    /}\(\s*"((?:\\.|[^"])*)"\s*,\s*(\d+)\s*,\s*\d+\s*,\s*"((?:\\.|[^"])*)"\.split\("\|"\)/i,
+  ];
+  let match;
+  let quote = "'";
+  for (const pattern of patterns) {
+    match = pattern.exec(text);
+    if (match) {
+      quote = pattern === patterns[1] ? '"' : "'";
+      break;
+    }
+  }
+  if (!match) return text;
+  const payload = match[1]
+    .replace(quote === "'" ? /\\'/g : /\\"/g, quote)
+    .replace(/\\\\/g, '\\');
+  const radix = Number(match[2]);
+  const words = match[3]
+    .replace(quote === "'" ? /\\'/g : /\\"/g, quote)
+    .split('|');
+  if (!Number.isInteger(radix) || radix < 2 || words.length === 0) return text;
+  const digits = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const token = (index) => {
+    let value = index;
+    let result = '';
+    do {
+      result = digits[value % radix] + result;
+      value = Math.floor(value / radix);
+    } while (value > 0);
+    return result;
+  };
+  let unpacked = payload;
+  for (let index = words.length - 1; index >= 0; index--) {
+    if (!words[index]) continue;
+    const escaped = token(index).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    unpacked = unpacked.replace(new RegExp(`\\b${escaped}\\b`, 'g'), words[index]);
+  }
+  return unpacked;
+}
+
 function layarkacaAttr(attributes, name) {
   const match = new RegExp(`${name}\\s*=\\s*["']([^"']+)`, 'i')
     .exec(attributes || '');
@@ -10994,6 +11041,12 @@ function layarkacaPlayerUrls(html, pageUrl) {
   }
   const main = /<iframe\b([^>]*\bid\s*=\s*["']main-player["'][^>]*)>/i.exec(html || '');
   if (main) add(layarkacaAttr(main[1], 'src'), 'Main player');
+  if (urls.length === 0) {
+    const embedded = /<div\b[^>]*\bclass\s*=\s*["'][^"']*\bembed-container\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i
+      .exec(html || '');
+    const iframe = embedded && /<iframe\b([^>]*)>/i.exec(embedded[1]);
+    if (iframe) add(layarkacaAttr(iframe[1], 'src'), 'Player');
+  }
   if (urls.length === 0) {
     const iframes = /<iframe\b([^>]*)>/gi;
     let iframe;
@@ -11594,6 +11647,21 @@ async function layarkacaResolveAbyss(url, referer, depth, seen) {
       ? firstdoc : await layarkacaFetch(pageUrl, referer, {headers: baseHeaders}));
   if (response == null) return null;
   const scriptData = response.body || '';
+
+  // Older Abyss/Filemoon pages put a JWPlayer `file` URL in a Dean Edwards
+  // packed script instead of the newer `datas` envelope. Match Nuvio's
+  // extractFilemoon path without evaluating remote JavaScript. The local
+  // unpacker and shared media assignment parser implement the safe subset.
+  const unpacked = layarkacaUnpack(scriptData);
+  for (const mediaUrl of layarkacaFilesimUrls(unpacked, pageUrl)) {
+    const resolved = await layarkacaValidateMedia(
+      mediaUrl,
+      baseHeaders,
+      'Abyss',
+    );
+    if (resolved) return resolved;
+  }
+
   const encryptedMatch = /(?:const|let|var)\s+datas\s*=\s*["']([^"']+)["']/i.exec(scriptData);
   if (!encryptedMatch) return null;
   const encrypted = encryptedMatch[1].replace(/\\"/g, '"');
