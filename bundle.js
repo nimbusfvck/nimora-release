@@ -11160,12 +11160,12 @@ async function layarkacaResolveIframe(url, referer, depth, seen, label) {
     const preferred = await layarkacaResolveWebViewCandidate(
       url, referer, depth, seen, label,
     );
-    return preferred || (
-      layarkacaWebViewPattern(url, label) === LAYARKACA_WEBVIEW_PATTERN
-        ? null
-        : layarkacaResolveWebViewCandidate(
-          url, referer, depth, seen, null, false,
-        )
+    // Hydrax must stay on the Abyss chain. Falling back to the generic
+    // Playcdn pattern returns a valid-looking single media playlist and
+    // silently discards Hydrax's fixed quality payload.
+    if (preferred || layarkacaPrefersAbyss(url, label)) return preferred;
+    return layarkacaResolveWebViewCandidate(
+      url, referer, depth, seen, null, false,
     );
   }
   const pageUrl = response.url || url;
@@ -11179,12 +11179,9 @@ async function layarkacaResolveIframe(url, referer, depth, seen, label) {
   const preferred = await layarkacaResolveWebViewCandidate(
     pageUrl, referer, depth, seen, label,
   );
-  return preferred || (
-    layarkacaWebViewPattern(pageUrl, label) === LAYARKACA_WEBVIEW_PATTERN
-      ? null
-      : layarkacaResolveWebViewCandidate(
-        pageUrl, referer, depth, seen, null, false,
-      )
+  if (preferred || layarkacaPrefersAbyss(pageUrl, label)) return preferred;
+  return layarkacaResolveWebViewCandidate(
+    pageUrl, referer, depth, seen, null, false,
   );
 }
 
@@ -11196,15 +11193,17 @@ async function layarkacaResolveIframe(url, referer, depth, seen, label) {
 const LAYARKACA_WEBVIEW_PATTERN =
   'm3u8|master\\.txt|playcdn\\.de/video\\.php|abyssplayer\\.com/';
 const LAYARKACA_ABYSS_WEBVIEW_PATTERN =
-  'abyssplayer\\.com/|abysscdn\\.com/|hydraxcdn\\.biz/|embedplayabyss\\.top/';
+  'abyssplayer\\.com/|abyss\\.to/|abysscdn\\.com/|hydraxcdn\\.biz/|embedplayabyss\\.top/';
+
+function layarkacaPrefersAbyss(url, label) {
+  const lowerUrl = String(url || '').toLowerCase();
+  return /hydrax/i.test(String(label || '')) ||
+    lowerUrl.includes('/iframe/hydrax/') ||
+    lowerUrl.includes('/iframe3/hydrax/');
+}
 
 function layarkacaWebViewPattern(url, label, preferAbyss = true) {
-  const lowerUrl = String(url || '').toLowerCase();
-  return preferAbyss && (
-      /hydrax/i.test(String(label || '')) ||
-      lowerUrl.includes('/iframe/hydrax/') ||
-      lowerUrl.includes('/iframe3/hydrax/')
-    )
+  return preferAbyss && layarkacaPrefersAbyss(url, label)
     ? LAYARKACA_ABYSS_WEBVIEW_PATTERN
     : LAYARKACA_WEBVIEW_PATTERN;
 }
@@ -11347,6 +11346,7 @@ function layarkacaAbyssPageUrl(url) {
   if (LAYARKACA_ABYSS_BASE_OVERRIDE) {
     return `${LAYARKACA_ABYSS_BASE_OVERRIDE.replace(/\/$/, '')}/${match[2]}`;
   }
+  if (host === 'abyss.to') return raw;
   if (host === 'short.icu' || host === 'embedplayabyss.top') {
     return `https://abysscdn.com/?v=${encodeURIComponent(mediaId)}`;
   }
@@ -11852,7 +11852,7 @@ async function layarkacaResolveUrl(url, referer, depth, seen, label) {
   if (layarkacaMatches(
     url,
     LAYARKACA_ABYSS_PREFIX,
-    /https?:\/\/(?:www\.)?(?:abyssplayer\.com|abysscdn\.com|hydraxcdn\.biz|short\.icu|short\.ink|embedplayabyss\.top)\//i,
+    /https?:\/\/(?:www\.)?(?:abyssplayer\.com|abyss\.to|abysscdn\.com|hydraxcdn\.biz|short\.icu|short\.ink|embedplayabyss\.top)\//i,
   )) {
     return layarkacaResolveAbyss(url, referer, depth, visited);
   }
