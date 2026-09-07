@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.9",
+      "version": "1.0.10",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Hydrax `/sora` extensionless media URLs being reported as `other` instead of explicit MP4.",
         "Fixed Hydrax playback by rebuilding CloudStream's encrypted `/sora` MP4 URLs and preserving 360p, 480p, 720p, and 1080p quality variants.",
         "Fixed LayarKaca browser-only `/iframe3/` players by resolving the nested player from the parent watch page when the direct endpoint is blocked or empty.",
         "Aligned LayarKaca resolution with Nuvio's extractor flow by prioritizing embedded player iframes and decoding packed Abyss/Filemoon JWPlayer configs into validated HLS streams.",
@@ -152,7 +153,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "a7a5748dd4977f5aab614e56a28f1057ff0fa3d018d085a7a3adc8ba1261bfaa"
+      "bundleSha256": "ee81c4aa41803fdc9aafcd76d86abc819497976beba0454e14facba79abda19d"
     }
   ]
 }

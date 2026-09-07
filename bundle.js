@@ -11243,7 +11243,12 @@ function layarkacaMatches(url, prefix, hostPattern) {
 }
 
 function layarkacaMediaFormat(url) {
-  return /\.m3u8(?:[?#]|$)/i.test(url) ? 'hls' : 'other';
+  if (/\.m3u8(?:[?#]|$)/i.test(url)) return 'hls';
+  // Abyss/Hydrax serves fixed MP4 renditions without a file extension.
+  // Identifying the canonical `/sora/{size}/{token}` shape keeps it out of
+  // the generic `other` bucket used for genuinely unknown media URLs.
+  if (/\/sora\/\d+\/[^/?#]+(?:[?#]|$)/i.test(url)) return 'mp4';
+  return 'other';
 }
 
 async function layarkacaValidateMedia(url, headers, label) {
