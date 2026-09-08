@@ -23,6 +23,12 @@ const FOTMOB_LEAGUE_COUNTRY = 'USA';
 const FOTMOB_IMAGE_BASE = 'https://images.fotmob.com/image_resources/logo/teamlogo';
 const FOTMOB_LEAGUE_IMAGE_BASE =
   'https://images.fotmob.com/image_resources/logo/leaguelogo/dark';
+// FotMob's market list includes youth competitions but omits Saudi Pro League
+// for the US market. Keep the Football catalog focused on senior competitions
+// and explicitly include the requested Saudi top flight.
+const CURATED_INCLUDED_LEAGUE_IDS = new Set(['536']);
+const CURATED_EXCLUDED_LEAGUE_IDS = new Set(['9741']);
+const CURATED_EXCLUDED_LEAGUE_NAMES = /\bUEFA Youth League\b/i;
 const FOTMOB_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
   '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
@@ -166,6 +172,17 @@ function brandingLeagueId(match) {
   return leagueIdKey(match.primaryLeagueId) || leagueIdKey(match.leagueId);
 }
 
+function footballLeagueIds(match) {
+  return [match.leagueId, match.primaryLeagueId, match.primaryId]
+    .map((id) => leagueIdKey(id))
+    .filter((id) => id != null);
+}
+
+function isCuratedExcludedLeague(match) {
+  return footballLeagueIds(match).some((id) => CURATED_EXCLUDED_LEAGUE_IDS.has(id)) ||
+    CURATED_EXCLUDED_LEAGUE_NAMES.test(`${match.leagueName || ''}`);
+}
+
 function fetchFotmobLeagueBranding(leagueId) {
   const key = leagueIdKey(leagueId);
   if (key == null) return Promise.resolve(null);
@@ -299,8 +316,13 @@ function filterPopularMatches(matches, popularLeagues) {
       .map((id) => String(id)),
   );
   return matches.filter(
-    (match) => [match.leagueId, match.primaryLeagueId, match.primaryId]
-      .some((id) => id != null && allowedIds.has(String(id))),
+    (match) => {
+      if (isCuratedExcludedLeague(match)) return false;
+      const ids = footballLeagueIds(match);
+      return ids.some((id) =>
+        allowedIds.has(id) || CURATED_INCLUDED_LEAGUE_IDS.has(id),
+      );
+    },
   );
 }
 

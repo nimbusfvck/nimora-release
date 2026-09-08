@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Curated Football to include Saudi Pro League and exclude UEFA Youth League.",
         "Fixed football league icons by using FotMob's canonical league artwork and primary competition IDs, including Champions League.",
         "Fixed Champions League fixtures disappearing when FotMob uses season-specific league IDs and primary competition IDs.",
         "Fixed LayarKaca `/iframe3/` resolution by parsing the nested player after a browser/Cloudflare fetch, avoiding parent-page timeouts while preserving source and quality extraction.",
@@ -17,7 +18,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "ffa33ef5e4c1b2b1e2af81eb676ba2bfc543bad18c1898aae465c660a85b9b32"
+      "bundleSha256": "c1108b022851e00dc6f635dfb6e97750bb7a607f0080665638eaa22fcc07eba2"
     }
   ]
 }
