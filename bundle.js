@@ -20,8 +20,8 @@ const FOTMOB_BASE = globalThis.__fotmobBaseUrl || 'https://www.fotmob.com';
 const FOTMOB_CCODE3 = 'IDN';
 const FOTMOB_LEAGUE_COUNTRY = 'USA';
 const FOTMOB_IMAGE_BASE = 'https://images.fotmob.com/image_resources/logo/teamlogo';
-const BY433_LEAGUE_IMAGE_BASE =
-  'https://media.prod.by433.com/media/logos/league';
+const FOTMOB_LEAGUE_IMAGE_BASE =
+  'https://images.fotmob.com/image_resources/logo/leaguelogo/dark';
 const FOTMOB_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
   '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
@@ -161,6 +161,10 @@ function leagueIdKey(value) {
   return /^\d+$/.test(key) ? key : null;
 }
 
+function brandingLeagueId(match) {
+  return leagueIdKey(match.primaryLeagueId) || leagueIdKey(match.leagueId);
+}
+
 function fetchFotmobLeagueBranding(leagueId) {
   const key = leagueIdKey(leagueId);
   if (key == null) return Promise.resolve(null);
@@ -198,7 +202,7 @@ async function leagueBrandingFor(matches) {
   const keys = [
     ...new Set(
       matches
-        .map((match) => leagueIdKey(match.leagueId))
+        .map((match) => brandingLeagueId(match))
         .filter((key) => key != null),
     ),
   ];
@@ -439,7 +443,7 @@ function leagueLogoUrl(leagueId) {
   if (leagueId == null) return null;
   const key = String(leagueId).trim();
   if (!/^\d+$/.test(key)) return null;
-  return `${BY433_LEAGUE_IMAGE_BASE}/${key}.png`;
+  return `${FOTMOB_LEAGUE_IMAGE_BASE}/${key}.png`;
 }
 
 function fotmobParticipantsOf(match) {
@@ -482,7 +486,7 @@ function toMediaItem(match, nowMs, brandingByLeague) {
   if (match.leagueName != null) item.subtitle = match.leagueName;
   const participants = fotmobParticipantsOf(match);
   if (participants.length > 0) item.participants = participants;
-  const branding = brandingByLeague?.get(leagueIdKey(match.leagueId));
+  const branding = brandingByLeague?.get(brandingLeagueId(match));
   if (branding != null) item.branding = branding;
 
   return item;
