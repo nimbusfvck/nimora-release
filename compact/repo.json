@@ -3,19 +3,20 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Champions League fixtures disappearing when FotMob uses season-specific league IDs and primary competition IDs.",
         "Fixed LayarKaca `/iframe3/` resolution by parsing the nested player after a browser/Cloudflare fetch, avoiding parent-page timeouts while preserving source and quality extraction.",
         "Initial Nimora Compact bundle with the core catalog, playback, subtitle and LayarKaca providers."
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "c026a9d134881b48ec4ee2d20a08ff0140f7bed8ee3e69e7e13db4e2e394aeb3"
+      "bundleSha256": "e1ee65701476f354297ab23d786a9e60ec073aaa7aac7afb848874d6f19ed5aa"
     }
   ]
 }

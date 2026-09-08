@@ -256,7 +256,7 @@ async function fetchFotmobMatches(nowMs) {
   return [...matchesById.values()];
 }
 
-// The daily response is `{ leagues: [{ id, name, matches: [...] }] }`.
+// The daily response is `{ leagues: [{ id, primaryId, name, matches: [...] }] }`.
 // Match status and kickoff are already provided by FotMob, so no second live
 // feed or team-name reconciliation is needed.
 function flattenFotmobMatches(data) {
@@ -269,6 +269,9 @@ function flattenFotmobMatches(data) {
         ...match,
         leagueName: match.leagueName || league.name,
         leagueId: match.leagueId != null ? match.leagueId : league.id,
+        primaryLeagueId: match.primaryLeagueId != null
+          ? match.primaryLeagueId
+          : (match.primaryId != null ? match.primaryId : league.primaryId),
         utcTime: match.utcTime || status.utcTime,
         isLive: status.ongoing === true,
         isFinished: status.finished === true,
@@ -284,11 +287,15 @@ function flattenFotmobMatches(data) {
 function filterPopularMatches(matches, popularLeagues) {
   const allowedIds = new Set(
     popularLeagues
-      .filter((league) => league != null && league.id != null)
-      .map((league) => String(league.id)),
+      .flatMap((league) =>
+        league == null ? [] : [league.id, league.primaryId],
+      )
+      .filter((id) => id != null)
+      .map((id) => String(id)),
   );
   return matches.filter(
-    (match) => match.leagueId != null && allowedIds.has(String(match.leagueId)),
+    (match) => [match.leagueId, match.primaryLeagueId, match.primaryId]
+      .some((id) => id != null && allowedIds.has(String(id))),
   );
 }
 
