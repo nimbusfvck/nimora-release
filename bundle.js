@@ -5647,6 +5647,8 @@ const TMDB_LEAKS_BASE = globalThis.__flystreamBaseUrl || 'https://flystream.net'
 const TMDB_LEAKS_TTL_MS = 15 * 60 * 1000;
 
 let tmdbLeaksMemo = null;
+const tmdbTitleLogoMemo = new Map();
+const TMDB_TITLE_LOGO_CONCURRENCY = 4;
 
 // --- fetch helpers ---
 
@@ -5909,6 +5911,39 @@ function tmdbTitleLogo(images) {
     || null;
 }
 
+function tmdbTitleLogoRequest(mediaType, tmdbId) {
+  const key = `${mediaType}:${tmdbId}`;
+  const existing = tmdbTitleLogoMemo.get(key);
+  if (existing != null) return existing;
+  const request = tmdbGetJson(`/${mediaType}/${tmdbId}/images`, {
+    include_image_language: 'en,null',
+  })
+    .then(tmdbTitleLogo)
+    .catch(() => null);
+  tmdbTitleLogoMemo.set(key, request);
+  return request;
+}
+
+async function enrichTrendingTitleLogos(results, items, mediaType) {
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < results.length) {
+      const index = nextIndex++;
+      const result = results[index];
+      if (result == null || result.id == null) continue;
+      const logo = await tmdbTitleLogoRequest(mediaType, result.id);
+      if (logo == null) continue;
+      items[index].artwork = {
+        ...(items[index].artwork || {}),
+        logo: { url: `${TMDB_IMAGE_BASE}/w300${logo.file_path}` },
+      };
+    }
+  };
+  const workerCount = Math.min(TMDB_TITLE_LOGO_CONCURRENCY, results.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return items;
+}
+
 function tmdbTrailerUrl(video) {
   const site = String(video.site || '').toLowerCase();
   const key = String(video.key || '').trim();
@@ -6016,23 +6051,10 @@ async function fetchTrending(mediaType) {
   const items = results.map((r) => tmdbToMediaItem(r, mediaType));
   if (results.length === 0) return items;
 
-  // Only the editorial lead is enriched because it is the featured candidate.
-  // Fetching images for every card would turn one catalog request into N+1.
-  try {
-    const images = await tmdbGetJson(`/${mediaType}/${results[0].id}/images`, {
-      include_image_language: 'en,null',
-    });
-    const logo = tmdbTitleLogo(images);
-    if (logo) {
-      items[0].artwork = {
-        ...(items[0].artwork || {}),
-        logo: { url: `${TMDB_IMAGE_BASE}/w300${logo.file_path}` },
-      };
-    }
-  } catch (e) {
-    // Artwork enrichment is optional; the catalog remains usable with text.
-  }
-  return items;
+  // Every Trending item can become a Home hero candidate. Keep the fan-out
+  // bounded and memoized so repeated catalog reads do not create an
+  // unbounded burst of TMDB requests.
+  return enrichTrendingTitleLogos(results, items, mediaType);
 }
 
 // A future-dated result isn't guaranteed to actually be one — TMDB's flat

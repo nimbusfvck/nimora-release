@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.14",
+      "version": "1.0.15",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Exposed title logos for all TMDB Trending Movie and TV catalog items with bounded, memoized artwork lookups.",
         "Curated Football to include Saudi Pro League and exclude UEFA Youth League.",
         "Fixed football league icons by using FotMob's canonical league artwork and primary competition IDs, including Champions League.",
         "Fixed Champions League fixtures disappearing when FotMob uses season-specific league IDs and primary competition IDs.",
@@ -157,7 +158,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "b85277393d551e83a5d9783691b8a1134c16c580f41bc60c9d0117b6c155c8cd"
+      "bundleSha256": "b2ced7e15dc54d082b35ee014a9cc1b411f9e7510648b50547dc210780e3e9b9"
     }
   ]
 }
