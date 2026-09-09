@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.27",
+      "version": "1.0.28",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed PlayZTV current-feed decoding and endpoint fallback, restored Cricfy in Compact, and hardened Sokuja artwork and episode-date parsing.",
         "Moved the Anime catalog and Home anime shelves to Sokuja, adding Sokuja's Top Anime All Time and Popular Anime This Week rankings while retaining AniList metadata for existing references.",
         "Made Premier League Shorts follow FotMob's current season and matchweek, merging active and latest-played Clipro feeds so new matchweek moments keep appearing automatically.",
         "Consolidated the public catalog providers into Movie & Series, Anime, Live Sport & Event, NSFW, and Shorts; Dracin, UEFA, Premier League, and TMDB preview feeds now remain internal contributors to their logical catalog.",
@@ -171,7 +172,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "70dad8521a8473462dd613b1199cdbcc37e912431c39d82749b30dc96fd4609d"
+      "bundleSha256": "ed5357524b541cd485f827b241dcb24f8c482cb016fd8e90708cda54dd43cd20"
     }
   ]
 }

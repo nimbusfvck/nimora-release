@@ -8073,7 +8073,7 @@ function sokujaAttribute(attributes, name) {
     'i',
   );
   const match = pattern.exec(attributes || '');
-  return match == null ? null : match[1];
+  return match == null ? null : sokujaDecodeHtml(match[1]);
 }
 
 function sokujaTagText(html, tag) {
@@ -8698,7 +8698,7 @@ function sokujaCatalogEpisodeGuide(parentRef, html) {
     .map((entry) => ({
       number: Number(entry && entry.episodeNumber),
       slug: entry && entry.slug,
-      createdAt: entry && entry.createdAt,
+      createdAt: sokujaEpisodeGuideDate(entry && entry.createdAt),
     }))
     .filter((entry) => Number.isInteger(entry.number) && entry.number > 0)
     .filter((entry) => typeof entry.slug === 'string' && entry.slug.length > 0)
@@ -8724,6 +8724,14 @@ function sokujaCatalogEpisodeGuide(parentRef, html) {
     groups: [{ id: 'season:1', title: 'Episodes', episodes }],
     defaultEpisodeRef: episodes[episodes.length - 1].ref,
   };
+}
+
+function sokujaEpisodeGuideDate(value) {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  // Next.js RSC serializes Date values with a `$D` prefix. The extension
+  // protocol expects the underlying ISO-8601 UTC timestamp instead.
+  const normalized = value.replace(/^\$D(?=\d{4}-)/, '');
+  return /^\d{4}-\d{2}-\d{2}T.*Z$/.test(normalized) ? normalized : null;
 }
 
 async function sokujaCatalogMeta(args) {
@@ -14925,6 +14933,7 @@ const PLAYZ_FIREBASE_API_KEY =
 const PLAYZ_FIREBASE_APP_ID =
   '1:516859456626:android:12a75869902c4f8a6826eb';
 const PLAYZ_DEFAULT_BASE_URLS = [
+  'https://tourniquest.site',
   'https://adsflw.xyz',
   'https://playztv2828.store',
 ];
@@ -14932,6 +14941,8 @@ const PLAYZ_PRIMARY_KEY = 'Yi8xam1sNW5rNHg1azdwTg==';
 const PLAYZ_PRIMARY_IV = 'MTRuTWs4bU41S2w1S0w3bA==';
 const PLAYZ_LEGACY_KEY = 'bTVLbDVuazR4SzFrTjdwTg==';
 const PLAYZ_LEGACY_IV = 'azVLNG5NOG1LbE5MN2wxNQ==';
+const PLAYZ_NATIVE_KEY = 'cz14RStkN01PVE5w';
+const PLAYZ_NATIVE_IV = 'WTlEvckd2UR41sdk';
 const PLAYZ_SUBSTITUTION_FROM =
   'aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ';
 const PLAYZ_SUBSTITUTION_TO =
@@ -15027,30 +15038,93 @@ function playzDecodeSubstitution(value) {
   ).join('');
 }
 
+function playzNormalizeBase64(value) {
+  let normalized = playzText(value)
+    .replace(/\s/g, '')
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
+  while (normalized.length % 4) normalized += '=';
+  return normalized;
+}
+
+// The primary provider payload has two Base64 layers:
+// substitution(payload) -> Base64(ciphertext) -> AES-128-CBC(JSON).
+function playzDecodeSubstitutionPayload(value) {
+  const restored = playzDecodeSubstitution(value);
+  return host.codec.base64ToText(playzNormalizeBase64(restored));
+}
+
+function playzAesJson(payload, key, iv) {
+  try {
+    const plain = host.crypto.aesCbcDecrypt(
+      key,
+      iv,
+      playzNormalizeBase64(payload),
+    );
+    if (plain == null) return '';
+    return playzText(host.codec.base64ToText(plain));
+  } catch (_) {
+    return '';
+  }
+}
+
+function playzSwapAdjacent(value) {
+  const chars = [...value];
+  for (let index = 0; index + 1 < chars.length; index += 2) {
+    const temp = chars[index];
+    chars[index] = chars[index + 1];
+    chars[index + 1] = temp;
+  }
+  return chars.join('');
+}
+
+// Current PlayZTV feeds use the native plugin's byte transform before AES:
+// Base64 -> reverse bytes -> swap adjacent bytes -> Base64 -> AES-CBC.
+function playzNativeCiphertext(value) {
+  const decoded = host.codec.base64ToText(playzNormalizeBase64(value));
+  return playzSwapAdjacent([...decoded].reverse().join(''));
+}
+
+// Compatibility format used by the Android provider: the ciphertext is
+// reconstructed from the first/last 10 characters while IV and key are
+// embedded in the middle and tail of the payload.
+function playzDecodeEmbeddedEnvelope(value) {
+  const raw = playzText(value).replace(/\s/g, '');
+  if (raw.length < 79) return '';
+  const encrypted = raw.slice(0, 10) + raw.slice(34, raw.length - 54) + raw.slice(-10);
+  const iv = raw.slice(10, 34);
+  const key = raw.slice(raw.length - 54, raw.length - 10);
+  return playzAesJson(encrypted, key, iv);
+}
+
 function playzDecodeEncrypted(value) {
   const raw = playzText(value);
   if (!raw) return '';
   if (raw.startsWith('{') || raw.startsWith('[')) return raw;
 
-  // The upstream's decoder passes the substituted base64 ciphertext to AES.
-  // Its browser fallback accidentally decodes that value one time too early;
-  // the host crypto API already accepts base64 and avoids that corruption.
-  const candidates = [raw, playzDecodeSubstitution(raw)];
-  for (const candidate of candidates) {
-    for (const pair of [
-      [PLAYZ_PRIMARY_KEY, PLAYZ_PRIMARY_IV],
-      [PLAYZ_LEGACY_KEY, PLAYZ_LEGACY_IV],
-    ]) {
-      try {
-        const plain = host.crypto.aesCbcDecrypt(pair[0], pair[1], candidate);
-        if (plain == null) continue;
-        const text = playzText(host.codec.base64ToText(plain));
-        if (text.startsWith('{') || text.startsWith('[')) return text;
-      } catch (_) {
-        // Try the next key/encoding; upstream rotates between these formats.
-      }
-    }
-  }
+  let native = '';
+  try {
+    native = playzAesJson(
+      playzNativeCiphertext(raw),
+      host.codec.textToBase64(PLAYZ_NATIVE_KEY),
+      host.codec.textToBase64(PLAYZ_NATIVE_IV),
+    );
+  } catch (_) {}
+  if (native.startsWith('{') || native.startsWith('[')) return native;
+
+  const primary = playzAesJson(
+    playzDecodeSubstitutionPayload(raw),
+    PLAYZ_PRIMARY_KEY,
+    PLAYZ_PRIMARY_IV,
+  );
+  if (primary.startsWith('{') || primary.startsWith('[')) return primary;
+
+  const fallback = playzAesJson(raw, PLAYZ_LEGACY_KEY, PLAYZ_LEGACY_IV);
+  if (fallback.startsWith('{') || fallback.startsWith('[')) return fallback;
+
+  const embedded = playzDecodeEmbeddedEnvelope(raw);
+  if (embedded.startsWith('{') || embedded.startsWith('[')) return embedded;
+
   return '';
 }
 
@@ -15342,7 +15416,12 @@ async function playzToken(entry) {
 
 function playzFormat(url) {
   if (/\.mpd(?:[?#]|$)/i.test(url)) return 'dash';
-  if (/\.m3u8(?:[?#]|$)/i.test(url) || /\/hls\//i.test(url)) return 'hls';
+  if (
+    /\.m3u8?(?:[?#]|$)/i.test(url) ||
+    /\/hls\//i.test(url) ||
+    /\/play\.php\?/i.test(url) ||
+    /[?&]e=\.m3u(?:[&#]|$)/i.test(url)
+  ) return 'hls';
   return 'other';
 }
 
