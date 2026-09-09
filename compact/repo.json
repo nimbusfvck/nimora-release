@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.10",
+      "version": "1.0.11",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added Dramadev as a stream-only movie source for TMDB movies, with exact title matching and fresh HLS resolution while keeping Dracin catalog playback intact.",
         "Curated UEFA Champions League and Premier League Shorts to the 20 newest playable items and added movie, TV and football tags for Shorts filtering.",
         "Added paginated Dramaverse and Storyreel Shorts catalogs with per-item tags and episode playback through fresh HLS resolution.",
         "Restored Hydrax quality variants from decoder responses and updated P2P Playcdn resolution for the current `/verify/{slug}` flow.",
@@ -24,7 +25,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "84a067bab516d8068553ca40f933fa6314e127790d54e02a255ab78499893637"
+      "bundleSha256": "c5c2004d03aa015e4a54669532d34e91da081fc89589c9f098c20fa890377568"
     }
   ]
 }

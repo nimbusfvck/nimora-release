@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.20",
+      "version": "1.0.21",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added Dramadev as a stream-only movie source for TMDB movies, with exact title matching and fresh HLS resolution while keeping Dracin catalog playback intact.",
         "Curated UEFA Champions League and Premier League Shorts to the 20 newest playable items and added movie, TV and football tags for Shorts filtering.",
         "Added paginated Dramaverse and Storyreel Shorts catalogs with per-item tags and episode playback through fresh HLS resolution.",
         "Restored Hydrax quality variants from decoder responses and updated P2P Playcdn resolution for the current `/verify/{slug}` flow.",
@@ -163,7 +164,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "ca20b9ff8b9d85202ec557af1d28b804f2b2879f8145d72e735f2ed5505be8ad"
+      "bundleSha256": "ba3776d82c1df87f6e9e0c8d571c464e8ef288b3319f37abf0c17732a8bc52ef"
     }
   ]
 }

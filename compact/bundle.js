@@ -4929,7 +4929,8 @@ if (!globalThis.__extension.sources) {
   };
 }
 
-// Dramadev Dracin series exposed as Shorts and native HLS sources.
+// Dramadev Dracin series exposed as Shorts and native HLS sources, plus
+// stream-only movie matching for TMDB-backed movie items.
 //
 // Dramadev's stream endpoint returns a short-lived /vmanifest token. The
 // manifest is a regular HLS media playlist with relative /v/ MPEG-TS
@@ -4940,6 +4941,7 @@ const DRAMADEV_BASE_URL =
   globalThis.__dramadevBaseUrl || 'https://dramadev.my.id';
 const DRAMADEV_PROVIDER_ID = 'nimora.dramadev';
 const DRAMADEV_PROVIDER_KEY = 'dramadev';
+const DRAMADEV_TMDB_PROVIDER_ID = 'nimora.tmdb';
 const DRAMADEV_CATALOG_ID = 'dracin_shorts';
 const DRAMADEV_SHORTS_PAGE_LIMIT = 5;
 const DRAMADEV_COLLECTIONS = [
@@ -4992,6 +4994,54 @@ async function dramadevJson(path, referer) {
 
 function dramadevText(value) {
   return String(value || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// Keep title matching conservative. Dramadev's search response does not
+// expose a TMDB id or release year, so punctuation/whitespace differences
+// are normalized but fuzzy matches are deliberately not accepted.
+function dramadevTitleKey(value) {
+  return dramadevText(value)
+    .toLowerCase()
+    .replace(/[\s\-_:,.!?'()[\]{}]+/g, ' ')
+    .trim();
+}
+
+function dramadevTmdbMovieId(item) {
+  const ref = item && item.ref;
+  const id = ref && typeof ref.id === 'string' ? ref.id : '';
+  const match = /^movie:([^:]+)$/.exec(id);
+  if (
+    item == null || item.kind !== 'video' ||
+    ref == null || ref.providerId !== DRAMADEV_TMDB_PROVIDER_ID ||
+    match == null
+  ) return null;
+  return match[1];
+}
+
+async function dramadevMovieSearch(title) {
+  const data = await dramadevJson(
+    `/search/lookseries?q=${encodeURIComponent(String(title || ''))}`,
+    `${dramadevBaseUrl()}/`,
+  );
+  if (data == null || !Array.isArray(data.items)) return [];
+  const wanted = dramadevTitleKey(title);
+  const seen = new Set();
+  return data.items.filter((item) => {
+    if (
+      item == null || item.id == null || seen.has(String(item.id)) ||
+      dramadevTitleKey(item.title) !== wanted
+    ) return false;
+    seen.add(String(item.id));
+    return true;
+  });
+}
+
+async function dramadevLookseriesEpisodes(id) {
+  const data = await dramadevJson(
+    `/episodes/lookseries?id=${encodeURIComponent(String(id))}`,
+    `${dramadevBaseUrl()}/`,
+  );
+  return data && Array.isArray(data.episodes) ? data.episodes : [];
 }
 
 function dramadevMoreSeries(data, collectionId) {
@@ -5214,13 +5264,21 @@ function dramadevPayloadFromSourceId(sourceId) {
 }
 
 async function dramadevResolvePayload(payload) {
-  const collection = dramadevCollection(payload.collection);
-  const query = `id=${encodeURIComponent(String(payload.id))}` +
-    `&ep=${encodeURIComponent(String(payload.ep))}` +
-    `&n=${encodeURIComponent(String(payload.n))}`;
+  if (payload == null || payload.id == null) return null;
+  let streamPath;
+  if (payload.kind === 'movie') {
+    streamPath = `/stream/lookseries?id=${encodeURIComponent(String(payload.id))}` +
+      '&ep=&n=1';
+  } else {
+    const collection = dramadevCollection(payload.collection);
+    const query = `id=${encodeURIComponent(String(payload.id))}` +
+      `&ep=${encodeURIComponent(String(payload.ep))}` +
+      `&n=${encodeURIComponent(String(payload.n))}`;
+    streamPath = `/stream/${collection.id}?${query}`;
+  }
   const stream = await dramadevJson(
-    `/stream/${collection.id}?${query}`,
-    `${dramadevBaseUrl()}/stream/${collection.id}?${query}`,
+    streamPath,
+    `${dramadevBaseUrl()}${streamPath}`,
   );
   const manifestUrl = dramadevUrl(stream && stream.video_url);
   if (manifestUrl == null) return null;
@@ -5249,10 +5307,39 @@ async function dramadevSources(args) {
   }
   const item = args && args.item;
   const payload = dramadevPayloadFromRef(item && item.ref);
-  if (payload == null || item.kind !== 'episode') return { sources: [] };
+  if (payload != null && item.kind === 'episode') {
+    return {
+      sources: [{
+        id: `${DRAMADEV_PROVIDER_KEY}:${dramadevEncode(payload)}`,
+        label: 'Dramadev HLS',
+        provider: 'Nimora',
+        providerId: DRAMADEV_PROVIDER_ID,
+      }],
+    };
+  }
+
+  const tmdbId = dramadevTmdbMovieId(item);
+  if (tmdbId == null) return { sources: [] };
+  const title = dramadevText(item.title);
+  if (!title) return { sources: [] };
+  const matches = await dramadevMovieSearch(title);
+  // The search response has no year/TMDB id. Never guess between duplicate
+  // exact titles; offering no source is safer than playing the wrong film.
+  if (matches.length !== 1) return { sources: [] };
+  const match = matches[0];
+  const episodes = await dramadevLookseriesEpisodes(match.id);
+  // LookSeries represents a movie as a one-entry playback list. This keeps
+  // the stream-only provider from accidentally claiming a TV series.
+  if (episodes.length !== 1) return { sources: [] };
+  const moviePayload = {
+    kind: 'movie',
+    id: String(match.id),
+    tmdbId,
+    title,
+  };
   return {
     sources: [{
-      id: `${DRAMADEV_PROVIDER_KEY}:${dramadevEncode(payload)}`,
+      id: `${DRAMADEV_PROVIDER_KEY}:${dramadevEncode(moviePayload)}`,
       label: 'Dramadev HLS',
       provider: 'Nimora',
       providerId: DRAMADEV_PROVIDER_ID,
