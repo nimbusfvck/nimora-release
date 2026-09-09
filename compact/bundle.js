@@ -2819,6 +2819,17 @@ async function fetchLayarKacaHighlightPage(category, page) {
   }
 }
 
+async function fetchSokujaAnimeRanking(rank) {
+  const loader = globalThis.__sokujaAnimeRankingItems;
+  if (typeof loader !== 'function') return [];
+  try {
+    const items = await loader(rank);
+    return Array.isArray(items) ? items : [];
+  } catch (_) {
+    return [];
+  }
+}
+
 const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
@@ -2830,8 +2841,16 @@ const HIGHLIGHT_GROUPS = [
   },
   { id: 'football_highlights', name: 'Football Highlights', fetch: fetchTimesoccerHighlights },
   { id: 'coming_soon', name: 'Coming Soon', fetch: () => fetchComingSoon() },
-  { id: 'trending_anime', name: 'Trending Anime', fetch: () => anilistHighlightItems() },
-  { id: 'popular_anime_season', name: 'Popular Anime This Season', fetch: () => anilistPopularSeasonItems() },
+  {
+    id: 'top_anime_all_time',
+    name: 'Top Anime All Time',
+    fetch: () => fetchSokujaAnimeRanking('all'),
+  },
+  {
+    id: 'popular_anime_week',
+    name: 'Popular Anime This Week',
+    fetch: () => fetchSokujaAnimeRanking('weekly'),
+  },
   {
     id: 'top_rated_movie',
     name: 'Top Rated Movie',
@@ -4348,7 +4367,9 @@ if (!globalThis.__extension.subtitles) {
   globalThis.__extension.subtitles = sheguExternalSubtitles;
 }
 
-// Sokuja anime streams, exposed as a stream provider for Nimora's VOD items.
+// Sokuja anime catalog and streams. The catalog reads Sokuja's public anime
+// pages and its embedded ranking payload; streams still resolve through the
+// site's mirror endpoint for Nimora's VOD items.
 //
 // Sokuja's CloudStream implementation delegates mirror extraction to the
 // CloudStream extractor framework. The app has no extractor runtime, so this
@@ -4398,6 +4419,16 @@ const SOKUJA_TMDB_BASE =
 const SOKUJA_TMDB_API_KEY = '8476a7ab80ad76f0936744df0430e67c';
 const SOKUJA_PROVIDER_KEY = 'sokuja';
 const SOKUJA_PROVIDER_ID = 'nimora.sokuja';
+const SOKUJA_CATALOG_ID = 'sokuja';
+const SOKUJA_ANIME_CATEGORY = 'anime';
+const SOKUJA_CATALOG_ORDERS = [
+  { id: 'update', name: 'Latest Updates', order: 'update' },
+  { id: 'top', name: 'Top Rated', order: 'score' },
+  { id: 'popular', name: 'Most Popular', order: 'popular' },
+];
+const SOKUJA_CATALOG_PER_PAGE = 24;
+const SOKUJA_RANKING_PATH = '/anime/?order=popular';
+let sokujaRankingPending = null;
 const SOKUJA_USER_AGENT =
   'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
@@ -4477,9 +4508,61 @@ function sokujaSearchResults(html) {
           sokujaAttribute(imageTag[1], 'src') ||
             sokujaAttribute(imageTag[1], 'data-src'),
         );
-    results.push({ title, url: href, poster });
+    const text = sokujaDecodeHtml(card);
+    const typeMatch = /\b(TV|Movie|OVA|ONA|Special)\b/i.exec(text);
+    const ratingMatch = /★\s*([0-9]+(?:\.[0-9]+)?)/.exec(text);
+    const yearMatch = /\b((?:19|20)\d{2})\b/.exec(text);
+    results.push({
+      title,
+      url: href,
+      poster,
+      type: typeMatch == null ? null : typeMatch[1].toLowerCase(),
+      rating: ratingMatch == null ? null : Number(ratingMatch[1]),
+      releaseYear: yearMatch == null ? null : Number(yearMatch[1]),
+    });
   }
   return results;
+}
+
+function sokujaRscArray(html, key) {
+  const normalized = String(html || '').replace(/\\"/g, '"');
+  const marker = `"${key}"`;
+  const markerStart = normalized.lastIndexOf(marker);
+  if (markerStart < 0) return [];
+  const arrayStart = normalized.indexOf('[', markerStart + marker.length);
+  if (arrayStart < 0) return [];
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = arrayStart; index < normalized.length; index += 1) {
+    const character = normalized[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === '[') {
+      depth += 1;
+    } else if (character === ']') {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          const value = JSON.parse(normalized.slice(arrayStart, index + 1));
+          return Array.isArray(value) ? value : [];
+        } catch (_) {
+          return [];
+        }
+      }
+    }
+  }
+  return [];
 }
 
 function sokujaSearchCandidates(results, title, season) {
@@ -4887,6 +4970,272 @@ function sokujaItemQuery(item) {
   const episode = Number.isInteger(extra.episode) ? extra.episode : v2EpisodeNumber;
   return { title, season, episode, isEpisode: item && item.kind === 'episode' };
 }
+
+function sokujaPathOf(url) {
+  const origin = sokujaOriginOf(url);
+  if (origin == null || typeof url !== 'string') return null;
+  const path = url.slice(origin.length);
+  return path || '/';
+}
+
+function sokujaCatalogRefId(result) {
+  return `${SOKUJA_PROVIDER_KEY}:anime:${encodeSokujaSource({
+    p: sokujaPathOf(result.url),
+    t: result.title,
+    k: result.type === 'movie' ? 'video' : 'series',
+    r: result.rating,
+    y: result.releaseYear,
+    i: result.poster,
+  })}`;
+}
+
+function sokujaCatalogRefPayload(refId) {
+  const prefix = `${SOKUJA_PROVIDER_KEY}:anime:`;
+  if (typeof refId !== 'string' || !refId.startsWith(prefix)) return null;
+  const payload = decodeSokujaSource(refId.slice(prefix.length));
+  return payload && typeof payload.p === 'string' ? payload : null;
+}
+
+function sokujaCatalogItem(result) {
+  const item = {
+    ref: {
+      extensionId: EXTENSION_ID,
+      providerId: SOKUJA_PROVIDER_ID,
+      id: sokujaCatalogRefId(result),
+    },
+    kind: result.type === 'movie' ? 'video' : 'series',
+    title: result.title,
+  };
+  if (Number.isInteger(result.releaseYear) && result.releaseYear > 0) {
+    item.releaseYear = result.releaseYear;
+  }
+  if (Number.isFinite(result.rating) && result.rating > 0) item.rating = result.rating;
+  if (typeof result.poster === 'string' && result.poster) {
+    item.artwork = { portrait: { url: result.poster } };
+  }
+  return item;
+}
+
+function sokujaCatalogOrder(subCategory) {
+  if (subCategory == null) return SOKUJA_CATALOG_ORDERS[0];
+  return SOKUJA_CATALOG_ORDERS.find((entry) => entry.id === subCategory) || null;
+}
+
+function sokujaHasNextPage(html, order, page) {
+  const next = Number(page) + 1;
+  return new RegExp(
+    `(?:page=${next}(?:&|["']|$)|page%3D${next})`,
+    'i',
+  ).test(html || '') || new RegExp(
+    `order=${order}[^"']*page=${next}`,
+    'i',
+  ).test(html || '');
+}
+
+async function sokujaCatalog(query) {
+  if (query.category !== SOKUJA_ANIME_CATEGORY) return { sections: [] };
+  const subCategories = SOKUJA_CATALOG_ORDERS.map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+  }));
+  const selected = sokujaCatalogOrder(query.subCategory);
+  if (selected == null) return { sections: [], subCategories };
+  const requested = Number(query.page);
+  const page = Number.isInteger(requested) && requested > 0 ? requested : 1;
+  await sokujaEnsureBase();
+  const params = `order=${encodeURIComponent(selected.order)}` +
+    (page > 1 ? `&page=${page}` : '');
+  const url = `${sokujaActiveBase}/anime/?${params}`;
+  const response = await sokujaGet(url, { headers: sokujaHeaders(url) });
+  if (response == null) return { sections: [], subCategories };
+  const items = sokujaSearchResults(response.body)
+    .slice(0, SOKUJA_CATALOG_PER_PAGE)
+    .map(sokujaCatalogItem);
+  const result = {
+    sections: [{ id: selected.id, items }],
+    subCategories,
+  };
+  if (sokujaHasNextPage(response.body, selected.order, page)) {
+    result.nextPage = String(page + 1);
+  }
+  return result;
+}
+
+function sokujaDescription(html) {
+  const match = /<h2\b[^>]*>\s*Sinopsis[\s\S]*?<\/h2>\s*<p\b[^>]*>([\s\S]*?)<\/p>/i.exec(
+    html || '',
+  );
+  return match == null ? '' : sokujaDecodeHtml(match[1]);
+}
+
+function sokujaDetailGenres(html) {
+  const genres = [];
+  const pattern = /<a\b[^>]*href=["'][^"']*\/genre\/[^"']+["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = pattern.exec(html || '')) != null) {
+    const genre = sokujaDecodeHtml(match[1]);
+    if (genre && genres.indexOf(genre) === -1) genres.push(genre);
+  }
+  return genres;
+}
+
+function sokujaCatalogEpisodeRef(parentPath, episode) {
+  return `${SOKUJA_PROVIDER_KEY}:episode:${encodeSokujaSource({
+    p: parentPath,
+    n: episode,
+  })}`;
+}
+
+function sokujaCatalogEpisodeGuide(parentRef, html) {
+  const entries = sokujaEpisodes(html)
+    .map((entry) => ({
+      number: Number(entry && entry.episodeNumber),
+      slug: entry && entry.slug,
+      createdAt: entry && entry.createdAt,
+    }))
+    .filter((entry) => Number.isInteger(entry.number) && entry.number > 0)
+    .filter((entry) => typeof entry.slug === 'string' && entry.slug.length > 0)
+    .sort((a, b) => a.number - b.number);
+  if (entries.length === 0) return null;
+  const parentPath = sokujaPathOf(parentRef.url);
+  const episodes = entries.map((entry) => {
+    const episode = {
+      ref: {
+        extensionId: EXTENSION_ID,
+        providerId: SOKUJA_PROVIDER_ID,
+        id: sokujaCatalogEpisodeRef(parentPath, entry.number),
+      },
+      title: `Episode ${entry.number}`,
+      position: entry.number,
+    };
+    if (typeof entry.createdAt === 'string' && entry.createdAt) {
+      episode.availableAt = entry.createdAt;
+    }
+    return episode;
+  });
+  return {
+    groups: [{ id: 'season:1', title: 'Episodes', episodes }],
+    defaultEpisodeRef: episodes[episodes.length - 1].ref,
+  };
+}
+
+async function sokujaCatalogMeta(args) {
+  const payload = sokujaCatalogRefPayload(args && args.ref && args.ref.id);
+  if (payload == null) {
+    throw new Error(`Not a Sokuja catalog ref id: ${args && args.ref && args.ref.id}`);
+  }
+  await sokujaEnsureBase();
+  const url = sokujaUrl(payload.p);
+  const response = await sokujaGet(url, { headers: sokujaHeaders(`${sokujaActiveBase}/`) });
+  if (response == null) throw new Error(`Sokuja has no anime ${payload.p}`);
+  const heading = sokujaTagText(response.body, 'h1')
+    .replace(/\s+subtitle\s+indonesia\s*$/i, '')
+    .trim();
+  const ref = args.ref;
+  const item = {
+    ref,
+    kind: payload.k === 'video' ? 'video' : 'series',
+    title: heading || payload.t || 'Untitled',
+  };
+  if (Number.isInteger(payload.y) && payload.y > 0) item.releaseYear = payload.y;
+  if (Number.isFinite(payload.r) && payload.r > 0) item.rating = payload.r;
+  if (typeof payload.i === 'string' && payload.i) {
+    item.artwork = { portrait: { url: payload.i } };
+  }
+  const description = sokujaDescription(response.body);
+  const detail = { item };
+  if (description) detail.description = description;
+  const genres = sokujaDetailGenres(response.body);
+  if (genres.length > 0) detail.tags = genres;
+  if (item.kind === 'series') {
+    const guide = sokujaCatalogEpisodeGuide({ ref, url }, response.body);
+    if (guide != null) detail.episodeGuide = guide;
+  }
+  return detail;
+}
+
+function sokujaRankingResult(entry) {
+  if (!entry || typeof entry.slug !== 'string' || typeof entry.title !== 'string') {
+    return null;
+  }
+  const poster = entry.thumbnailUrl || entry.coverUrl;
+  return {
+    title: entry.title.trim(),
+    url: sokujaUrl(`/anime/${entry.slug}/`),
+    poster: typeof poster === 'string' ? sokujaUrl(poster) : null,
+    type: typeof entry.type === 'string' ? entry.type.toLowerCase() : null,
+    rating: Number(entry.score),
+    releaseYear: Number(entry.year),
+  };
+}
+
+async function sokujaRankingPayload() {
+  if (sokujaRankingPending == null) {
+    sokujaRankingPending = (async () => {
+      await sokujaEnsureBase();
+      const url = sokujaUrl(SOKUJA_RANKING_PATH);
+      const response = await sokujaGet(url, { headers: sokujaHeaders(url) });
+      if (response == null) return {};
+      return {
+        weekly: sokujaRscArray(response.body, 'weekly'),
+        all: sokujaRscArray(response.body, 'all'),
+      };
+    })().catch(() => ({}));
+  }
+  return sokujaRankingPending;
+}
+
+async function sokujaAnimeRankingItems(rank) {
+  const payload = await sokujaRankingPayload();
+  const entries = Array.isArray(payload[rank]) ? payload[rank] : [];
+  return entries
+    .map(sokujaRankingResult)
+    .filter((entry) => entry != null)
+    .map(sokujaCatalogItem);
+}
+
+globalThis.__sokujaAnimeRankingItems = sokujaAnimeRankingItems;
+
+async function sokujaSearch(args) {
+  if (args && args.category != null && args.category !== SOKUJA_ANIME_CATEGORY) {
+    return { sections: [] };
+  }
+  const query = args && args.query;
+  if (!query) return { sections: [] };
+  const requested = Number(args.page);
+  const page = Number.isInteger(requested) && requested > 0 ? requested : 1;
+  await sokujaEnsureBase();
+  const url = `${sokujaActiveBase}/?s=${encodeURIComponent(query)}&page=${page}`;
+  const response = await sokujaGet(url, { headers: sokujaHeaders(url) });
+  if (response == null) return { sections: [] };
+  const result = { sections: [{ id: 'sokuja-results', items: sokujaSearchResults(response.body).map(sokujaCatalogItem) }] };
+  if (sokujaHasNextPage(response.body, '', page)) result.nextPage = String(page + 1);
+  return result;
+}
+
+globalThis.__catalogProviders = globalThis.__catalogProviders || [];
+globalThis.__catalogProviders.push({
+  catalogId: SOKUJA_CATALOG_ID,
+  catalog: sokujaCatalog,
+});
+
+globalThis.__metaProviders = globalThis.__metaProviders || [];
+globalThis.__metaProviders.push({
+  providerId: SOKUJA_PROVIDER_ID,
+  meta: sokujaCatalogMeta,
+});
+
+globalThis.__sokujaCatalogActive = true;
+
+globalThis.__extension = globalThis.__extension || {};
+const sokujaPreviousSearch = globalThis.__extension.search;
+globalThis.__extension.search = async (args) => {
+  if (args && (args.category == null || args.category === SOKUJA_ANIME_CATEGORY)) {
+    return sokujaSearch(args);
+  }
+  if (typeof sokujaPreviousSearch !== 'function') return { sections: [] };
+  return sokujaPreviousSearch(args);
+};
 
 async function sokujaSources(args) {
   const enabled = args && args.enabledProviders;
@@ -7912,13 +8261,16 @@ globalThis.__metaProviders.push({
 });
 
 // Search is one call per extension, so the providers in this bundle form a
-// chain rather than a fan-out. AniList takes the `anime` scope outright and
-// hands everything else — including an unscoped search, where TMDB's results
-// would only be duplicated — to whoever was already installed.
+// chain rather than a fan-out. Sokuja owns the live anime catalog when it is
+// present; this keeps AniList available as a metadata/search fallback for
+// isolated bundles and existing AniList refs.
 globalThis.__extension = globalThis.__extension || {};
 const anilistPreviousSearch = globalThis.__extension.search;
 globalThis.__extension.search = async (args) => {
-  if (args && args.category === ANILIST_CATEGORY) return anilistSearch(args);
+  if (args && args.category === ANILIST_CATEGORY &&
+      !globalThis.__sokujaCatalogActive) {
+    return anilistSearch(args);
+  }
   if (typeof anilistPreviousSearch !== 'function') return { sections: [] };
   return anilistPreviousSearch(args);
 };

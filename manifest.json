@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.26",
+  "version": "1.0.27",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -206,24 +206,9 @@
     },
     {
       "id": "nimora.anilist",
-      "name": "Anime",
+      "name": "Anime Metadata (legacy)",
       "roles": [
-        "catalog",
-        "meta",
-        "search"
-      ],
-      "catalogs": [
-        {
-          "id": "anilist",
-          "name": "Anime",
-          "categories": [
-            "anime"
-          ],
-          "kind": "movie",
-          "display": "grid",
-          "expanded": true,
-          "contentRating": "general"
-        }
+        "meta"
       ]
     },
     {
@@ -258,7 +243,23 @@
       "id": "nimora.sokuja",
       "name": "Sokuja",
       "roles": [
+        "catalog",
+        "meta",
+        "search",
         "stream"
+      ],
+      "catalogs": [
+        {
+          "id": "sokuja",
+          "name": "Anime",
+          "categories": [
+            "anime"
+          ],
+          "kind": "movie",
+          "display": "grid",
+          "expanded": true,
+          "contentRating": "general"
+        }
       ]
     },
     {

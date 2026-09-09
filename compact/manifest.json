@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -119,19 +119,8 @@
     },
     {
       "id": "nimora.anilist",
-      "name": "Anime",
-      "roles": ["catalog", "meta", "search"],
-      "catalogs": [
-        {
-          "id": "anilist",
-          "name": "Anime",
-          "categories": ["anime"],
-          "kind": "movie",
-          "display": "grid",
-          "expanded": true,
-          "contentRating": "general"
-        }
-      ]
+      "name": "Anime Metadata (legacy)",
+      "roles": ["meta"]
     },
     {
       "id": "nimora.vidrock",
@@ -151,7 +140,18 @@
     {
       "id": "nimora.sokuja",
       "name": "Sokuja",
-      "roles": ["stream"]
+      "roles": ["catalog", "meta", "search", "stream"],
+      "catalogs": [
+        {
+          "id": "sokuja",
+          "name": "Anime",
+          "categories": ["anime"],
+          "kind": "movie",
+          "display": "grid",
+          "expanded": true,
+          "contentRating": "general"
+        }
+      ]
     },
     {
       "id": "nimora.shegu",
