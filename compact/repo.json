@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.9",
+      "version": "1.0.10",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Curated UEFA Champions League and Premier League Shorts to the 20 newest playable items and added movie, TV and football tags for Shorts filtering.",
         "Added paginated Dramaverse and Storyreel Shorts catalogs with per-item tags and episode playback through fresh HLS resolution.",
         "Restored Hydrax quality variants from decoder responses and updated P2P Playcdn resolution for the current `/verify/{slug}` flow.",
         "Made Hydrax start playback from the lowest validated quality by default while keeping the quality variants ordered from highest to lowest for manual selection.",
@@ -23,7 +24,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "5373d6e05c32b68f13788e33482a8176eaae2e992cdb0de683c0980c5a392e0d"
+      "bundleSha256": "84a067bab516d8068553ca40f933fa6314e127790d54e02a255ab78499893637"
     }
   ]
 }

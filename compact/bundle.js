@@ -2272,6 +2272,7 @@ function tmdbToMediaItem(result, mediaType) {
     },
     kind,
     title,
+    tags: [mediaType === 'movie' ? 'movie' : 'tv'],
   };
   if (Number.isInteger(releaseYear) && releaseYear > 0) {
     mediaItem.releaseYear = releaseYear;
@@ -2410,6 +2411,7 @@ function sheguToMediaItem(item, group) {
     },
     kind: 'video',
     title: item.title || 'Untitled',
+    tags: ['movie'],
   };
   const releaseYear = Number(item.year);
   const rating = sheguRating(item);
@@ -3600,6 +3602,7 @@ const UEFA_STORYTELLER_CLIENT_VERSION = '10.13.12';
 const UEFA_STORYTELLER_PROVIDER_ID = 'nimora.uefa';
 const UEFA_STORYTELLER_CATALOG_ID = 'uefa_shorts';
 const UEFA_STORYTELLER_CACHE_TTL_MS = 5 * 60 * 1000;
+const UEFA_STORYTELLER_MAX_ITEMS = 20;
 const UEFA_SITE_URL = 'https://www.uefa.com/';
 const UEFA_STORYTELLER_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
@@ -3629,6 +3632,38 @@ function uefaStorytellerHttpUrl(value) {
 
 function uefaStorytellerText(value) {
   return String(value || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function uefaStorytellerCleanTitle(value) {
+  return uefaStorytellerText(value)
+    .replace(/^UCL(?:\s+\d{4}\/\d{2})?\s*-\s*/i, '')
+    .replace(/\s*-\s*EN$/i, '')
+    .trim();
+}
+
+function uefaStorytellerTitleHasClip(value) {
+  return /\bclips?\b/i.test(uefaStorytellerText(value));
+}
+
+function uefaStorytellerIsCuratedStory(story) {
+  const title = uefaStorytellerCleanTitle(uefaStorytellerDisplayTitle(story));
+  if (!title || uefaStorytellerTitleHasClip(title)) return false;
+  return ![
+    /\bquiz\b/i,
+    /\bfantasy\b/i,
+    /\bpredict(?:s|ion)?\b/i,
+    /\bvot(?:e|es|ing)?\b/i,
+    /\bnominees?\b/i,
+    /\bjoin\b/i,
+    /\baccess days?\b/i,
+    /\bphotoshoot\b/i,
+    /\bred carpet\b/i,
+    /\bpatches?\b/i,
+  ].some((pattern) => pattern.test(title));
+}
+
+function uefaStorytellerIsCuratedPage(page) {
+  return !uefaStorytellerTitleHasClip(page && page.title);
 }
 
 async function uefaStorytellerStories() {
@@ -3700,11 +3735,15 @@ function uefaStorytellerPageThumbnail(story, page) {
     ));
 }
 
-function uefaStorytellerItem(story, page, videoIndex) {
+function uefaStorytellerItem(story, page, videoIndex, pageCount) {
   const storyId = story && story.id != null ? String(story.id) : '';
   const pageId = page && page.id != null ? String(page.id) : '';
-  const storyTitle = uefaStorytellerDisplayTitle(story);
-  const pageTitle = uefaStorytellerText(page && page.title);
+  if (!uefaStorytellerIsCuratedStory(story) || !uefaStorytellerIsCuratedPage(page)) {
+    return null;
+  }
+  const storyTitle = uefaStorytellerCleanTitle(uefaStorytellerDisplayTitle(story));
+  const pageTitle = uefaStorytellerCleanTitle(page && page.title);
+  const title = pageTitle || storyTitle || 'UEFA Champions League';
   const item = {
     ref: {
       extensionId: EXTENSION_ID,
@@ -3712,8 +3751,11 @@ function uefaStorytellerItem(story, page, videoIndex) {
       id: `story:${storyId}:page:${pageId || videoIndex + 1}`,
     },
     kind: 'video',
-    title: pageTitle || `${storyTitle} · Clip ${videoIndex + 1}`,
+    title: pageCount > 1 && !pageTitle
+      ? `${title} · Highlight ${videoIndex + 1}`
+      : title,
     subtitle: 'UEFA Champions League',
+    tags: ['sports', 'football', 'champions-league'],
   };
   const thumbnail = uefaStorytellerPageThumbnail(story, page);
   if (thumbnail != null) item.artwork = { portrait: { url: thumbnail } };
@@ -3724,15 +3766,21 @@ function uefaStorytellerItems(stories) {
   const seen = new Set();
   const items = [];
   for (const story of stories) {
-    if (story == null || story.isPublished === false || story.id == null) continue;
+    if (
+      story == null || story.isPublished === false || story.id == null ||
+      !uefaStorytellerIsCuratedStory(story)
+    ) continue;
     const pages = uefaStorytellerVideoPages(story);
-    pages.forEach(({ page }, videoIndex) => {
+    for (let videoIndex = 0; videoIndex < pages.length; videoIndex++) {
+      const page = pages[videoIndex].page;
       const pageId = page.id == null ? String(videoIndex + 1) : String(page.id);
       const key = `${String(story.id)}:${pageId}`;
-      if (seen.has(key)) return;
+      if (seen.has(key)) continue;
       seen.add(key);
-      items.push(uefaStorytellerItem(story, page, videoIndex));
-    });
+      const item = uefaStorytellerItem(story, page, videoIndex, pages.length);
+      if (item != null) items.push(item);
+      if (items.length >= UEFA_STORYTELLER_MAX_ITEMS) return items;
+    }
   }
   return items;
 }
@@ -3813,6 +3861,7 @@ const CLIPRO_API_KEY =
 const CLIPRO_PROVIDER_ID = 'nimora.clipro';
 const CLIPRO_CATALOG_ID = 'clipro_shorts';
 const CLIPRO_CACHE_TTL_MS = 5 * 60 * 1000;
+const CLIPRO_MAX_ITEMS = 20;
 const CLIPRO_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
   '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
@@ -3939,23 +3988,48 @@ function cliproMomentItem(moment) {
     kind: 'video',
     title,
     subtitle: 'Premier League',
+    tags: ['sports', 'football', 'premier-league'],
   };
   const poster = cliproPosterUrl(moment);
   if (poster != null) item.artwork = { portrait: { url: poster } };
   return item;
 }
 
-function cliproMomentItems(moments) {
+function cliproMomentTimestamp(moment) {
+  if (moment == null) return null;
+  const value = moment.createTime || moment.updateTime;
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function cliproCuratedMoments(moments) {
   if (!Array.isArray(moments)) return [];
   const seen = new Set();
-  const items = [];
-  for (const moment of moments) {
+  const candidates = [];
+  moments.forEach((moment, index) => {
     const item = cliproMomentItem(moment);
-    if (item == null || seen.has(item.ref.id)) continue;
+    if (item == null || seen.has(item.ref.id)) return;
     seen.add(item.ref.id);
-    items.push(item);
-  }
-  return items;
+    candidates.push({ moment, index });
+  });
+  candidates.sort((a, b) => {
+    const aDate = cliproMomentTimestamp(a.moment);
+    const bDate = cliproMomentTimestamp(b.moment);
+    if (aDate != null && bDate == null) return -1;
+    if (aDate == null && bDate != null) return 1;
+    if (aDate != null && bDate != null && aDate !== bDate) {
+      return bDate - aDate;
+    }
+    return a.index - b.index;
+  });
+  return candidates.slice(0, CLIPRO_MAX_ITEMS).map(({ moment }) => moment);
+}
+
+function cliproMomentItems(moments) {
+  return cliproCuratedMoments(moments)
+    .map((moment) => cliproMomentItem(moment))
+    .filter((item) => item != null);
 }
 
 function cliproMomentIdFromItem(item) {
@@ -7677,13 +7751,18 @@ async function nimoraShortsUefaCandidates() {
   const stories = await uefaStorytellerStories();
   const candidates = [];
   for (const story of stories) {
-    if (story == null || story.isPublished === false || story.id == null) continue;
-    const publishedAt = story.publishAt || story.creationTime;
+    if (
+      story == null || story.isPublished === false || story.id == null ||
+      (typeof uefaStorytellerIsCuratedStory === 'function' &&
+        !uefaStorytellerIsCuratedStory(story))
+    ) continue;
+    const publishedAt = story.publishAt || story.lastModificationTime || story.creationTime;
     const pages = typeof uefaStorytellerVideoPages === 'function'
       ? uefaStorytellerVideoPages(story)
       : [];
     pages.forEach(({ page }, videoIndex) => {
-      const item = uefaStorytellerItem(story, page, videoIndex);
+      if (candidates.length >= UEFA_STORYTELLER_MAX_ITEMS) return;
+      const item = uefaStorytellerItem(story, page, videoIndex, pages.length);
       const candidate = nimoraShortsCandidate(
         item,
         'nimora.uefa',
@@ -7698,7 +7777,10 @@ async function nimoraShortsUefaCandidates() {
 
 async function nimoraShortsCliproCandidates() {
   if (typeof cliproMoments !== 'function') return [];
-  const moments = await cliproMoments();
+  const fetchedMoments = await cliproMoments();
+  const moments = typeof cliproCuratedMoments === 'function'
+    ? cliproCuratedMoments(fetchedMoments)
+    : fetchedMoments;
   const candidates = [];
   for (const moment of moments) {
     const item = typeof cliproMomentItem === 'function'

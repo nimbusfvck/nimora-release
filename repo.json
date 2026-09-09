@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.19",
+      "version": "1.0.20",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Curated UEFA Champions League and Premier League Shorts to the 20 newest playable items and added movie, TV and football tags for Shorts filtering.",
         "Added paginated Dramaverse and Storyreel Shorts catalogs with per-item tags and episode playback through fresh HLS resolution.",
         "Restored Hydrax quality variants from decoder responses and updated P2P Playcdn resolution for the current `/verify/{slug}` flow.",
         "Made Hydrax start playback from the lowest validated quality by default while keeping the quality variants ordered from highest to lowest for manual selection.",
@@ -162,7 +163,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "3fc9fe4c8c0565fe92c533f10ae14af9fc5e36fa57c76f1e8bf383bde5266d7a"
+      "bundleSha256": "ca20b9ff8b9d85202ec557af1d28b804f2b2879f8145d72e735f2ed5505be8ad"
     }
   ]
 }
