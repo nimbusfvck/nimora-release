@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.13",
+      "version": "1.0.14",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Moved the LayarKaca catalog to the All category with separate Movies on LK21 and TV Series on LK21 sections; the TV section uses Series Unggulan.",
         "Added PlayZTV as an independent live-event stream provider with fresh link and token resolution, so it can be enabled separately from other stream providers.",
         "Changed the LayarKaca catalog to a compact Home shelf section so movie and TV catalogs remain visible together; the full catalog is still available through See more.",
         "Added an independent LayarKaca catalog for films and series. LayarKaca catalog and stream providers can now be enabled separately, with catalog series retaining direct episode playback through LayarKaca streams.",
@@ -28,7 +29,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "f94900c6059375270cc5ab719549d73ec09f57033930f4e15e39941943974e67"
+      "bundleSha256": "3c0df0d737f764e5a21e0f1c6b51de4db7e8e8f936cc86133f6c6bdfc39ef415"
     }
   ]
 }

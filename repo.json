@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.23",
+      "version": "1.0.24",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Moved the LayarKaca catalog to the All category with separate Movies on LK21 and TV Series on LK21 sections; the TV section uses Series Unggulan.",
         "Added PlayZTV as an independent live-event stream provider with fresh link and token resolution, so it can be enabled separately from other stream providers.",
         "Changed the LayarKaca catalog to a compact Home shelf section so movie and TV catalogs remain visible together; the full catalog is still available through See more.",
         "Added an independent LayarKaca catalog for films and series. LayarKaca catalog and stream providers can now be enabled separately, with catalog series retaining direct episode playback through LayarKaca streams.",
@@ -167,7 +168,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "757b4abcce958a0aaea7664fa7f732fdc05ab9249f5ea24ba5cb98c13948f789"
+      "bundleSha256": "d6b8bfcf5901ed754ab716b9421881b3606f20f9886b88b6da5c4a6b86cf81e6"
     }
   ]
 }

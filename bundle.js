@@ -11710,7 +11710,7 @@ function layarkacaParseSearchResults(html, base) {
 }
 
 function layarkacaCatalogPageUrl(base, category, page) {
-  const path = category === 'tv' ? '/latest-series' : '/latest';
+  const path = category === 'tv' ? '/top-series-today' : '/latest';
   return page > 1 ? `${base}${path}/page/${page}` : `${base}${path}`;
 }
 
@@ -11811,26 +11811,40 @@ function layarkacaCatalogItem(result) {
 }
 
 async function layarkacaCatalog(query) {
+  if (!query || query.category !== 'all') return {sections: []};
   await layarkacaEnsureBase();
-  const category = query && query.category === 'tv' ? 'tv' : 'movie';
   const requestedPage = Number(query && query.page);
   const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
   const base = layarkacaBase.replace(/\/$/, '');
-  const url = layarkacaCatalogPageUrl(base, category, page);
-  const response = await layarkacaFetch(url, `${base}/`);
-  if (response == null) {
-    return {sections: [{id: `${LAYARKACA_CATALOG_ID}-${category}`, items: []}]};
-  }
-  const finalBase = layarkacaOrigin(response.url || url) || base;
-  const results = layarkacaParseCatalogResults(response.body, finalBase, category);
+  const seriesBase = layarkacaSeriesBase.replace(/\/$/, '');
+  const feeds = [
+    {category: 'movie', base},
+    {category: 'tv', base: seriesBase},
+  ];
+  const responses = await Promise.all(feeds.map(async (feed) => {
+    const url = layarkacaCatalogPageUrl(feed.base, feed.category, page);
+    const response = await layarkacaFetch(url, `${feed.base}/`);
+    return {feed, url, response};
+  }));
   const result = {
-    sections: [{
-      id: `${LAYARKACA_CATALOG_ID}-${category}`,
-      title: category === 'tv' ? 'LayarKaca · Series Terbaru' : 'LayarKaca · Film Terbaru',
-      items: results.map(layarkacaCatalogItem),
-    }],
+    sections: responses.map(({feed, url, response}) => {
+      const finalBase = response == null
+        ? feed.base
+        : (layarkacaOrigin(response.url || url) || feed.base);
+      const results = response == null
+        ? []
+        : layarkacaParseCatalogResults(response.body, finalBase, feed.category);
+      return {
+        id: `${LAYARKACA_CATALOG_ID}-${feed.category}`,
+        title: feed.category === 'tv' ? 'TV Series on LK21' : 'Movies on LK21',
+        items: results.map(layarkacaCatalogItem),
+      };
+    }),
   };
-  if (layarkacaCatalogHasNextPage(response.body)) result.nextPage = String(page + 1);
+  if (responses.some(({response}) =>
+      response != null && layarkacaCatalogHasNextPage(response.body))) {
+    result.nextPage = String(page + 1);
+  }
   return result;
 }
 
