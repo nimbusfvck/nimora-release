@@ -2347,6 +2347,9 @@ const FOOTBALL_PROFILE = {
     inter: 'internazionale',
     juve: 'juventus',
     atleti: 'atletico madrid',
+    // Cricfy shortens Atlético Madrid to "Atl. Madrid" after punctuation
+    // normalization turns it into "atl madrid".
+    'atl madrid': 'atletico madrid',
     // Athletic Bilbao's official name is "Athletic Club" — the "club" stop
     // token would otherwise strip it down to the bare "athletic", which is
     // an ambiguousAlone token and can never clear minTeamScore on its own.
@@ -2364,6 +2367,7 @@ const FOOTBALL_PROFILE = {
     'county', 'real', 'atletico', 'sporting', 'dynamo', 'racing', 'olympique',
   ],
 };
+globalThis.__nimoraFootballProfile = FOOTBALL_PROFILE;
 
 // ---- KoraJson-equivalent tolerant readers ----
 //
@@ -3418,12 +3422,33 @@ globalThis.cricfyCipher = { derivedKey, decode };
 // same registry kora.js's tail installs the aggregator for; adds a second
 // entry rather than a second `__extension.sources` assignment.
 //
-// Reuses FOOTBALL_PROFILE from kora.js rather than redeclaring it: both
-// providers are football-only and both need the same alias/stop-token
-// knowledge, exactly mirroring how the Dart side runs one shared
-// `EventMatchResolver` across every `BroadcastCandidateSource` in
-// `FvckExtension` — the concatenated single-scope "bundle" is what makes
-// sharing a plain top-level `const` possible.
+// Full bundles share this profile with Kora through the global bridge below.
+// Compact intentionally omits kora.js, so keep an identical fallback here;
+// Cricfy must still match football items when it is the only football source.
+const CRICFY_FOOTBALL_PROFILE = globalThis.__nimoraFootballProfile || {
+  aliases: {
+    'man utd': 'manchester united',
+    'man united': 'manchester united',
+    'man city': 'manchester city',
+    spurs: 'tottenham hotspur',
+    psg: 'paris saint germain',
+    barca: 'barcelona',
+    inter: 'internazionale',
+    juve: 'juventus',
+    atleti: 'atletico madrid',
+    'atl madrid': 'atletico madrid',
+    'athletic club': 'athletic bilbao',
+    wolves: 'wolverhampton wanderers',
+    'west brom': 'west bromwich albion',
+    'west bromwich': 'west bromwich albion',
+    'deportivo a coruna': 'deportivo la coruna',
+  },
+  stopTokens: ['fc', 'afc', 'cf', 'sc', 'ac', 'cd', 'club'],
+  ambiguousAlone: [
+    'united', 'city', 'town', 'rovers', 'wanderers', 'albion', 'athletic',
+    'county', 'real', 'atletico', 'sporting', 'dynamo', 'racing', 'olympique',
+  ],
+};
 
 // Overridable purely for tests — see fixtures.js/kora.js's identical pattern.
 // `configMirrors: []` here matches `CricfyClient(configMirrors: [])` in
@@ -4792,8 +4817,6 @@ async function cricfySources(args) {
   const candidates = cricfyCandidatesFrom(events);
   if (candidates.length === 0) return { sources: [] };
 
-  // FOOTBALL_PROFILE: declared in kora.js, reused here — see this file's
-  // header comment for why that's the right call, not an oversight.
   const result = host.match.resolve(
     {
       teamA: item.participants[0].name,
@@ -4803,7 +4826,7 @@ async function cricfySources(args) {
       kickoff: item.schedule ? item.schedule.startsAt : null,
     },
     candidates.map((c) => ({ teamA: c.teamA, teamB: c.teamB, startsAt: c.startsAt })),
-    { profile: FOOTBALL_PROFILE },
+    { profile: CRICFY_FOOTBALL_PROFILE },
   );
   if (!result) return { sources: [] };
 

@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.29",
+      "version": "1.0.30",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Cricfy football source matching when the provider abbreviates team names, including Atl. Madrid for Atlético Madrid.",
         "Fixed Sokuja quality mapping so each episode exposes one source with its available 480p, 720p, and 1080p playback variants.",
         "Fixed PlayZTV current-feed decoding and endpoint fallback, restored Cricfy in Compact, and hardened Sokuja artwork and episode-date parsing.",
         "Moved the Anime catalog and Home anime shelves to Sokuja, adding Sokuja's Top Anime All Time and Popular Anime This Week rankings while retaining AniList metadata for existing references.",
@@ -173,7 +174,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "b7f96cf56a22d85220419d1b409f4756b102b109ad06073df1436ef1c142a71f"
+      "bundleSha256": "ea32ca809720b4751005a1e3e49f62f376add41129f843e45c06813ed48fc943"
     }
   ]
 }
