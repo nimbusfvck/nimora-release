@@ -8472,6 +8472,49 @@ function decodeSokujaSource(encoded) {
   }
 }
 
+function sokujaMirrorEntries(mirrors) {
+  const seen = new Set();
+  return (Array.isArray(mirrors) ? mirrors : [])
+    .map((mirror) => ({
+      url: mirror && typeof mirror.embedUrl === 'string'
+        ? mirror.embedUrl.trim()
+        : '',
+      quality: mirror && typeof mirror.quality === 'string'
+        ? mirror.quality.trim()
+        : '',
+    }))
+    .filter((mirror) => /^https?:\/\//i.test(mirror.url))
+    .filter((mirror) => !seen.has(mirror.url) && seen.add(mirror.url));
+}
+
+function sokujaQualityHeight(value) {
+  const match = /(?:^|[^0-9])(\d{3,4})\s*p?(?=$|[^a-z0-9])/i.exec(
+    String(value || ''),
+  );
+  const height = match == null ? NaN : Number(match[1]);
+  return Number.isInteger(height) && height > 0 ? height : null;
+}
+
+function sokujaVariantEntries(mirrors, headers) {
+  const ids = new Set();
+  return mirrors.map((mirror, index) => {
+    const height = sokujaQualityHeight(mirror.quality);
+    const base = height == null ? `mirror-${index + 1}` : `quality-${height}p`;
+    let id = base;
+    let suffix = 2;
+    while (ids.has(id)) id = `${base}-${suffix++}`;
+    ids.add(id);
+    return {
+      id,
+      url: mirror.url,
+      headers,
+      format: /\.m3u8(?:$|\?)/i.test(mirror.url) ? 'hls' : 'other',
+      label: mirror.quality || `Sokuja Mirror ${index + 1}`,
+      ...(height == null ? {} : {height}),
+    };
+  });
+}
+
 function sokujaTmdbEpisodeRef(item) {
   const refId = item && item.ref && item.ref.id;
   if (typeof refId !== 'string') return null;
@@ -8922,27 +8965,17 @@ async function sokujaSources(args) {
     return { sources: [] };
   }
 
+  const entries = sokujaMirrorEntries(mirrors);
+  if (entries.length === 0) return {sources: []};
   return {
-    sources: mirrors
-      .filter((mirror) => mirror && typeof mirror.embedUrl === 'string')
-      .filter((mirror) => /^https?:\/\//i.test(mirror.embedUrl))
-      .map((mirror, index) => {
-        const id = `${SOKUJA_PROVIDER_KEY}:${encodeSokujaSource({
-          u: mirror.embedUrl,
-          q: mirror.quality || '',
-          s: index,
-        })}`;
-        return {
-          id,
-          label: sourceAliasWithQuality(
-            id,
-            index,
-            mirror.quality || `Sokuja Mirror ${index + 1}`,
-          ),
-          provider: 'Nimora',
-          providerId: SOKUJA_PROVIDER_ID,
-        };
-      }),
+    sources: [{
+      id: `${SOKUJA_PROVIDER_KEY}:${encodeSokujaSource({
+        m: entries.map((entry) => ({u: entry.url, q: entry.quality})),
+      })}`,
+      label: 'Sokuja',
+      provider: 'Nimora',
+      providerId: SOKUJA_PROVIDER_ID,
+    }],
   };
 }
 
@@ -8952,18 +8985,34 @@ async function sokujaResolveSource(sourceId) {
     throw new Error(`Invalid Sokuja sourceId: ${sourceId}`);
   }
   const payload = decodeSokujaSource(sourceId.slice(prefix.length));
-  if (!payload || typeof payload.u !== 'string' || !/^https?:\/\//i.test(payload.u)) {
+  if (!payload) {
     throw new Error('Malformed Sokuja source id');
   }
   // Playback can resume from a stored source id in a session where nothing
   // searched Sokuja yet, so the Referer needs its own guarantee of a base.
   await sokujaEnsureBase();
-  const format = /\.m3u8(?:$|\?)/i.test(payload.u) ? 'hls' : 'other';
+  const entries = Array.isArray(payload.m)
+    ? sokujaMirrorEntries(payload.m.map((entry) => ({
+        embedUrl: entry && entry.u,
+        quality: entry && entry.q,
+      })))
+    : sokujaMirrorEntries([{
+        embedUrl: payload.u,
+        quality: payload.q,
+      }]);
+  if (entries.length === 0) throw new Error('Malformed Sokuja source id');
+  const headers = sokujaHeaders(`${sokujaActiveBase}/`);
+  const variants = sokujaVariantEntries(entries, headers);
+  const primary = variants.slice().sort((a, b) =>
+    (a.height || Number.MAX_SAFE_INTEGER) -
+    (b.height || Number.MAX_SAFE_INTEGER),
+  )[0];
   return {
-    url: payload.u,
-    format,
-    headers: sokujaHeaders(`${sokujaActiveBase}/`),
-    ...(payload.q ? { label: `Sokuja ${payload.q}` } : {}),
+    url: primary.url,
+    format: primary.format,
+    headers: primary.headers,
+    label: 'Sokuja',
+    variants,
   };
 }
 
