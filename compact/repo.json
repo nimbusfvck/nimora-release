@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed LayarKaca TurboVIP resolution by retrying the parent watch page and capturing the nested EmTurbovid player before WebView timeout.",
         "Exposed title logos for all TMDB Trending Movie and TV catalog items with bounded, memoized artwork lookups.",
         "Curated Football to include Saudi Pro League and exclude UEFA Youth League.",
         "Fixed football league icons by using FotMob's canonical league artwork and primary competition IDs, including Champions League.",
@@ -19,7 +20,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "f70315c5128f7bc737afe36e5816577c93a96890206ffd09f3d498606f93b549"
+      "bundleSha256": "c544724c718324177a67cd94ac9f772f25d572556c8c32ae6328d7c55c6fe9b8"
     }
   ]
 }

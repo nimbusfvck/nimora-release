@@ -11439,6 +11439,17 @@ async function layarkacaResolveIframe(
     );
     if (resolved) return resolved;
   }
+  // Non-P2P iframe3 servers can return a browser-only shell or a nested ad
+  // wrapper whose final player is only created when the selected link is
+  // clicked from the watch page. Retry through that parent before asking the
+  // WebView to observe the already-detached shell; this is required by the
+  // current TurboVIP -> EmTurbovid chain.
+  if (parentUrl && parentUrl !== url && /\/iframe3\//i.test(url)) {
+    const parentResolved = await layarkacaResolveWebViewCandidate(
+      parentUrl, referer, depth, seen, label, true, url,
+    );
+    if (parentResolved) return parentResolved;
+  }
   const preferred = await layarkacaResolveWebViewCandidate(
     pageUrl, referer, depth, seen, label,
   );
@@ -11454,7 +11465,7 @@ async function layarkacaResolveIframe(
 // extractor chain can continue in QuickJS. Capturing only m3u8 here loses the
 // chain before Playcdn/Abyss gets a chance to resolve it.
 const LAYARKACA_WEBVIEW_PATTERN =
-  'm3u8|master\\.txt|playcdn\\.de/video\\.php|abyssplayer\\.com/';
+  'm3u8|master\\.txt|playcdn\\.de/video\\.php|emturbovid\\.com/|abyssplayer\\.com/';
 const LAYARKACA_ABYSS_WEBVIEW_PATTERN =
   'abyssplayer\\.com/|abyss\\.to/|abysscdn\\.com/|hydraxcdn\\.biz/|embedplayabyss\\.top/';
 
