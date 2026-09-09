@@ -5377,12 +5377,31 @@ async function layarkacaResolvePlaycdn(url, referer) {
   const response = await layarkacaFetch(url, referer);
   if (response == null) return null;
   const pageUrl = response.url || url;
+  const origin = layarkacaOrigin(pageUrl) || 'https://playcdn.de';
   const dataMatch = /\bvar\s+data\s*=\s*(\{[\s\S]*?\})\s*;/i.exec(response.body || '');
-  if (!dataMatch) return null;
+  if (!dataMatch) {
+    // The current Playcdn page resolves its path slug through a JSON GET
+    // instead of embedding the legacy `var data` token in HTML.
+    const slugMatch = /\/([^/?#]+)(?:[?#]|$)/i.exec(pageUrl);
+    if (!slugMatch || !slugMatch[1] || slugMatch[1] === 'video.php') return null;
+    const verified = await layarkacaFetch(
+      `${origin}/verify/${encodeURIComponent(slugMatch[1])}`,
+      pageUrl,
+      {headers: {Referer: pageUrl, Origin: origin}},
+    );
+    if (verified == null) return null;
+    let current;
+    try { current = JSON.parse(verified.body || '{}'); } catch (_) { return null; }
+    if (current.status !== 'success' || typeof current.fileUrl !== 'string') return null;
+    return layarkacaValidateMedia(
+      current.fileUrl,
+      {Referer: pageUrl, 'User-Agent': LAYARKACA_UA},
+      'P2P',
+    );
+  }
   let data;
   try { data = JSON.parse(dataMatch[1]); } catch (_) { return null; }
   if (!data || typeof data.token !== 'string' || !data.token) return null;
-  const origin = layarkacaOrigin(pageUrl) || 'https://playcdn.de';
   const verified = await layarkacaFetch(`${origin}/verify.php`, pageUrl, {
     method: 'POST',
     headers: {
@@ -5460,7 +5479,7 @@ function layarkacaAbyssSourceUrl(value, pageUrl) {
 
 function layarkacaAbyssQualityHeight(entry) {
   if (!entry || typeof entry !== 'object') return null;
-  const value = entry.height || entry.quality || entry.label || entry.name || '';
+  const value = entry.height || entry.quality || entry.type || entry.label || entry.name || '';
   const match = /(?:^|[^0-9])(2160|1440|1080|720|480|360)\s*p?(?:[^0-9]|$)/i
     .exec(String(value));
   return match == null ? null : Number(match[1]);
