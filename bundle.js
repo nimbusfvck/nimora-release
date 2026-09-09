@@ -7495,6 +7495,10 @@ const CLIPRO_API_KEY =
   'b95c92c4952a43a5bc5f7e692c1e3636';
 const CLIPRO_PROVIDER_ID = 'nimora.clipro';
 const CLIPRO_CATALOG_ID = 'clipro_shorts';
+const CLIPRO_FOTMOB_BASE_URL =
+  globalThis.__cliproFotmobBaseUrl || 'https://www.fotmob.com';
+const CLIPRO_FOTMOB_LEAGUE_ID = '47';
+const CLIPRO_FOTMOB_CACHE_TTL_MS = 15 * 60 * 1000;
 const CLIPRO_CACHE_TTL_MS = 5 * 60 * 1000;
 const CLIPRO_MAX_ITEMS = 20;
 const CLIPRO_USER_AGENT =
@@ -7502,12 +7506,88 @@ const CLIPRO_USER_AGENT =
   '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
 
 let cliproMomentsMemo = null;
+let cliproLabelFiltersMemo = null;
 
-function cliproMomentsUrl() {
+function cliproSeasonCode(value) {
+  const match = /^(\d{4})\/(\d{4})$/.exec(String(value || '').trim());
+  if (match == null) return null;
+  return `${match[1]}${match[2].slice(-2)}`;
+}
+
+function cliproRoundNumber(value) {
+  const round = Number(value);
+  return Number.isInteger(round) && round > 0 ? round : null;
+}
+
+function cliproLabelFiltersFromFotmob(data) {
+  const season = cliproSeasonCode(data && data.details && data.details.selectedSeason);
+  if (season == null) return [];
+
+  const fixtureInfo = data && data.fixtures && data.fixtures.fixtureInfo;
+  const activeRound = cliproRoundNumber(
+    fixtureInfo && fixtureInfo.activeRound && fixtureInfo.activeRound.roundId,
+  );
+  const matches = data && data.fixtures && Array.isArray(data.fixtures.allMatches)
+    ? data.fixtures.allMatches
+    : [];
+  const playedRounds = matches
+    .filter((match) => {
+      const status = match && match.status;
+      return status && (status.finished === true || status.ongoing === true);
+    })
+    .map((match) => cliproRoundNumber(match && match.round))
+    .filter((round) => round != null);
+  const latestPlayedRound = playedRounds.length === 0
+    ? null
+    : Math.max(...playedRounds);
+
+  const rounds = new Set();
+  if (activeRound != null) rounds.add(activeRound);
+  if (latestPlayedRound != null) rounds.add(latestPlayedRound);
+  // Once a round is in progress, keep the immediately previous round in the
+  // feed during the transition so a sparse new round cannot hide fresh clips.
+  if (activeRound != null && latestPlayedRound === activeRound && activeRound > 1) {
+    rounds.add(activeRound - 1);
+  }
+  return [...rounds]
+    .sort((a, b) => b - a)
+    .map((round) => `${season}-mw${round}`);
+}
+
+async function cliproLabelFilters() {
+  const nowMs = Date.now();
+  if (
+    cliproLabelFiltersMemo != null &&
+    nowMs - cliproLabelFiltersMemo.fetchedAt < CLIPRO_FOTMOB_CACHE_TTL_MS
+  ) {
+    return cliproLabelFiltersMemo.promise;
+  }
+
+  const promise = (async () => {
+    const response = await fetch(
+      `${CLIPRO_FOTMOB_BASE_URL}/api/data/leagues?id=${CLIPRO_FOTMOB_LEAGUE_ID}`,
+      {
+        headers: {
+          Accept: 'application/json, text/plain, */*',
+          'User-Agent': CLIPRO_USER_AGENT,
+        },
+      },
+    );
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`FotMob Premier League request failed: ${response.status}`);
+    }
+    return cliproLabelFiltersFromFotmob(JSON.parse(response.body));
+  })().catch(() => []);
+
+  cliproLabelFiltersMemo = { fetchedAt: nowMs, promise };
+  return promise;
+}
+
+function cliproMomentsUrl(labelFilter) {
   const query = {
     ApiKey: CLIPRO_API_KEY,
     clientPlatform: 'Web',
-    labelsFilterExpression: 'most-viewed',
+    labelsFilterExpression: labelFilter,
     maxItems: '100',
     labelsPriority: '[]',
   };
@@ -7578,6 +7658,20 @@ function cliproPosterUrl(moment) {
     : cliproHttpUrl(preferred.rendition && preferred.rendition.url);
 }
 
+async function cliproMomentsForLabel(labelFilter) {
+  const response = await fetch(cliproMomentsUrl(labelFilter), {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': CLIPRO_USER_AGENT,
+    },
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Clipro moments request failed: ${response.status}`);
+  }
+  const data = JSON.parse(response.body);
+  return data != null && Array.isArray(data.result) ? data.result : [];
+}
+
 async function cliproMoments() {
   const nowMs = Date.now();
   if (
@@ -7588,17 +7682,19 @@ async function cliproMoments() {
   }
 
   const promise = (async () => {
-    const response = await fetch(cliproMomentsUrl(), {
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': CLIPRO_USER_AGENT,
-      },
-    });
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`Clipro moments request failed: ${response.status}`);
+    const labels = await cliproLabelFilters();
+    const batches = await Promise.all(
+      labels.map((label) => cliproMomentsForLabel(label).catch(() => [])),
+    );
+    const momentsById = new Map();
+    for (const batch of batches) {
+      for (const moment of batch) {
+        if (moment == null || moment.id == null) continue;
+        const id = String(moment.id);
+        if (!momentsById.has(id)) momentsById.set(id, moment);
+      }
     }
-    const data = JSON.parse(response.body);
-    return data != null && Array.isArray(data.result) ? data.result : [];
+    return [...momentsById.values()];
   })().catch(() => []);
 
   cliproMomentsMemo = { fetchedAt: nowMs, promise };

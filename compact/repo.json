@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.14",
+      "version": "1.0.15",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Made Premier League Shorts follow FotMob's current season and matchweek, merging active and latest-played Clipro feeds so new matchweek moments keep appearing automatically.",
         "Moved the LayarKaca catalog to the All category with separate Movies on LK21 and TV Series on LK21 sections; the TV section uses Series Unggulan.",
         "Added PlayZTV as an independent live-event stream provider with fresh link and token resolution, so it can be enabled separately from other stream providers.",
         "Changed the LayarKaca catalog to a compact Home shelf section so movie and TV catalogs remain visible together; the full catalog is still available through See more.",
@@ -29,7 +30,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "3c0df0d737f764e5a21e0f1c6b51de4db7e8e8f936cc86133f6c6bdfc39ef415"
+      "bundleSha256": "6f720b98e9ea3210a65e6a5c0119a545568f4a496a5591f9c7d61e3c462d8829"
     }
   ]
 }

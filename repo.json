@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.25",
+      "version": "1.0.26",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Made Premier League Shorts follow FotMob's current season and matchweek, merging active and latest-played Clipro feeds so new matchweek moments keep appearing automatically.",
         "Consolidated the public catalog providers into Movie & Series, Anime, Live Sport & Event, NSFW, and Shorts; Dracin, UEFA, Premier League, and TMDB preview feeds now remain internal contributors to their logical catalog.",
         "Moved the LayarKaca catalog to the All category with separate Movies on LK21 and TV Series on LK21 sections; the TV section uses Series Unggulan.",
         "Added PlayZTV as an independent live-event stream provider with fresh link and token resolution, so it can be enabled separately from other stream providers.",
@@ -169,7 +170,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "6b34b9101819815497d87ec15fa7aed78c8ab8a2146eb40762a94508d3f170fc"
+      "bundleSha256": "b8e5731f282008054b7b823b5be32b0d55aa3e7204fa6033b615c9be14ff020c"
     }
   ]
 }

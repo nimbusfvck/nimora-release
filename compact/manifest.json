@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -18,12 +18,12 @@
   "providers": [
     {
       "id": "nimora.matches",
-      "name": "FotMob",
+      "name": "Live Sport & Event",
       "roles": ["catalog"],
       "catalogs": [
         {
           "id": "fixtures",
-          "name": "Nimora Compact",
+          "name": "Live Sport & Event",
           "categories": ["all", "live", "sport"],
           "kind": "liveEvent",
           "display": "row"
@@ -43,21 +43,7 @@
     {
       "id": "nimora.layarkaca.catalog",
       "name": "LayarKaca",
-      "roles": [
-        "catalog",
-        "meta"
-      ],
-      "catalogs": [
-        {
-          "id": "layarkaca",
-          "name": "LayarKaca",
-          "categories": [
-            "all"
-          ],
-          "kind": "movie",
-          "display": "row"
-        }
-      ],
+      "roles": ["meta"],
       "locales": {
         "countries": [
           "ID"
@@ -93,11 +79,12 @@
     },
     {
       "id": "nimora.tmdb",
+      "name": "Movie & Series",
       "roles": ["catalog", "meta", "search"],
       "catalogs": [
         {
           "id": "discover",
-          "name": "TMDB",
+          "name": "Movie & Series",
           "categories": ["movie", "tv"],
           "kind": "movie",
           "display": "grid",
@@ -105,62 +92,26 @@
         },
         {
           "id": "highlights",
-          "name": "TMDB",
+          "name": "Movie & Series",
           "categories": ["all"],
           "kind": "movie",
           "display": "row"
-        },
-        {
-          "id": "previews",
-          "name": "Previews",
-          "categories": []
-        }
-      ]
-    },
-    {
-      "id": "nimora.uefa",
-      "name": "UEFA Champions League",
-      "roles": ["catalog"],
-      "catalogs": [
-        {
-          "id": "uefa_shorts",
-          "name": "UEFA Champions League",
-          "categories": []
-        }
-      ]
-    },
-    {
-      "id": "nimora.clipro",
-      "name": "Premier League Moments",
-      "roles": ["catalog"],
-      "catalogs": [
-        {
-          "id": "clipro_shorts",
-          "name": "Premier League Moments",
-          "categories": []
         }
       ]
     },
     {
       "id": "nimora.dramadev",
       "name": "Dramadev",
-      "roles": ["catalog", "stream", "meta"],
-      "catalogs": [
-        {
-          "id": "dracin_shorts",
-          "name": "Dramadev Dracin",
-          "categories": []
-        }
-      ]
+      "roles": ["stream", "meta"]
     },
     {
       "id": "nimora.shorts",
-      "name": "Nimora Shorts",
+      "name": "Shorts",
       "roles": ["catalog"],
       "catalogs": [
         {
           "id": "shorts",
-          "name": "Recommended Shorts",
+          "name": "Shorts",
           "categories": [],
           "surface": "preview"
         }
@@ -168,12 +119,12 @@
     },
     {
       "id": "nimora.anilist",
-      "name": "AniList",
+      "name": "Anime",
       "roles": ["catalog", "meta", "search"],
       "catalogs": [
         {
           "id": "anilist",
-          "name": "AniList Anime",
+          "name": "Anime",
           "categories": ["anime"],
           "kind": "movie",
           "display": "grid",
