@@ -3584,6 +3584,440 @@ if (!globalThis.__extension.search) {
   globalThis.__extension.search = tmdbSearch;
 }
 
+// UEFA Champions League Storyteller stories exposed as Shorts.
+//
+// Storyteller returns a story containing several pages. Only video pages are
+// useful to the Shorts player, so each video page becomes one independent
+// preview item while keeping the API's story/page order.
+
+const UEFA_STORYTELLER_BASE =
+  globalThis.__uefaStorytellerBaseUrl || 'https://api.usestoryteller.com';
+const UEFA_STORYTELLER_API_KEY =
+  globalThis.__uefaStorytellerApiKey ||
+  'bcd199d7-77df-4e23-8035-e3542d56ebb4';
+const UEFA_STORYTELLER_CATEGORY = 'ucl-top-stories';
+const UEFA_STORYTELLER_CLIENT_VERSION = '10.13.12';
+const UEFA_STORYTELLER_PROVIDER_ID = 'nimora.uefa';
+const UEFA_STORYTELLER_CATALOG_ID = 'uefa_shorts';
+const UEFA_STORYTELLER_CACHE_TTL_MS = 5 * 60 * 1000;
+const UEFA_SITE_URL = 'https://www.uefa.com/';
+const UEFA_STORYTELLER_USER_AGENT =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
+  '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
+
+let uefaStorytellerMemo = null;
+
+function uefaStorytellerUrl() {
+  const query = {
+    categories: UEFA_STORYTELLER_CATEGORY,
+    ClientPlatform: 'Web',
+    ClientVersion: UEFA_STORYTELLER_CLIENT_VERSION,
+    'userAttributes[locale]': 'en',
+    'x-storyteller-api-key': UEFA_STORYTELLER_API_KEY,
+  };
+  const encoded = Object.entries(query)
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+  return `${UEFA_STORYTELLER_BASE}/api/app/story/stories/default?${encoded}`;
+}
+
+function uefaStorytellerHttpUrl(value) {
+  if (typeof value !== 'string') return null;
+  const url = value.trim();
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+function uefaStorytellerText(value) {
+  return String(value || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+async function uefaStorytellerStories() {
+  const nowMs = Date.now();
+  if (
+    uefaStorytellerMemo != null &&
+    nowMs - uefaStorytellerMemo.fetchedAt < UEFA_STORYTELLER_CACHE_TTL_MS
+  ) {
+    return uefaStorytellerMemo.promise;
+  }
+
+  const promise = (async () => {
+    const response = await fetch(uefaStorytellerUrl(), {
+      headers: {
+        Accept: 'application/json',
+        Origin: UEFA_SITE_URL,
+        Referer: UEFA_SITE_URL,
+        'User-Agent': UEFA_STORYTELLER_USER_AGENT,
+      },
+    });
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`UEFA Storyteller request failed: ${response.status}`);
+    }
+    const data = JSON.parse(response.body);
+    return data != null && Array.isArray(data.stories) ? data.stories : [];
+  })().catch(() => []);
+
+  uefaStorytellerMemo = { fetchedAt: nowMs, promise };
+  return promise;
+}
+
+function uefaStorytellerDisplayTitle(story) {
+  const titles = story && story.titles;
+  const title = titles && (
+    titles.longDisplay || titles.shortDisplay || titles.internal
+  );
+  return uefaStorytellerText(title || (story && story.title)) ||
+    'UEFA Champions League';
+}
+
+function uefaStorytellerVideoPages(story) {
+  if (story == null || !Array.isArray(story.pages)) return [];
+  return story.pages
+    .map((page, index) => ({ page, index }))
+    .filter(({ page }) => {
+      if (page == null || String(page.type || '').toLowerCase() !== 'video') {
+        return false;
+      }
+      const background = page.background;
+      return uefaStorytellerHttpUrl(page.url) != null ||
+        uefaStorytellerHttpUrl(background && background.url) != null;
+    });
+}
+
+function uefaStorytellerPageUrl(page) {
+  const background = page && page.background;
+  return uefaStorytellerHttpUrl(page && page.url) ||
+    uefaStorytellerHttpUrl(background && background.url);
+}
+
+function uefaStorytellerPageThumbnail(story, page) {
+  const background = page && page.background;
+  const storyThumbnails = story && story.thumbnails;
+  return uefaStorytellerHttpUrl(page && page.playcardUrl) ||
+    uefaStorytellerHttpUrl(background && background.playcardUrl) ||
+    uefaStorytellerHttpUrl(story && story.thumbnailUrl) ||
+    uefaStorytellerHttpUrl(storyThumbnails && (
+      storyThumbnails.medium || storyThumbnails.small || storyThumbnails.large
+    ));
+}
+
+function uefaStorytellerItem(story, page, videoIndex) {
+  const storyId = story && story.id != null ? String(story.id) : '';
+  const pageId = page && page.id != null ? String(page.id) : '';
+  const storyTitle = uefaStorytellerDisplayTitle(story);
+  const pageTitle = uefaStorytellerText(page && page.title);
+  const item = {
+    ref: {
+      extensionId: EXTENSION_ID,
+      providerId: UEFA_STORYTELLER_PROVIDER_ID,
+      id: `story:${storyId}:page:${pageId || videoIndex + 1}`,
+    },
+    kind: 'video',
+    title: pageTitle || `${storyTitle} · Clip ${videoIndex + 1}`,
+    subtitle: 'UEFA Champions League',
+  };
+  const thumbnail = uefaStorytellerPageThumbnail(story, page);
+  if (thumbnail != null) item.artwork = { portrait: { url: thumbnail } };
+  return item;
+}
+
+function uefaStorytellerItems(stories) {
+  const seen = new Set();
+  const items = [];
+  for (const story of stories) {
+    if (story == null || story.isPublished === false || story.id == null) continue;
+    const pages = uefaStorytellerVideoPages(story);
+    pages.forEach(({ page }, videoIndex) => {
+      const pageId = page.id == null ? String(videoIndex + 1) : String(page.id);
+      const key = `${String(story.id)}:${pageId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push(uefaStorytellerItem(story, page, videoIndex));
+    });
+  }
+  return items;
+}
+
+function uefaStorytellerRefParts(ref) {
+  const id = ref && typeof ref.id === 'string' ? ref.id : '';
+  const match = /^story:([^:]+):page:(.+)$/.exec(id);
+  return match == null ? null : { storyId: match[1], pageId: match[2] };
+}
+
+async function uefaStorytellerPreview(args) {
+  const item = args && args.item;
+  if (
+    item == null || item.ref == null ||
+    item.ref.providerId !== UEFA_STORYTELLER_PROVIDER_ID
+  ) {
+    return { sources: [] };
+  }
+  const parts = uefaStorytellerRefParts(item.ref);
+  if (parts == null) return { sources: [] };
+
+  const stories = await uefaStorytellerStories();
+  for (const story of stories) {
+    if (story == null || String(story.id) !== parts.storyId) continue;
+    const videoPages = uefaStorytellerVideoPages(story);
+    for (let videoIndex = 0; videoIndex < videoPages.length; videoIndex++) {
+      const page = videoPages[videoIndex].page;
+      const pageId = page.id == null ? String(videoIndex + 1) : String(page.id);
+      if (pageId !== parts.pageId) continue;
+      const url = uefaStorytellerPageUrl(page);
+      if (url == null) return { sources: [] };
+      return {
+        sources: [{
+          id: `preview:uefa:${parts.storyId}:${parts.pageId}`,
+          type: 'direct',
+          stream: {
+            url,
+            format: /\.m3u8(?:[?#]|$)/i.test(url) ? 'hls' : 'other',
+            label: 'UEFA Storyteller',
+          },
+        }],
+      };
+    }
+  }
+  return { sources: [] };
+}
+
+async function uefaStorytellerCatalog(query) {
+  const stories = await uefaStorytellerStories();
+  const items = uefaStorytellerItems(stories);
+  return { sections: [{ id: 'uefa', title: 'UEFA Champions League', items }] };
+}
+
+globalThis.__catalogProviders = globalThis.__catalogProviders || [];
+globalThis.__catalogProviders.push({
+  catalogId: UEFA_STORYTELLER_CATALOG_ID,
+  catalog: uefaStorytellerCatalog,
+});
+
+globalThis.__previewProviders = globalThis.__previewProviders || [];
+globalThis.__previewProviders.push({
+  providerId: UEFA_STORYTELLER_PROVIDER_ID,
+  preview: uefaStorytellerPreview,
+});
+
+// Premier League vertical moments from Clipro/Blaze, exposed as Shorts.
+//
+// The API returns one moment per result. A moment can expose several poster
+// and video renditions; prefer its vertical MP4 rendition for the Shorts
+// player and keep the URL resolution lazy/session-only.
+
+const CLIPRO_BASE_URL =
+  globalThis.__cliproBaseUrl ||
+  'https://blazesdk-prod-cdn.clipro.tv';
+const CLIPRO_API_KEY =
+  globalThis.__cliproApiKey ||
+  'b95c92c4952a43a5bc5f7e692c1e3636';
+const CLIPRO_PROVIDER_ID = 'nimora.clipro';
+const CLIPRO_CATALOG_ID = 'clipro_shorts';
+const CLIPRO_CACHE_TTL_MS = 5 * 60 * 1000;
+const CLIPRO_USER_AGENT =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
+  '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
+
+let cliproMomentsMemo = null;
+
+function cliproMomentsUrl() {
+  const query = {
+    ApiKey: CLIPRO_API_KEY,
+    clientPlatform: 'Web',
+    labelsFilterExpression: 'most-viewed',
+    maxItems: '100',
+    labelsPriority: '[]',
+  };
+  const encoded = Object.entries(query)
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+  return `${CLIPRO_BASE_URL}/api/blazesdk/v1.3/moments?${encoded}`;
+}
+
+function cliproHttpUrl(value) {
+  if (typeof value !== 'string') return null;
+  const url = value.trim();
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+function cliproIsMp4(rendition) {
+  if (rendition == null || typeof rendition !== 'object') return false;
+  const fileType = String(rendition.fileType || '').toLowerCase();
+  const url = cliproHttpUrl(rendition.url);
+  return url != null && (fileType === 'mp4' || /\.mp4(?:[?#]|$)/i.test(url));
+}
+
+function cliproIsVertical(rendition) {
+  if (rendition == null || typeof rendition !== 'object') return false;
+  const aspect = `${rendition.aspectRatio || ''} ${rendition.aspectRatioDescription || ''}`
+    .toLowerCase();
+  return aspect.includes('vertical') || aspect.includes('9:16');
+}
+
+function cliproVideoRendition(moment) {
+  const content = moment && moment.baseLayer && moment.baseLayer.content;
+  const renditions = content && Array.isArray(content.renditions)
+    ? content.renditions.filter(cliproIsMp4)
+    : [];
+  if (renditions.length === 0) return null;
+  return renditions.slice().sort((a, b) => {
+    const aVertical = cliproIsVertical(a) ? 0 : 1;
+    const bVertical = cliproIsVertical(b) ? 0 : 1;
+    if (aVertical !== bVertical) return aVertical - bVertical;
+    return Number(b.bitRate || 0) - Number(a.bitRate || 0);
+  })[0];
+}
+
+function cliproPosterUrl(moment) {
+  const poster = moment && moment.poster;
+  const posterRendition = poster && poster.rendition;
+  const posterUrl = cliproHttpUrl(posterRendition && posterRendition.url);
+  if (posterUrl != null) return posterUrl;
+  const posterRenditions = poster && Array.isArray(poster.renditions)
+    ? poster.renditions
+    : [];
+  const firstPoster = posterRenditions.find((rendition) =>
+    cliproHttpUrl(rendition && rendition.url) != null,
+  );
+  if (firstPoster != null) return cliproHttpUrl(firstPoster.url);
+
+  const thumbnails = moment && Array.isArray(moment.thumbnails)
+    ? moment.thumbnails
+    : [];
+  const preferred = thumbnails.find((thumbnail) => {
+    const rendition = thumbnail && thumbnail.rendition;
+    return cliproIsVertical(rendition) && cliproHttpUrl(rendition.url) != null;
+  }) || thumbnails.find((thumbnail) =>
+    cliproHttpUrl(thumbnail && thumbnail.rendition && thumbnail.rendition.url) != null,
+  );
+  return preferred == null
+    ? null
+    : cliproHttpUrl(preferred.rendition && preferred.rendition.url);
+}
+
+async function cliproMoments() {
+  const nowMs = Date.now();
+  if (
+    cliproMomentsMemo != null &&
+    nowMs - cliproMomentsMemo.fetchedAt < CLIPRO_CACHE_TTL_MS
+  ) {
+    return cliproMomentsMemo.promise;
+  }
+
+  const promise = (async () => {
+    const response = await fetch(cliproMomentsUrl(), {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': CLIPRO_USER_AGENT,
+      },
+    });
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`Clipro moments request failed: ${response.status}`);
+    }
+    const data = JSON.parse(response.body);
+    return data != null && Array.isArray(data.result) ? data.result : [];
+  })().catch(() => []);
+
+  cliproMomentsMemo = { fetchedAt: nowMs, promise };
+  return promise;
+}
+
+function cliproText(value) {
+  return String(value || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function cliproMomentItem(moment) {
+  if (moment == null || moment.id == null || cliproVideoRendition(moment) == null) {
+    return null;
+  }
+  const title = cliproText(moment.title) || 'Premier League Moment';
+  const item = {
+    ref: {
+      extensionId: EXTENSION_ID,
+      providerId: CLIPRO_PROVIDER_ID,
+      id: `moment:${String(moment.id)}`,
+    },
+    kind: 'video',
+    title,
+    subtitle: 'Premier League',
+  };
+  const poster = cliproPosterUrl(moment);
+  if (poster != null) item.artwork = { portrait: { url: poster } };
+  return item;
+}
+
+function cliproMomentItems(moments) {
+  if (!Array.isArray(moments)) return [];
+  const seen = new Set();
+  const items = [];
+  for (const moment of moments) {
+    const item = cliproMomentItem(moment);
+    if (item == null || seen.has(item.ref.id)) continue;
+    seen.add(item.ref.id);
+    items.push(item);
+  }
+  return items;
+}
+
+function cliproMomentIdFromItem(item) {
+  const id = item && item.ref && item.ref.id;
+  const prefix = 'moment:';
+  if (
+    item == null || item.ref == null ||
+    item.ref.providerId !== CLIPRO_PROVIDER_ID ||
+    typeof id !== 'string' || !id.startsWith(prefix)
+  ) return null;
+  const momentId = id.slice(prefix.length);
+  return momentId.length === 0 ? null : momentId;
+}
+
+async function cliproPreview(args) {
+  const item = args && args.item;
+  const momentId = cliproMomentIdFromItem(item);
+  if (momentId == null) return { sources: [] };
+
+  const moments = await cliproMoments();
+  const moment = moments.find((entry) =>
+    entry != null && String(entry.id) === momentId,
+  );
+  const rendition = cliproVideoRendition(moment);
+  const url = cliproHttpUrl(rendition && rendition.url);
+  if (url == null) return { sources: [] };
+  return {
+    sources: [{
+      id: `preview:clipro:${momentId}`,
+      type: 'direct',
+      stream: {
+        url,
+        format: 'other',
+        label: 'Premier League Moment',
+      },
+    }],
+  };
+}
+
+async function cliproShortsCatalog() {
+  const moments = await cliproMoments();
+  return {
+    sections: [{
+      id: 'clipro',
+      title: 'Premier League Moments',
+      items: cliproMomentItems(moments),
+    }],
+  };
+}
+
+globalThis.__catalogProviders = globalThis.__catalogProviders || [];
+globalThis.__catalogProviders.push({
+  catalogId: CLIPRO_CATALOG_ID,
+  catalog: cliproShortsCatalog,
+});
+
+globalThis.__previewProviders = globalThis.__previewProviders || [];
+globalThis.__previewProviders.push({
+  providerId: CLIPRO_PROVIDER_ID,
+  preview: cliproPreview,
+});
+
 // shegu.st subtitle lookup, in JS on the host `fetch` API.
 //
 // A Stremio-shaped subtitle addon: one GET, keyed by TMDB id, returns a flat
@@ -4420,6 +4854,394 @@ if (!globalThis.__extension.sources) {
     return provider.resolve(sourceId);
   };
 }
+
+// Dramadev Dracin series exposed as Shorts and native HLS sources.
+//
+// Dramadev's stream endpoint returns a short-lived /vmanifest token. The
+// manifest is a regular HLS media playlist with relative /v/ MPEG-TS
+// segments, so resolution stays lazy and every playback attempt gets a fresh
+// token instead of caching a signed media URL.
+
+const DRAMADEV_BASE_URL =
+  globalThis.__dramadevBaseUrl || 'https://dramadev.my.id';
+const DRAMADEV_PROVIDER_ID = 'nimora.dramadev';
+const DRAMADEV_PROVIDER_KEY = 'dramadev';
+const DRAMADEV_CATALOG_ID = 'dracin_shorts';
+const DRAMADEV_SHORTS_PAGE_LIMIT = 5;
+const DRAMADEV_COLLECTIONS = [
+  { id: 'dramaverse', title: 'Dramaverse' },
+  { id: 'storyreel', title: 'Storyreel' },
+];
+const DRAMADEV_USER_AGENT =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
+  '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
+
+function dramadevBaseUrl() {
+  return DRAMADEV_BASE_URL.replace(/\/$/, '');
+}
+
+function dramadevUrl(path) {
+  if (typeof path !== 'string' || path.trim() === '') return null;
+  const value = path.trim();
+  if (/^https?:\/\//i.test(value)) return value;
+  return value.startsWith('/')
+    ? `${dramadevBaseUrl()}${value}`
+    : `${dramadevBaseUrl()}/${value}`;
+}
+
+function dramadevHeaders(referer) {
+  return {
+    Accept: 'application/json, text/plain, */*',
+    Origin: dramadevBaseUrl(),
+    Referer: referer || `${dramadevBaseUrl()}/`,
+    'User-Agent': DRAMADEV_USER_AGENT,
+  };
+}
+
+async function dramadevGet(path, referer) {
+  const url = dramadevUrl(path);
+  if (url == null) return null;
+  try {
+    const response = await fetch(url, { headers: dramadevHeaders(referer) });
+    if (response.status < 200 || response.status >= 300) return null;
+    return response;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function dramadevJson(path, referer) {
+  const response = await dramadevGet(path, referer);
+  if (response == null) return null;
+  try { return JSON.parse(response.body); } catch (_) { return null; }
+}
+
+function dramadevText(value) {
+  return String(value || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function dramadevMoreSeries(data, collectionId) {
+  if (data == null || !Array.isArray(data.items)) return [];
+  const seen = new Set();
+  return data.items.filter((item) => {
+    if (item == null || item.id == null || seen.has(String(item.id))) return false;
+    if (!dramadevText(item.title)) return false;
+    seen.add(String(item.id));
+    return true;
+  }).map((item) => ({ ...item, collection: collectionId }));
+}
+
+function dramadevCollection(collectionId) {
+  return DRAMADEV_COLLECTIONS.find((collection) => collection.id === collectionId) ||
+    DRAMADEV_COLLECTIONS[0];
+}
+
+async function dramadevMorePage(collectionId, page) {
+  const requestedPage = Number.isInteger(page) && page > 0 ? page : 1;
+  const collection = dramadevCollection(collectionId);
+  return dramadevJson(
+    `/more/${collection.id}/foryou?page=${requestedPage}`,
+    `${dramadevBaseUrl()}/more/${collection.id}/foryou?page=${requestedPage}`,
+  );
+}
+
+function dramadevEpisodeNumber(episode) {
+  const number = Number(episode && (episode.n || episode.ep));
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function dramadevEncode(payload) {
+  return encodeURIComponent(JSON.stringify(payload));
+}
+
+function dramadevDecode(value) {
+  try { return JSON.parse(decodeURIComponent(String(value || ''))); } catch (_) { return null; }
+}
+
+function dramadevSeriesPayload(series) {
+  return {
+    id: String(series.id),
+    title: dramadevText(series.title) || 'Dramaverse',
+    cover: typeof series.cover === 'string' ? series.cover.trim() : '',
+    collection: dramadevCollection(series.collection).id,
+  };
+}
+
+function dramadevSeriesRef(series) {
+  return {
+    extensionId: EXTENSION_ID,
+    providerId: DRAMADEV_PROVIDER_ID,
+    id: `${DRAMADEV_PROVIDER_KEY}:series:${dramadevEncode(dramadevSeriesPayload(series))}`,
+  };
+}
+
+function dramadevSeriesItem(series) {
+  const payload = dramadevSeriesPayload(series);
+  const item = {
+    ref: dramadevSeriesRef(payload),
+    kind: 'series',
+    title: payload.title,
+    subtitle: 'Dramaverse',
+    tags: ['dracin', payload.collection],
+  };
+  if (payload.cover) item.artwork = { portrait: { url: payload.cover } };
+  return item;
+}
+
+function dramadevEpisodeRef(series, episode) {
+  const number = dramadevEpisodeNumber(episode);
+  if (number == null) return null;
+  return {
+    extensionId: EXTENSION_ID,
+    providerId: DRAMADEV_PROVIDER_ID,
+    id: `${DRAMADEV_PROVIDER_KEY}:episode:${dramadevEncode({
+      id: String(series.id),
+      ep: String(episode.ep || number),
+      n: number,
+      collection: dramadevCollection(series.collection).id,
+    })}`,
+  };
+}
+
+function dramadevEpisodeSummary(series, episode) {
+  const number = dramadevEpisodeNumber(episode);
+  const ref = dramadevEpisodeRef(series, episode);
+  if (number == null || ref == null) return null;
+  const title = dramadevText(episode && episode.title) || `Episode ${number}`;
+  const summary = {
+    ref,
+    title,
+    position: number,
+  };
+  if (typeof series.cover === 'string' && series.cover.trim()) {
+    summary.artwork = { portrait: { url: series.cover.trim() } };
+  }
+  return summary;
+}
+
+function dramadevEpisodePayloadFromRef(ref) {
+  const id = ref && typeof ref.id === 'string' ? ref.id : '';
+  const prefix = `${DRAMADEV_PROVIDER_KEY}:episode:`;
+  if (
+    ref == null || ref.providerId !== DRAMADEV_PROVIDER_ID ||
+    !id.startsWith(prefix)
+  ) return null;
+  const payload = dramadevDecode(id.slice(prefix.length));
+  return payload && payload.id != null && payload.ep != null && payload.n != null
+    ? payload
+    : null;
+}
+
+function dramadevSeriesPayloadFromRef(ref) {
+  const id = ref && typeof ref.id === 'string' ? ref.id : '';
+  const prefix = `${DRAMADEV_PROVIDER_KEY}:series:`;
+  if (
+    ref == null || ref.providerId !== DRAMADEV_PROVIDER_ID ||
+    !id.startsWith(prefix)
+  ) return null;
+  const payload = dramadevDecode(id.slice(prefix.length));
+  return payload && payload.id != null ? payload : null;
+}
+
+function dramadevSeriesFromPayload(payload) {
+  return {
+    id: String(payload.id),
+    title: dramadevText(payload.title) || 'Dramaverse',
+    cover: typeof payload.cover === 'string' ? payload.cover : '',
+    collection: dramadevCollection(payload.collection).id,
+  };
+}
+
+async function dramadevEpisodes(series) {
+  const id = encodeURIComponent(String(series.id));
+  const collection = dramadevCollection(series.collection);
+  const data = await dramadevJson(
+    `/episodes/${collection.id}?id=${id}`,
+    `${dramadevBaseUrl()}/episodes/${collection.id}?id=${id}`,
+  );
+  const episodes = data && Array.isArray(data.episodes) ? data.episodes : [];
+  return episodes
+    .map((episode, index) => ({ episode, index, number: dramadevEpisodeNumber(episode) }))
+    .filter((entry) => entry.number != null)
+    .sort((a, b) => a.number - b.number || a.index - b.index)
+    .map((entry) => dramadevEpisodeSummary(series, entry.episode))
+    .filter((item) => item != null);
+}
+
+async function dramadevShortsCatalog(query) {
+  const requestedPage = Number(query && query.page);
+  const page = Number.isInteger(requestedPage) && requestedPage > 0
+    ? requestedPage
+    : null;
+  const firstPage = page || 1;
+  const lastPage = page || DRAMADEV_SHORTS_PAGE_LIMIT;
+  const sections = await Promise.all(DRAMADEV_COLLECTIONS.map(async (collection) => {
+    const pages = [];
+    for (let currentPage = firstPage; currentPage <= lastPage; currentPage++) {
+      const data = await dramadevMorePage(collection.id, currentPage);
+      const series = dramadevMoreSeries(data, collection.id);
+      if (series.length === 0) break;
+      pages.push(...series);
+      if (page != null) break;
+    }
+
+    const seen = new Set();
+    const items = pages
+      .filter((series) => {
+        const id = String(series.id);
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      })
+      .map(dramadevSeriesItem);
+    return items.length === 0
+      ? null
+      : { id: `dracin-${collection.id}`, title: collection.title, items };
+  }));
+  const result = {
+    sections: sections.filter((section) => section != null),
+  };
+  // The endpoint has no total-pages metadata. A non-empty page is the only
+  // safe signal available, so direct catalog requests can continue one page
+  // at a time while the Shorts preview uses a bounded initial batch above.
+  if (page != null && result.sections.length > 0) {
+    result.nextPage = String(page + 1);
+  }
+  return result;
+}
+
+function dramadevPayloadFromRef(ref) {
+  return dramadevEpisodePayloadFromRef(ref);
+}
+
+async function dramadevMeta(args) {
+  const payload = dramadevSeriesPayloadFromRef(args && args.ref);
+  if (payload == null) throw new Error('Malformed Dramadev series ref');
+  const series = dramadevSeriesFromPayload(payload);
+  const episodes = await dramadevEpisodes(series);
+  const defaultEpisodeRef = episodes.length > 0 ? episodes[0].ref : null;
+  const detail = {
+    item: dramadevSeriesItem(series),
+    tags: ['dracin', series.collection],
+  };
+  if (episodes.length > 0) {
+    detail.episodeGuide = {
+      groups: [{ id: 'season:1', title: 'Episodes', episodes }],
+      defaultEpisodeRef,
+    };
+  }
+  return detail;
+}
+
+function dramadevPayloadFromSourceId(sourceId) {
+  const prefix = `${DRAMADEV_PROVIDER_KEY}:`;
+  if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) return null;
+  return dramadevDecode(sourceId.slice(prefix.length));
+}
+
+async function dramadevResolvePayload(payload) {
+  const collection = dramadevCollection(payload.collection);
+  const query = `id=${encodeURIComponent(String(payload.id))}` +
+    `&ep=${encodeURIComponent(String(payload.ep))}` +
+    `&n=${encodeURIComponent(String(payload.n))}`;
+  const stream = await dramadevJson(
+    `/stream/${collection.id}?${query}`,
+    `${dramadevBaseUrl()}/stream/${collection.id}?${query}`,
+  );
+  const manifestUrl = dramadevUrl(stream && stream.video_url);
+  if (manifestUrl == null) return null;
+
+  const manifest = await dramadevGet(manifestUrl, `${dramadevBaseUrl()}/`);
+  const body = String(manifest && manifest.body || '').trim();
+  if (!/^#EXTM3U(?:\s|$)/.test(body) || !/#EXTINF:/i.test(body)) return null;
+  if (!/(?:^|\n)\/v\/[^\s\r\n]+/i.test(body)) return null;
+
+  return {
+    url: manifestUrl,
+    format: 'hls',
+    headers: {
+      Origin: dramadevBaseUrl(),
+      Referer: `${dramadevBaseUrl()}/`,
+      'User-Agent': DRAMADEV_USER_AGENT,
+    },
+    label: 'Dramadev HLS',
+  };
+}
+
+async function dramadevSources(args) {
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && enabled.indexOf(DRAMADEV_PROVIDER_ID) === -1) {
+    return { sources: [] };
+  }
+  const item = args && args.item;
+  const payload = dramadevPayloadFromRef(item && item.ref);
+  if (payload == null || item.kind !== 'episode') return { sources: [] };
+  return {
+    sources: [{
+      id: `${DRAMADEV_PROVIDER_KEY}:${dramadevEncode(payload)}`,
+      label: 'Dramadev HLS',
+      provider: 'Nimora',
+      providerId: DRAMADEV_PROVIDER_ID,
+    }],
+  };
+}
+
+async function dramadevResolveSource(sourceId) {
+  const payload = dramadevPayloadFromSourceId(sourceId);
+  if (payload == null) throw new Error('Malformed Dramadev source id');
+  const stream = await dramadevResolvePayload(payload);
+  if (stream == null) throw new Error('Dramadev returned no playable HLS');
+  return stream;
+}
+
+async function dramadevPreview(args) {
+  const ref = args && args.item && args.item.ref;
+  let payload = dramadevPayloadFromRef(ref);
+  if (payload == null) {
+    const seriesPayload = dramadevSeriesPayloadFromRef(ref);
+    if (seriesPayload == null) return { sources: [] };
+    const episodes = await dramadevEpisodes(dramadevSeriesFromPayload(seriesPayload));
+    const first = episodes[0];
+    if (first == null) return { sources: [] };
+    const episodeParts = dramadevEpisodePayloadFromRef(first.ref);
+    if (episodeParts == null) return { sources: [] };
+    payload = episodeParts;
+  }
+  const stream = await dramadevResolvePayload(payload);
+  if (stream == null) return { sources: [] };
+  return {
+    sources: [{
+      id: `preview:${DRAMADEV_PROVIDER_KEY}:${dramadevEncode(payload)}`,
+      type: 'direct',
+      stream,
+    }],
+  };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: DRAMADEV_PROVIDER_KEY,
+  sources: dramadevSources,
+  resolve: dramadevResolveSource,
+});
+
+globalThis.__catalogProviders = globalThis.__catalogProviders || [];
+globalThis.__catalogProviders.push({
+  catalogId: DRAMADEV_CATALOG_ID,
+  catalog: dramadevShortsCatalog,
+});
+
+globalThis.__metaProviders = globalThis.__metaProviders || [];
+globalThis.__metaProviders.push({
+  providerId: DRAMADEV_PROVIDER_ID,
+  meta: dramadevMeta,
+});
+
+globalThis.__previewProviders = globalThis.__previewProviders || [];
+globalThis.__previewProviders.push({
+  providerId: DRAMADEV_PROVIDER_ID,
+  preview: dramadevPreview,
+});
 
 // LayarKaca stream discovery for TMDB-owned movie and episode items.
 //
@@ -6821,3 +7643,194 @@ globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.segments) {
   globalThis.__extension.segments = skipIntroSegments;
 }
+
+// Nimora's unified Shorts feed.
+//
+// Individual providers remain responsible for preview resolution. This
+// catalog only combines their lightweight catalog results so the app receives
+// one stable, globally ordered feed instead of one static provider block after
+// another.
+
+const NIMORA_SHORTS_PROVIDER_ID = 'nimora.shorts';
+const NIMORA_SHORTS_CATALOG_ID = 'shorts';
+const NIMORA_SHORTS_MAX_ITEMS = 150;
+const NIMORA_SHORTS_MAX_PROVIDER_STREAK = 2;
+
+function nimoraShortsTimestamp(value) {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function nimoraShortsCandidate(item, providerId, publishedAt, ordinal) {
+  if (item == null || item.ref == null) return null;
+  return {
+    item,
+    providerId,
+    publishedAt: nimoraShortsTimestamp(publishedAt),
+    ordinal,
+  };
+}
+
+async function nimoraShortsUefaCandidates() {
+  if (typeof uefaStorytellerStories !== 'function') return [];
+  const stories = await uefaStorytellerStories();
+  const candidates = [];
+  for (const story of stories) {
+    if (story == null || story.isPublished === false || story.id == null) continue;
+    const publishedAt = story.publishAt || story.creationTime;
+    const pages = typeof uefaStorytellerVideoPages === 'function'
+      ? uefaStorytellerVideoPages(story)
+      : [];
+    pages.forEach(({ page }, videoIndex) => {
+      const item = uefaStorytellerItem(story, page, videoIndex);
+      const candidate = nimoraShortsCandidate(
+        item,
+        'nimora.uefa',
+        publishedAt,
+        candidates.length,
+      );
+      if (candidate != null) candidates.push(candidate);
+    });
+  }
+  return candidates;
+}
+
+async function nimoraShortsCliproCandidates() {
+  if (typeof cliproMoments !== 'function') return [];
+  const moments = await cliproMoments();
+  const candidates = [];
+  for (const moment of moments) {
+    const item = typeof cliproMomentItem === 'function'
+      ? cliproMomentItem(moment)
+      : null;
+    const candidate = nimoraShortsCandidate(
+      item,
+      'nimora.clipro',
+      moment && (moment.createTime || moment.updateTime),
+      candidates.length,
+    );
+    if (candidate != null) candidates.push(candidate);
+  }
+  return candidates;
+}
+
+async function nimoraShortsCatalogCandidates() {
+  const loaders = [];
+  if (typeof nimoraShortsUefaCandidates === 'function') {
+    loaders.push(nimoraShortsUefaCandidates().catch(() => []));
+  }
+  if (typeof nimoraShortsCliproCandidates === 'function') {
+    loaders.push(nimoraShortsCliproCandidates().catch(() => []));
+  }
+  if (typeof tmdbPreviewCatalog === 'function') {
+    loaders.push(
+      tmdbPreviewCatalog()
+        .then((page) => {
+          const sections = page && Array.isArray(page.sections) ? page.sections : [];
+          const items = sections.flatMap((section) =>
+            section && Array.isArray(section.items) ? section.items : [],
+          );
+          return items
+            .map((item, index) => nimoraShortsCandidate(
+              item,
+              item && item.ref && item.ref.providerId,
+              null,
+              index,
+            ))
+            .filter((candidate) => candidate != null);
+        })
+        .catch(() => []),
+    );
+  }
+  if (typeof dramadevShortsCatalog === 'function') {
+    loaders.push(
+      dramadevShortsCatalog()
+        .then((page) => {
+          const sections = page && Array.isArray(page.sections) ? page.sections : [];
+          const items = sections.flatMap((section) =>
+            section && Array.isArray(section.items) ? section.items : [],
+          );
+          return items
+            .map((item, index) => nimoraShortsCandidate(
+              item,
+              item && item.ref && item.ref.providerId,
+              null,
+              index,
+            ))
+            .filter((candidate) => candidate != null);
+        })
+        .catch(() => []),
+    );
+  }
+  const groups = await Promise.all(loaders);
+  return groups.flat();
+}
+
+function nimoraShortsCandidateKey(candidate) {
+  const ref = candidate && candidate.item && candidate.item.ref;
+  if (ref == null) return null;
+  return `${ref.extensionId}/${ref.providerId}/${ref.id}`;
+}
+
+function nimoraShortsSortCandidates(candidates) {
+  const deduplicated = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const key = nimoraShortsCandidateKey(candidate);
+    if (key == null || seen.has(key)) continue;
+    seen.add(key);
+    deduplicated.push(candidate);
+  }
+  deduplicated.sort((a, b) => {
+    const aDate = a.publishedAt;
+    const bDate = b.publishedAt;
+    if (aDate != null && bDate == null) return -1;
+    if (aDate == null && bDate != null) return 1;
+    if (aDate != null && bDate != null && aDate !== bDate) return bDate - aDate;
+    return a.ordinal - b.ordinal;
+  });
+  return deduplicated;
+}
+
+// Keep the global freshness ordering, but pull the next candidate from a
+// different provider when one source would otherwise dominate the viewport.
+function nimoraShortsDiversify(candidates) {
+  const remaining = candidates.slice();
+  const result = [];
+  let lastProvider = null;
+  let providerStreak = 0;
+  while (remaining.length > 0 && result.length < NIMORA_SHORTS_MAX_ITEMS) {
+    let index = remaining.findIndex((candidate) => {
+      if (candidate.providerId !== lastProvider) return true;
+      return providerStreak < NIMORA_SHORTS_MAX_PROVIDER_STREAK;
+    });
+    if (index < 0) index = 0;
+    const [candidate] = remaining.splice(index, 1);
+    if (candidate.providerId === lastProvider) {
+      providerStreak++;
+    } else {
+      lastProvider = candidate.providerId;
+      providerStreak = 1;
+    }
+    result.push(candidate.item);
+  }
+  return result;
+}
+
+async function nimoraShortsCatalog() {
+  const candidates = await nimoraShortsCatalogCandidates();
+  return {
+    sections: [{
+      id: 'shorts',
+      title: 'Recommended Shorts',
+      items: nimoraShortsDiversify(nimoraShortsSortCandidates(candidates)),
+    }],
+  };
+}
+
+globalThis.__catalogProviders = globalThis.__catalogProviders || [];
+globalThis.__catalogProviders.push({
+  catalogId: NIMORA_SHORTS_CATALOG_ID,
+  catalog: nimoraShortsCatalog,
+});

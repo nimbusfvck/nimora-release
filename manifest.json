@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -85,18 +85,18 @@
       ]
     },
     {
-      "id": "nimora.klikxxi",
-      "name": "KlikXXi",
+      "id": "nimora.dramadev",
+      "name": "Dramadev",
       "roles": [
         "catalog",
-        "stream"
+        "stream",
+        "meta"
       ],
       "catalogs": [
         {
           "id": "dracin_shorts",
-          "name": "Dracin Shorts",
-          "categories": [],
-          "surface": "preview"
+          "name": "Dramadev Dracin",
+          "categories": []
         }
       ]
     },
@@ -195,6 +195,48 @@
         {
           "id": "previews",
           "name": "Previews",
+          "categories": []
+        }
+      ]
+    },
+    {
+      "id": "nimora.uefa",
+      "name": "UEFA Champions League",
+      "roles": [
+        "catalog"
+      ],
+      "catalogs": [
+        {
+          "id": "uefa_shorts",
+          "name": "UEFA Champions League",
+          "categories": []
+        }
+      ]
+    },
+    {
+      "id": "nimora.clipro",
+      "name": "Premier League Moments",
+      "roles": [
+        "catalog"
+      ],
+      "catalogs": [
+        {
+          "id": "clipro_shorts",
+          "name": "Premier League Moments",
+          "categories": []
+        }
+      ]
+    },
+    {
+      "id": "nimora.shorts",
+      "name": "Nimora Shorts",
+      "roles": [
+        "catalog"
+      ],
+      "catalogs": [
+        {
+          "id": "shorts",
+          "name": "Recommended Shorts",
           "categories": [],
           "surface": "preview"
         }

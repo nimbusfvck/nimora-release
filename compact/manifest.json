@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -81,6 +81,54 @@
         {
           "id": "previews",
           "name": "Previews",
+          "categories": []
+        }
+      ]
+    },
+    {
+      "id": "nimora.uefa",
+      "name": "UEFA Champions League",
+      "roles": ["catalog"],
+      "catalogs": [
+        {
+          "id": "uefa_shorts",
+          "name": "UEFA Champions League",
+          "categories": []
+        }
+      ]
+    },
+    {
+      "id": "nimora.clipro",
+      "name": "Premier League Moments",
+      "roles": ["catalog"],
+      "catalogs": [
+        {
+          "id": "clipro_shorts",
+          "name": "Premier League Moments",
+          "categories": []
+        }
+      ]
+    },
+    {
+      "id": "nimora.dramadev",
+      "name": "Dramadev",
+      "roles": ["catalog", "stream", "meta"],
+      "catalogs": [
+        {
+          "id": "dracin_shorts",
+          "name": "Dramadev Dracin",
+          "categories": []
+        }
+      ]
+    },
+    {
+      "id": "nimora.shorts",
+      "name": "Nimora Shorts",
+      "roles": ["catalog"],
+      "catalogs": [
+        {
+          "id": "shorts",
+          "name": "Recommended Shorts",
           "categories": [],
           "surface": "preview"
         }

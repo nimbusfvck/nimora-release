@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.18",
+      "version": "1.0.19",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added paginated Dramaverse and Storyreel Shorts catalogs with per-item tags and episode playback through fresh HLS resolution.",
         "Restored Hydrax quality variants from decoder responses and updated P2P Playcdn resolution for the current `/verify/{slug}` flow.",
         "Made Hydrax start playback from the lowest validated quality by default while keeping the quality variants ordered from highest to lowest for manual selection.",
         "Fixed LayarKaca TurboVIP resolution by retrying the parent watch page and capturing the nested EmTurbovid player before WebView timeout.",
@@ -161,7 +162,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "74242c216d8124d50454caff37ba531910ab3424c900872f76b02492a01619c8"
+      "bundleSha256": "3fc9fe4c8c0565fe92c533f10ae14af9fc5e36fa57c76f1e8bf383bde5266d7a"
     }
   ]
 }

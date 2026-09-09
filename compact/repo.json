@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.8",
+      "version": "1.0.9",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added paginated Dramaverse and Storyreel Shorts catalogs with per-item tags and episode playback through fresh HLS resolution.",
         "Restored Hydrax quality variants from decoder responses and updated P2P Playcdn resolution for the current `/verify/{slug}` flow.",
         "Made Hydrax start playback from the lowest validated quality by default while keeping the quality variants ordered from highest to lowest for manual selection.",
         "Fixed LayarKaca TurboVIP resolution by retrying the parent watch page and capturing the nested EmTurbovid player before WebView timeout.",
@@ -22,7 +23,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "f7386f864372ee577680e434799706cad2d92a06aad3d49e2e0bccb0ad602dfe"
+      "bundleSha256": "5373d6e05c32b68f13788e33482a8176eaae2e992cdb0de683c0980c5a392e0d"
     }
   ]
 }
