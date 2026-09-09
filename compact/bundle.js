@@ -5412,6 +5412,8 @@ globalThis.__previewProviders.push({
 
 const LAYARKACA_PROVIDER_KEY = 'layarkaca';
 const LAYARKACA_PROVIDER_PREFIX = 'nimora.layarkaca';
+const LAYARKACA_CATALOG_PROVIDER_ID = 'nimora.layarkaca.catalog';
+const LAYARKACA_CATALOG_ID = 'layarkaca';
 const LAYARKACA_SERVERS = [
   {
     key: 'hydrax',
@@ -5747,6 +5749,131 @@ function layarkacaParseSearchResults(html, base) {
   return results;
 }
 
+function layarkacaCatalogPageUrl(base, category, page) {
+  const path = category === 'tv' ? '/latest-series' : '/latest';
+  return page > 1 ? `${base}${path}/page/${page}` : `${base}${path}`;
+}
+
+function layarkacaCatalogTitle(value) {
+  const text = layarkacaText(value);
+  return text
+    .replace(/\s*\(?((?:19|20)\d{2})\)?\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim() || text;
+}
+
+function layarkacaCatalogPoster(body, base) {
+  const image = /<img\b([^>]*)>/i.exec(body || '');
+  if (!image) return null;
+  const raw = layarkacaAttr(image[1], 'data-lazy-src') ||
+    layarkacaAttr(image[1], 'data-src') ||
+    layarkacaAttr(image[1], 'data-original') ||
+    layarkacaAttr(image[1], 'src');
+  return layarkacaUrl(raw && raw.split(',')[0].trim().split(/\s+/)[0], base);
+}
+
+function layarkacaCatalogRating(body) {
+  const match = /(?:data-rating|ratingValue|gmr-rating-item)[^>]*[=:]\s*["']?([0-9]+(?:\.[0-9]+)?)/i.exec(body || '') ||
+    /<[^>]*\b(?:rating|gmr-rating-item)\b[^>]*>([\s\S]*?)<\//i.exec(body || '');
+  const rating = match == null ? NaN : Number(/\d+(?:\.\d+)?/.exec(layarkacaText(match[1]))?.[0]);
+  return Number.isFinite(rating) ? rating : null;
+}
+
+function layarkacaParseCatalogResults(html, base, category) {
+  const results = [];
+  const articles = /<article\b[^>]*>([\s\S]*?)<\/article>/gi;
+  let article;
+  while ((article = articles.exec(html || '')) != null) {
+    const body = article[1];
+    const link = /<a\b([^>]*\bitemprop\s*=\s*["']url["'][^>]*)>/i.exec(body) ||
+      /<a\b([^>]*)>/i.exec(body);
+    if (!link) continue;
+    const url = layarkacaUrl(layarkacaAttr(link[1], 'href'), base);
+    const titleMatch = /<h[123]\b[^>]*>([\s\S]*?)<\/h[123]>/i.exec(body);
+    const rawTitle = titleMatch == null
+      ? layarkacaAttr(link[1], 'title') || layarkacaAttr(link[1], 'aria-label')
+      : titleMatch[1];
+    const title = layarkacaCatalogTitle(rawTitle);
+    if (!url || !title || !/^https?:\/\//i.test(url)) continue;
+    results.push({
+      url,
+      title,
+      year: layarkacaYear(`${rawTitle || title} ${url}`),
+      poster: layarkacaCatalogPoster(body, base),
+      rating: layarkacaCatalogRating(body),
+      category,
+    });
+  }
+  // Some LK21 mirrors omit <article> but keep the schema.org itemprop link.
+  if (results.length === 0) {
+    const links = /<a\b([^>]*\bitemprop\s*=\s*["']url["'][^>]*)>([\s\S]*?)<\/a>/gi;
+    let link;
+    while ((link = links.exec(html || '')) != null) {
+      const url = layarkacaUrl(layarkacaAttr(link[1], 'href'), base);
+      const rawTitle = layarkacaAttr(link[1], 'title') || link[2];
+      const title = layarkacaCatalogTitle(rawTitle);
+      if (!url || !title) continue;
+      results.push({
+        url,
+        title,
+        year: layarkacaYear(`${rawTitle} ${url}`),
+        category,
+      });
+    }
+  }
+  return results;
+}
+
+function layarkacaCatalogHasNextPage(html) {
+  return /<a\b[^>]*\b(?:class\s*=\s*["'][^"']*\bnext\b|rel\s*=\s*["']next)[^>]*>/i.test(html || '') ||
+    /[?&]page=\d+/i.test(html || '');
+}
+
+function layarkacaCatalogItem(result) {
+  const item = {
+    ref: {
+      extensionId: globalThis.__nimoraExtensionId || 'nimora',
+      providerId: LAYARKACA_CATALOG_PROVIDER_ID,
+      id: `${LAYARKACA_PROVIDER_KEY}:catalog:${layarkacaEncode({
+        u: result.url,
+        k: result.category === 'tv' ? 'series' : 'video',
+        t: result.title,
+        y: result.year,
+      })}`,
+    },
+    kind: result.category === 'tv' ? 'series' : 'video',
+    title: result.title,
+  };
+  if (Number.isInteger(result.year)) item.releaseYear = result.year;
+  if (Number.isFinite(result.rating)) item.rating = result.rating;
+  if (result.poster) item.artwork = {portrait: {url: result.poster}};
+  return item;
+}
+
+async function layarkacaCatalog(query) {
+  await layarkacaEnsureBase();
+  const category = query && query.category === 'tv' ? 'tv' : 'movie';
+  const requestedPage = Number(query && query.page);
+  const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const base = layarkacaBase.replace(/\/$/, '');
+  const url = layarkacaCatalogPageUrl(base, category, page);
+  const response = await layarkacaFetch(url, `${base}/`);
+  if (response == null) {
+    return {sections: [{id: `${LAYARKACA_CATALOG_ID}-${category}`, items: []}]};
+  }
+  const finalBase = layarkacaOrigin(response.url || url) || base;
+  const results = layarkacaParseCatalogResults(response.body, finalBase, category);
+  const result = {
+    sections: [{
+      id: `${LAYARKACA_CATALOG_ID}-${category}`,
+      title: category === 'tv' ? 'LayarKaca · Series Terbaru' : 'LayarKaca · Film Terbaru',
+      items: results.map(layarkacaCatalogItem),
+    }],
+  };
+  if (layarkacaCatalogHasNextPage(response.body)) result.nextPage = String(page + 1);
+  return result;
+}
+
 function layarkacaParseSearchApi(body, query) {
   let data;
   try { data = JSON.parse(body || '{}'); } catch (_) { return []; }
@@ -5776,7 +5903,11 @@ function layarkacaParseSearchApi(body, query) {
 
 function layarkacaItemQuery(item) {
   const ref = item && item.ref;
-  if (!ref || ref.providerId !== 'nimora.tmdb') return null;
+  if (!ref || (ref.providerId !== 'nimora.tmdb' &&
+      ref.providerId !== LAYARKACA_CATALOG_PROVIDER_ID)) return null;
+  const catalogPayload = ref.providerId === LAYARKACA_CATALOG_PROVIDER_ID
+    ? layarkacaCatalogRefPayload(ref) : null;
+  if (ref.providerId === LAYARKACA_CATALOG_PROVIDER_ID && catalogPayload == null) return null;
   const episode = item.kind === 'episode' ? (item.episode || {}) : null;
   const group = episode && typeof episode.groupId === 'string'
     ? /season:(\d+)/i.exec(episode.groupId) : null;
@@ -5784,18 +5915,33 @@ function layarkacaItemQuery(item) {
     ? episode.season : (group ? Number(group[1]) : null);
   const episodeNumber = Number.isInteger(episode && episode.position)
     ? episode.position : (Number.isInteger(episode && episode.episode) ? episode.episode : null);
-  const title = item.kind === 'episode' && item.subtitle
-    ? item.subtitle : item.title;
+  const title = catalogPayload && catalogPayload.t
+    ? catalogPayload.t
+    : item.kind === 'episode' && item.subtitle
+      ? item.subtitle : item.title;
   const availableAtYear = typeof item.availableAt === 'string'
     ? layarkacaYear(item.availableAt) : null;
   return {
     title: layarkacaText(title),
     year: Number.isInteger(item.releaseYear)
-      ? item.releaseYear : availableAtYear,
+      ? item.releaseYear : (catalogPayload && Number.isInteger(catalogPayload.y)
+        ? catalogPayload.y : availableAtYear),
     isEpisode: item.kind === 'episode',
     season,
     episode: episodeNumber,
+    detailUrl: catalogPayload && typeof (catalogPayload.p || catalogPayload.u) === 'string'
+      ? (catalogPayload.p || catalogPayload.u) : null,
+    watchUrl: catalogPayload && typeof catalogPayload.w === 'string'
+      ? catalogPayload.w : (catalogPayload && item.kind === 'episode' &&
+        typeof catalogPayload.u === 'string' ? catalogPayload.u : null),
   };
+}
+
+function layarkacaCatalogRefPayload(ref) {
+  const id = ref && typeof ref.id === 'string' ? ref.id : '';
+  const prefix = `${LAYARKACA_PROVIDER_KEY}:catalog:`;
+  if (!id.startsWith(prefix)) return null;
+  return layarkacaDecode(id.slice(prefix.length));
 }
 
 function layarkacaSearchScore(result, query, index) {
@@ -5912,6 +6058,123 @@ function layarkacaEpisodeUrl(html, pageUrl, season, episode) {
   return layarkacaUrl(wanted.slug || wanted.url || wanted.href, pageUrl);
 }
 
+function layarkacaCatalogEpisodeGuide(html, parentRef, parentTitle, poster, pageUrl, year) {
+  const data = layarkacaSeasonData(html);
+  if (!data || typeof data !== 'object') return null;
+  const groups = [];
+  for (const key of Object.keys(data)) {
+    const seasonMatch = /(?:season[-_ ]?)?(\d+)/i.exec(key);
+    const season = seasonMatch ? Number(seasonMatch[1]) : Number(key);
+    const rawEntries = data[key];
+    const entries = Array.isArray(rawEntries)
+      ? rawEntries
+      : (rawEntries && Array.isArray(rawEntries.episodes) ? rawEntries.episodes : []);
+    if (!Number.isInteger(season) || season < 1 || entries.length === 0) continue;
+    const episodes = [];
+    for (const entry of entries) {
+      const position = Number(entry && (entry.episode_no ?? entry.episodeNumber ?? entry.episode));
+      const url = layarkacaUrl(
+        entry && (entry.slug || entry.url || entry.href), pageUrl,
+      );
+      if (!Number.isInteger(position) || position < 1 || !url) continue;
+      const title = layarkacaText(entry.title || entry.name) || `Episode ${position}`;
+      const ref = {
+        extensionId: globalThis.__nimoraExtensionId || 'nimora',
+        providerId: LAYARKACA_CATALOG_PROVIDER_ID,
+        id: `${LAYARKACA_PROVIDER_KEY}:catalog:${layarkacaEncode({
+          u: url,
+          p: pageUrl,
+          t: parentTitle,
+          y: year,
+          s: season,
+          e: position,
+          k: 'episode',
+          r: parentRef,
+        })}`,
+      };
+      episodes.push({
+        ref,
+        title,
+        position,
+        ...(poster ? {artwork: {portrait: {url: poster}}} : {}),
+      });
+    }
+    if (episodes.length === 0) continue;
+    groups.push({
+      id: `season:${season}`,
+      title: `Season ${season}`,
+      episodes: episodes.sort((a, b) => a.position - b.position),
+    });
+  }
+  if (groups.length === 0) return null;
+  groups.sort((a, b) => Number(a.id.split(':')[1]) - Number(b.id.split(':')[1]));
+  const last = groups[groups.length - 1];
+  return {
+    groups,
+    defaultEpisodeRef: last.episodes[last.episodes.length - 1].ref,
+  };
+}
+
+function layarkacaCatalogDescription(html) {
+  const meta = /<meta\b[^>]*(?:name|property)\s*=\s*["']description["'][^>]*>/i.exec(html || '');
+  return meta ? layarkacaAttr(meta[0], 'content') : null;
+}
+
+async function layarkacaCatalogMeta(args) {
+  const ref = args && args.ref;
+  const payload = layarkacaCatalogRefPayload(ref);
+  if (!payload || typeof payload.u !== 'string') {
+    throw new Error('Malformed LayarKaca catalog ref');
+  }
+  const pageUrl = payload.u;
+  const base = layarkacaOrigin(pageUrl) || layarkacaBase;
+  const response = await layarkacaFetch(pageUrl, `${base}/`);
+  if (response == null) throw new Error('LayarKaca detail request failed');
+  const html = response.body || '';
+  const titleMatch = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(html);
+  const title = layarkacaCatalogTitle(
+    titleMatch ? titleMatch[1] : layarkacaAttr(
+      /<meta\b[^>]*(?:property|name)\s*=\s*["']og:title["'][^>]*>/i.exec(html)?.[0],
+      'content',
+    ) || payload.t || 'LayarKaca video',
+  );
+  const item = payload.k === 'episode'
+    ? {
+      ref,
+      kind: 'episode',
+      title,
+      subtitle: payload.t || null,
+      episode: {
+        parentRef: payload.r || ref,
+        groupId: `season:${Number(payload.s) || 1}`,
+        position: Number(payload.e) || 1,
+      },
+    }
+    : {
+      ref,
+      kind: payload.k === 'series' ? 'series' : 'video',
+      title,
+    };
+  const poster = layarkacaAttr(
+    /<meta\b[^>]*(?:property|name)\s*=\s*["']og:image["'][^>]*>/i.exec(html)?.[0],
+    'content',
+  );
+  if (poster) item.artwork = {portrait: {url: layarkacaUrl(poster, base)}};
+  const year = Number.isInteger(payload.y) ? payload.y : layarkacaYear(`${title} ${pageUrl}`);
+  if (Number.isInteger(year)) item.releaseYear = year;
+  const detail = {item};
+  const description = layarkacaCatalogDescription(html);
+  if (description) detail.description = description;
+  if (payload.k === 'series' || /season-data/i.test(html)) {
+    const guide = layarkacaCatalogEpisodeGuide(
+      html, ref, title, item.artwork?.portrait?.url || null,
+      response.url || pageUrl, year,
+    );
+    if (guide) detail.episodeGuide = guide;
+  }
+  return detail;
+}
+
 function layarkacaPlayerUrls(html, pageUrl) {
   const urls = [];
   const add = (url, label) => {
@@ -5991,7 +6254,7 @@ async function layarkacaWatchPage(query, detailUrl, watchUrl) {
     }
     if (detailBody == null) return null;
     let resolvedWatchUrl = watchUrl || resolvedDetailUrl;
-    if (query && query.isEpisode) {
+    if (query && query.isEpisode && !watchUrl) {
       resolvedWatchUrl = layarkacaEpisodeUrl(
         detailBody, resolvedDetailUrl, query.season, query.episode,
       );
@@ -6044,8 +6307,12 @@ async function layarkacaDiscover(item) {
   if (!query || (query.isEpisode && (!Number.isInteger(query.season) || !Number.isInteger(query.episode)))) {
     return null;
   }
-  let found = await layarkacaSearch(query);
-  let page = found == null ? null : await layarkacaWatchPage(query, found.url, null);
+  let found = query.detailUrl
+    ? {url: query.detailUrl, title: query.title, year: query.year}
+    : await layarkacaSearch(query);
+  let page = found == null ? null : await layarkacaWatchPage(
+    query, found.url, query.watchUrl,
+  );
   // A movie mirror can return a matching redirect page for a series title.
   // Re-run the series slug on the dedicated NontonDrama base when that page
   // does not expose the requested season/episode players.
@@ -6053,7 +6320,7 @@ async function layarkacaDiscover(item) {
     const seriesFound = await layarkacaSlugFallback(query);
     if (seriesFound && seriesFound.url !== (found && found.url)) {
       found = seriesFound;
-      page = await layarkacaWatchPage(query, found.url, null);
+      page = await layarkacaWatchPage(query, found.url, query.watchUrl);
     }
   }
   if (!found || !page || page.players.length === 0) return null;
@@ -7075,6 +7342,18 @@ for (const server of LAYARKACA_SERVERS) {
     resolve: (sourceId) => layarkacaResolveServerSource(sourceId, server),
   });
 }
+
+globalThis.__catalogProviders = globalThis.__catalogProviders || [];
+globalThis.__catalogProviders.push({
+  catalogId: LAYARKACA_CATALOG_ID,
+  catalog: layarkacaCatalog,
+});
+
+globalThis.__metaProviders = globalThis.__metaProviders || [];
+globalThis.__metaProviders.push({
+  providerId: LAYARKACA_CATALOG_PROVIDER_ID,
+  meta: layarkacaCatalogMeta,
+});
 
 globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.sources) {

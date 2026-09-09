@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -119,6 +119,35 @@
           "contentRating": "mature"
         }
       ]
+    },
+    {
+      "id": "nimora.layarkaca.catalog",
+      "name": "LayarKaca",
+      "roles": [
+        "catalog",
+        "meta"
+      ],
+      "catalogs": [
+        {
+          "id": "layarkaca",
+          "name": "LayarKaca",
+          "categories": [
+            "movie",
+            "tv"
+          ],
+          "kind": "movie",
+          "display": "grid",
+          "expanded": true
+        }
+      ],
+      "locales": {
+        "countries": [
+          "ID"
+        ],
+        "languages": [
+          "id"
+        ]
+      }
     },
     {
       "id": "nimora.layarkaca.hydrax",
