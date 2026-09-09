@@ -6410,6 +6410,22 @@ async function fetchTimesoccerHighlightsPage(page) {
   }
 }
 
+async function fetchLayarKacaHighlight(category) {
+  const page = await fetchLayarKacaHighlightPage(category, null);
+  return page.items;
+}
+
+async function fetchLayarKacaHighlightPage(category, page) {
+  const loader = globalThis.__layarkacaHighlightPage;
+  if (typeof loader !== 'function') return {items: []};
+  try {
+    const result = await loader(category, page);
+    return result && Array.isArray(result.items) ? result : {items: []};
+  } catch (_) {
+    return {items: []};
+  }
+}
+
 const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
@@ -6538,6 +6554,18 @@ const HIGHLIGHT_GROUPS = [
     name: 'TV Series on HBO',
     fetch: () => fetchWatchProvider('tv', WATCH_PROVIDER.hbo),
     fetchPage: (page) => fetchWatchProviderPage('tv', WATCH_PROVIDER.hbo, page),
+  },
+  {
+    id: 'layarkaca_movies',
+    name: 'Movies on LK21',
+    fetch: () => fetchLayarKacaHighlight('movie'),
+    fetchPage: (page) => fetchLayarKacaHighlightPage('movie', page),
+  },
+  {
+    id: 'layarkaca_tv',
+    name: 'TV Series on LK21',
+    fetch: () => fetchLayarKacaHighlight('tv'),
+    fetchPage: (page) => fetchLayarKacaHighlightPage('tv', page),
   },
   ...POPULAR_COUNTRY_SHELVES.map((country) => ({
     id: `popular_${country.id}`,
@@ -11812,40 +11840,46 @@ function layarkacaCatalogItem(result) {
 
 async function layarkacaCatalog(query) {
   if (!query || query.category !== 'all') return {sections: []};
-  await layarkacaEnsureBase();
   const requestedPage = Number(query && query.page);
   const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
-  const base = layarkacaBase.replace(/\/$/, '');
-  const seriesBase = layarkacaSeriesBase.replace(/\/$/, '');
   const feeds = [
-    {category: 'movie', base},
-    {category: 'tv', base: seriesBase},
+    {category: 'movie'},
+    {category: 'tv'},
   ];
-  const responses = await Promise.all(feeds.map(async (feed) => {
-    const url = layarkacaCatalogPageUrl(feed.base, feed.category, page);
-    const response = await layarkacaFetch(url, `${feed.base}/`);
-    return {feed, url, response};
-  }));
+  const pages = await Promise.all(feeds.map((feed) =>
+    layarkacaCatalogFeedPage(feed.category, page),
+  ));
   const result = {
-    sections: responses.map(({feed, url, response}) => {
-      const finalBase = response == null
-        ? feed.base
-        : (layarkacaOrigin(response.url || url) || feed.base);
-      const results = response == null
-        ? []
-        : layarkacaParseCatalogResults(response.body, finalBase, feed.category);
+    sections: feeds.map((feed, index) => {
+      const feedPage = pages[index];
       return {
         id: `${LAYARKACA_CATALOG_ID}-${feed.category}`,
         title: feed.category === 'tv' ? 'TV Series on LK21' : 'Movies on LK21',
-        items: results.map(layarkacaCatalogItem),
+        items: feedPage.items,
       };
     }),
   };
-  if (responses.some(({response}) =>
-      response != null && layarkacaCatalogHasNextPage(response.body))) {
+  if (pages.some((feedPage) => feedPage.nextPage != null)) {
     result.nextPage = String(page + 1);
   }
   return result;
+}
+
+async function layarkacaCatalogFeedPage(category, requestedPage) {
+  const pageNumber = Number(requestedPage);
+  const page = Number.isInteger(pageNumber) && pageNumber > 0 ? pageNumber : 1;
+  await layarkacaEnsureBase();
+  const base = (category === 'tv' ? layarkacaSeriesBase : layarkacaBase)
+    .replace(/\/$/, '');
+  const url = layarkacaCatalogPageUrl(base, category, page);
+  const response = await layarkacaFetch(url, `${base}/`);
+  if (response == null) return {items: []};
+  const finalBase = layarkacaOrigin(response.url || url) || base;
+  const results = layarkacaParseCatalogResults(response.body, finalBase, category);
+  return {
+    items: results.map(layarkacaCatalogItem),
+    nextPage: layarkacaCatalogHasNextPage(response.body) ? String(page + 1) : null,
+  };
 }
 
 function layarkacaParseSearchApi(body, query) {
@@ -13317,11 +13351,10 @@ for (const server of LAYARKACA_SERVERS) {
   });
 }
 
-globalThis.__catalogProviders = globalThis.__catalogProviders || [];
-globalThis.__catalogProviders.push({
-  catalogId: LAYARKACA_CATALOG_ID,
-  catalog: layarkacaCatalog,
-});
+globalThis.__layarkacaHighlightPage = (category, page) => {
+  if (category !== 'movie' && category !== 'tv') return {items: []};
+  return layarkacaCatalogFeedPage(category, page);
+};
 
 globalThis.__metaProviders = globalThis.__metaProviders || [];
 globalThis.__metaProviders.push({

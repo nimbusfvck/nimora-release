@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.24",
+  "version": "1.0.25",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -19,20 +19,27 @@
   "providers": [
     {
       "id": "nimora.matches",
-      "name": "FotMob",
+      "name": "Live Sport & Event",
       "roles": [
         "catalog"
       ],
       "catalogs": [
         {
           "id": "fixtures",
-          "name": "Nimora",
+          "name": "Live Sport & Event",
           "categories": [
             "all",
             "live",
             "sport"
           ],
           "kind": "liveEvent",
+          "display": "row"
+        },
+        {
+          "id": "timesoccer",
+          "name": "Live Sport & Event",
+          "categories": ["sport"],
+          "kind": "movie",
           "display": "row"
         }
       ]
@@ -41,19 +48,7 @@
       "id": "nimora.timesoccer",
       "name": "Time Soccer TV",
       "roles": [
-        "catalog",
         "stream"
-      ],
-      "catalogs": [
-        {
-          "id": "timesoccer",
-          "name": "Time Soccer TV",
-          "categories": [
-            "sport"
-          ],
-          "kind": "movie",
-          "display": "row"
-        }
       ]
     },
     {
@@ -88,56 +83,21 @@
       "id": "nimora.dramadev",
       "name": "Dramadev",
       "roles": [
-        "catalog",
         "stream",
         "meta"
-      ],
-      "catalogs": [
-        {
-          "id": "dracin_shorts",
-          "name": "Dramadev Dracin",
-          "categories": []
-        }
       ]
     },
     {
       "id": "nimora.savefilm",
       "name": "Savefilm",
       "roles": [
-        "catalog",
         "stream"
-      ],
-      "catalogs": [
-        {
-          "id": "savefilm_nsfw",
-          "name": "Savefilm Adult",
-          "categories": [
-            "nsfw"
-          ],
-          "kind": "movie",
-          "display": "row",
-          "contentRating": "mature"
-        }
       ]
     },
     {
       "id": "nimora.layarkaca.catalog",
       "name": "LayarKaca",
-      "roles": [
-        "catalog",
-        "meta"
-      ],
-      "catalogs": [
-        {
-          "id": "layarkaca",
-          "name": "LayarKaca",
-          "categories": [
-            "all"
-          ],
-          "kind": "movie",
-          "display": "row"
-        }
-      ],
+      "roles": ["meta"],
       "locales": {
         "countries": [
           "ID"
@@ -200,6 +160,7 @@
     },
     {
       "id": "nimora.tmdb",
+      "name": "Movie & Series",
       "roles": [
         "catalog",
         "meta",
@@ -208,7 +169,7 @@
       "catalogs": [
         {
           "id": "discover",
-          "name": "TMDB",
+          "name": "Movie & Series",
           "categories": [
             "movie",
             "tv"
@@ -219,58 +180,25 @@
         },
         {
           "id": "highlights",
-          "name": "TMDB",
+          "name": "Movie & Series",
           "categories": [
             "all"
           ],
           "kind": "movie",
           "display": "row"
-        },
-        {
-          "id": "previews",
-          "name": "Previews",
-          "categories": []
-        }
-      ]
-    },
-    {
-      "id": "nimora.uefa",
-      "name": "UEFA Champions League",
-      "roles": [
-        "catalog"
-      ],
-      "catalogs": [
-        {
-          "id": "uefa_shorts",
-          "name": "UEFA Champions League",
-          "categories": []
-        }
-      ]
-    },
-    {
-      "id": "nimora.clipro",
-      "name": "Premier League Moments",
-      "roles": [
-        "catalog"
-      ],
-      "catalogs": [
-        {
-          "id": "clipro_shorts",
-          "name": "Premier League Moments",
-          "categories": []
         }
       ]
     },
     {
       "id": "nimora.shorts",
-      "name": "Nimora Shorts",
+      "name": "Shorts",
       "roles": [
         "catalog"
       ],
       "catalogs": [
         {
           "id": "shorts",
-          "name": "Recommended Shorts",
+          "name": "Shorts",
           "categories": [],
           "surface": "preview"
         }
@@ -278,7 +206,7 @@
     },
     {
       "id": "nimora.anilist",
-      "name": "AniList",
+      "name": "Anime",
       "roles": [
         "catalog",
         "meta",
@@ -287,7 +215,7 @@
       "catalogs": [
         {
           "id": "anilist",
-          "name": "AniList Anime",
+          "name": "Anime",
           "categories": [
             "anime"
           ],
@@ -339,16 +267,26 @@
       "roles": [
         "stream",
         "search",
-        "catalog",
         "meta"
-      ],
+      ]
+    },
+    {
+      "id": "nimora.catalog.nsfw",
+      "name": "NSFW",
+      "roles": ["catalog"],
       "catalogs": [
         {
+          "id": "savefilm_nsfw",
+          "name": "NSFW",
+          "categories": ["nsfw"],
+          "kind": "movie",
+          "display": "row",
+          "contentRating": "mature"
+        },
+        {
           "id": "nsfw",
-          "name": "Indomax 18+",
-          "categories": [
-            "nsfw"
-          ],
+          "name": "NSFW",
+          "categories": ["nsfw"],
           "kind": "movie",
           "display": "row",
           "contentRating": "mature"
