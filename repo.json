@@ -3,13 +3,15 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.22",
+      "version": "1.0.23",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added PlayZTV as an independent live-event stream provider with fresh link and token resolution, so it can be enabled separately from other stream providers.",
+        "Changed the LayarKaca catalog to a compact Home shelf section so movie and TV catalogs remain visible together; the full catalog is still available through See more.",
         "Added an independent LayarKaca catalog for films and series. LayarKaca catalog and stream providers can now be enabled separately, with catalog series retaining direct episode playback through LayarKaca streams.",
         "Added Dramadev as a stream-only movie source for TMDB movies, with exact title matching and fresh HLS resolution while keeping Dracin catalog playback intact.",
         "Curated UEFA Champions League and Premier League Shorts to the 20 newest playable items and added movie, TV and football tags for Shorts filtering.",
@@ -165,7 +167,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "e4564d0ede47e3e46bda91c2e00b19d3120537b1b98f5cc06ed28efdc3de16f9"
+      "bundleSha256": "757b4abcce958a0aaea7664fa7f732fdc05ab9249f5ea24ba5cb98c13948f789"
     }
   ]
 }
