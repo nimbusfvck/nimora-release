@@ -4933,7 +4933,10 @@ function layarkacaPlayerUrls(html, pageUrl) {
   const urls = [];
   const add = (url, label) => {
     const absolute = layarkacaUrl(url, pageUrl);
-    if (!absolute || !layarkacaIsHttpUrl(absolute) || urls.some((item) => item.url === absolute)) return;
+    if (!absolute || !layarkacaIsHttpUrl(absolute) ||
+        /https?:\/\/(?:www\.)?yellowishgather\.com\//i.test(absolute) ||
+        /\/yellowishgather\//i.test(absolute) ||
+        urls.some((item) => item.url === absolute)) return;
     urls.push({url: absolute, label: layarkacaText(label) || null});
   };
   const list = /<(?:ul|div)\b[^>]*\bid\s*=\s*["']player-list["'][^>]*>([\s\S]*?)<\/(?:ul|div)>/i
@@ -5257,7 +5260,7 @@ async function layarkacaResolveIframe(
 // extractor chain can continue in QuickJS. Capturing only m3u8 here loses the
 // chain before Playcdn/Abyss gets a chance to resolve it.
 const LAYARKACA_WEBVIEW_PATTERN =
-  'm3u8|master\\.txt|playcdn\\.de/video\\.php|emturbovid\\.com/|abyssplayer\\.com/';
+  'm3u8|master\\.txt|playcdn\\.de/|emturbovid\\.com/|abyssplayer\\.com/';
 const LAYARKACA_ABYSS_WEBVIEW_PATTERN =
   'abyssplayer\\.com/|abyss\\.to/|abysscdn\\.com/|hydraxcdn\\.biz/|embedplayabyss\\.top/';
 
@@ -5606,7 +5609,11 @@ async function layarkacaValidateAbyssEntries(entries, headers, fallbackLabel) {
       bitrate: entry.bitrate || null,
     });
   }
-  const primary = valid[0];
+  // Keep the quality picker in descending order, but make the provider's
+  // default URL the lowest validated rendition. The app opens stream.url when
+  // Auto has no explicit preference; this avoids starting Hydrax on 1080p
+  // before the player has a chance to apply a saved quality choice.
+  const primary = valid[valid.length - 1];
   return {
     url: primary.url,
     format: primary.format,

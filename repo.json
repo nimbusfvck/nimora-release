@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.16",
+      "version": "1.0.17",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Made Hydrax start playback from the lowest validated quality by default while keeping the quality variants ordered from highest to lowest for manual selection.",
         "Fixed LayarKaca TurboVIP resolution by retrying the parent watch page and capturing the nested EmTurbovid player before WebView timeout.",
         "Exposed title logos for all TMDB Trending Movie and TV catalog items with bounded, memoized artwork lookups.",
         "Curated Football to include Saudi Pro League and exclude UEFA Youth League.",
@@ -159,7 +160,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "6360b2961c7b7cf5fe950c6d40c797ff01cb4157c666d49bafe6baa2e2080b6e"
+      "bundleSha256": "da7cfd14372f211861f44728155d55d61e1cb982ea22ec96f21e6f5b175b957b"
     }
   ]
 }
