@@ -4442,7 +4442,6 @@ const HIGHLIGHT_GROUPS = [
     fetchPage: fetchPopularStreamingPage,
   },
   { id: 'football_highlights', name: 'Football Highlights', fetch: fetchTimesoccerHighlights },
-  { id: 'coming_soon', name: 'Coming Soon', fetch: () => fetchComingSoon() },
   {
     id: 'top_anime_all_time',
     name: 'Top Anime All Time',
