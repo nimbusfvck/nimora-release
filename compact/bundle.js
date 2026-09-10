@@ -4442,6 +4442,7 @@ const HIGHLIGHT_GROUPS = [
     fetchPage: fetchPopularStreamingPage,
   },
   { id: 'football_highlights', name: 'Football Highlights', fetch: fetchTimesoccerHighlights },
+  { id: 'coming_soon', name: 'Coming Soon', fetch: () => fetchComingSoon() },
   {
     id: 'top_anime_all_time',
     name: 'Top Anime All Time',
@@ -7955,9 +7956,22 @@ function layarkacaParseCatalogResults(html, base, category) {
   return results;
 }
 
-function layarkacaCatalogHasNextPage(html) {
-  return /<a\b[^>]*\b(?:class\s*=\s*["'][^"']*\bnext\b|rel\s*=\s*["']next)[^>]*>/i.test(html || '') ||
-    /[?&]page=\d+/i.test(html || '');
+function layarkacaCatalogHasNextPage(html, currentPage = 1) {
+  if (/<a\b[^>]*\b(?:class\s*=\s*["'][^"']*\bnext\b|rel\s*=\s*["']next)[^>]*>/i.test(html || '')) {
+    return true;
+  }
+  const page = Number.isInteger(Number(currentPage)) && Number(currentPage) > 0
+    ? Number(currentPage) : 1;
+  const links = /<a\b([^>]*)>/gi;
+  let link;
+  while ((link = links.exec(html || '')) != null) {
+    const href = layarkacaAttr(link[1], 'href');
+    const pathPage = /\/page\/(\d+)(?:[/?#]|$)/i.exec(href || '');
+    const queryPage = /[?&]page=(\d+)(?:[&#]|$)/i.exec(href || '');
+    const linkedPage = Number((pathPage || queryPage || [])[1]);
+    if (Number.isInteger(linkedPage) && linkedPage > page) return true;
+  }
+  return false;
 }
 
 function layarkacaCatalogItem(result) {
@@ -8021,7 +8035,7 @@ async function layarkacaCatalogFeedPage(category, requestedPage) {
   const results = layarkacaParseCatalogResults(response.body, finalBase, category);
   return {
     items: results.map(layarkacaCatalogItem),
-    nextPage: layarkacaCatalogHasNextPage(response.body) ? String(page + 1) : null,
+    nextPage: layarkacaCatalogHasNextPage(response.body, page) ? String(page + 1) : null,
   };
 }
 
