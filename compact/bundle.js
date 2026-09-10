@@ -4462,7 +4462,7 @@ const HIGHLIGHT_GROUPS = [
   },
   {
     id: 'popular_movie_all_time',
-    name: 'Popular Movies All Time',
+    name: 'Popular Movies',
     fetch: () => fetchPopular('movie'),
     fetchPage: async (page) => {
       const result = await fetchPopularPage('movie', page);
@@ -4474,7 +4474,7 @@ const HIGHLIGHT_GROUPS = [
   },
   {
     id: 'popular_tv_all_time',
-    name: 'Popular Series All Time',
+    name: 'Popular TV Series',
     fetch: () => fetchPopular('tv'),
     fetchPage: async (page) => {
       const result = await fetchPopularPage('tv', page);
@@ -8102,12 +8102,16 @@ function layarkacaSearchScore(result, query, index) {
   const candidate = layarkacaNormalize(result.title);
   if (!wanted || !candidate) return null;
   if (
-    query.isEpisode &&
     query.year != null &&
     result.year != null &&
     query.year !== result.year
   ) return null;
   const exact = wanted === candidate;
+  // A movie substring is not a safe identity match: `Dreams` must not select
+  // `Train Dreams` just because the site omitted the exact title from search.
+  // Episodes retain the looser series-title matching used by the dedicated
+  // series mirrors.
+  if (!exact && !query.isEpisode) return null;
   const overlap = candidate.includes(wanted) || wanted.includes(candidate);
   if (!exact && !overlap) return null;
   const yearDelta = query.year != null && result.year != null

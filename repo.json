@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.33",
+      "version": "1.0.34",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed LK21 movie matching so a partial title such as Dreams cannot select a different movie such as Train Dreams, and renamed the TMDB popularity shelves to Popular Movies and Popular TV Series.",
         "Fixed LK21 ratings so they appear on both catalog cards and detail pages.",
         "Changed the All Time movie and series shelves to popularity rankings and moved Oscar Nominees and Cannes Film Festival to the bottom of Home.",
         "Restored the Coming Soon Home shelf and fixed Movies on LK21 pagination so additional pages load correctly.",
@@ -178,7 +179,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "fd59057c39ce33ede926a8e4ce5e0afd1e53065d5c73c7690906c220ec1f242d"
+      "bundleSha256": "736a6d2083534b61ce85036d1d9f78c2d8db6c07820d4782f54c77f771bf9f90"
     }
   ]
 }
