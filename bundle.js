@@ -6171,23 +6171,6 @@ async function fetchTopRated(mediaType) {
   return page.items;
 }
 
-// A minimum vote count keeps a tiny number of perfect scores from defining
-// the all-time shelves. This is deliberately higher than the country shelves
-// because these lists promise a broad, established ranking.
-const TMDB_ALL_TIME_MIN_VOTE_COUNT = 1000;
-
-async function fetchTopRatedAllTimePage(mediaType, page) {
-  return fetchDiscoverPage(mediaType, {
-    sort_by: 'vote_average.desc',
-    'vote_count.gte': TMDB_ALL_TIME_MIN_VOTE_COUNT,
-  }, tmdbRequestedPage(page));
-}
-
-async function fetchTopRatedAllTime(mediaType) {
-  const page = await fetchTopRatedAllTimePage(mediaType, 1);
-  return page.items;
-}
-
 async function fetchPopularPage(mediaType, page) {
   const requestedPage = tmdbRequestedPage(page);
   const data = await tmdbGetJson(`/${mediaType}/popular`, {
@@ -6506,11 +6489,11 @@ const HIGHLIGHT_GROUPS = [
     },
   },
   {
-    id: 'top_movie_all_time',
-    name: 'Top Movies All Time',
-    fetch: () => fetchTopRatedAllTime('movie'),
+    id: 'popular_movie_all_time',
+    name: 'Popular Movies All Time',
+    fetch: () => fetchPopular('movie'),
     fetchPage: async (page) => {
-      const result = await fetchTopRatedAllTimePage('movie', page);
+      const result = await fetchPopularPage('movie', page);
       return {
         items: result.items,
         nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
@@ -6518,19 +6501,17 @@ const HIGHLIGHT_GROUPS = [
     },
   },
   {
-    id: 'top_tv_all_time',
-    name: 'Top Series All Time',
-    fetch: () => fetchTopRatedAllTime('tv'),
+    id: 'popular_tv_all_time',
+    name: 'Popular Series All Time',
+    fetch: () => fetchPopular('tv'),
     fetchPage: async (page) => {
-      const result = await fetchTopRatedAllTimePage('tv', page);
+      const result = await fetchPopularPage('tv', page);
       return {
         items: result.items,
         nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
       };
     },
   },
-  { id: 'oscar_nominees', name: 'Oscar Nominees', fetch: () => fetchSheguList('oscar-nominees-best-picture') },
-  { id: 'cannes', name: 'Cannes Film Festival', fetch: () => fetchSheguList('cannes-film-festival') },
   {
     id: 'netflix_movies',
     name: 'Movies on Netflix',
@@ -6617,6 +6598,8 @@ const HIGHLIGHT_GROUPS = [
   })),
   { id: 'rotten_tomatoes_best', name: 'Rotten Tomatoes Best of All Time', fetch: () => fetchSheguList('rotten-tomatoes-best-of-all-time') },
   { id: 'based_on_true_story', name: 'Based On True Story', fetch: () => fetchSheguList('based-on-a-true-story') },
+  { id: 'oscar_nominees', name: 'Oscar Nominees', fetch: () => fetchSheguList('oscar-nominees-best-picture') },
+  { id: 'cannes', name: 'Cannes Film Festival', fetch: () => fetchSheguList('cannes-film-festival') },
 ];
 
 // Highlights declare `subCategories` — one per group, id-matched to the name
@@ -12286,6 +12269,11 @@ function layarkacaCatalogPoster(body, base) {
 }
 
 function layarkacaCatalogRating(body) {
+  const itempropMatch = /<[^>]*\bitemprop\s*=\s*["']ratingValue["'][^>]*>([\s\S]*?)<\/[^>]+>/i.exec(body || '');
+  if (itempropMatch) {
+    const rating = Number(/\d+(?:\.\d+)?/.exec(layarkacaText(itempropMatch[1]))?.[0]);
+    if (Number.isFinite(rating)) return rating;
+  }
   const match = /(?:data-rating|ratingValue|gmr-rating-item)[^>]*[=:]\s*["']?([0-9]+(?:\.[0-9]+)?)/i.exec(body || '') ||
     /<[^>]*\b(?:rating|gmr-rating-item)\b[^>]*>([\s\S]*?)<\//i.exec(body || '');
   const rating = match == null ? NaN : Number(/\d+(?:\.\d+)?/.exec(layarkacaText(match[1]))?.[0]);
@@ -12708,6 +12696,8 @@ async function layarkacaCatalogMeta(args) {
   if (poster) item.artwork = {portrait: {url: layarkacaUrl(poster, base)}};
   const year = Number.isInteger(payload.y) ? payload.y : layarkacaYear(`${title} ${pageUrl}`);
   if (Number.isInteger(year)) item.releaseYear = year;
+  const rating = layarkacaCatalogRating(html);
+  if (Number.isFinite(rating)) item.rating = rating;
   const detail = {item};
   const description = layarkacaCatalogDescription(html);
   if (description) detail.description = description;
