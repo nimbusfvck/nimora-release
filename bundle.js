@@ -16167,7 +16167,7 @@ const LEAGUE_CHANNEL_DEFINITIONS = [
   },
 ];
 
-const LEAGUE_CHANNEL_PLAYZ_CATEGORY_NAMES = new Set([
+const LEAGUE_CHANNELS_PLAYZ_CATEGORY_NAMES = new Set([
   'sports', 'tnt', 'tnt sports', 'bein sports', 'tsn sports', 'premier sports',
   'fox sports', 'sportv', 'd sports', 'cbs sports', 'sportdigital',
   'sky sports', 'fubo sports', 'espn', 'dazn', 'euro sports', 'fs1',
@@ -16300,7 +16300,8 @@ function leagueChannelsDedupe(rows) {
 
 async function leagueChannelsLoadPlayz() {
   const testFeeds = globalThis.__leagueChannelsPlayzFeeds;
-  if (testFeeds && typeof testFeeds === 'object') {
+  const testCategories = globalThis.__leagueChannelsPlayzCategories;
+  if (testFeeds && typeof testFeeds === 'object' && testCategories === undefined) {
     return Object.keys(testFeeds).flatMap((locator) =>
       leagueChannelsRows(testFeeds[locator]).map((row, index) =>
         leagueChannelsParseRow(row, 'playz', locator, index),
@@ -16308,7 +16309,11 @@ async function leagueChannelsLoadPlayz() {
     );
   }
   let categories;
-  try { categories = leagueChannelsRows(await playzFetchJson('sports.txt')); } catch (_) { return []; }
+  try {
+    categories = globalThis.__leagueChannelsPlayzCategories !== undefined
+      ? leagueChannelsRows(globalThis.__leagueChannelsPlayzCategories)
+      : leagueChannelsRows(await playzFetchJson('sports.txt'));
+  } catch (_) { return []; }
   const selected = [];
   const seen = new Set();
   for (const category of categories) {
@@ -16322,7 +16327,9 @@ async function leagueChannelsLoadPlayz() {
   const rows = [];
   for (const locator of selected.slice(0, LEAGUE_CHANNELS_MAX_CATEGORIES)) {
     try {
-      const data = await playzFetchJson(locator);
+      const data = testFeeds && typeof testFeeds === 'object'
+        ? testFeeds[locator]
+        : await playzFetchJson(locator);
       leagueChannelsRows(data).forEach((row, index) => {
         const parsed = leagueChannelsParseRow(row, 'playz', locator, index);
         if (parsed != null) rows.push(parsed);
