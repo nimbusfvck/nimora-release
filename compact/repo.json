@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.29",
+      "version": "1.0.30",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed FCTV live playback by validating playlist media segments before returning a source, retrying fresh signed stream details, filtering Sorotan items, and showing tournament names on live event cards.",
         "Added FCTV33 live-event fallback streams and provider-only football events to Live, while keeping FotMob as the Football schedule source.",
         "Added separate horizontal Movie and TV shelves to their category pages, including Top By Genre rows, while keeping mixed shelves on Home.",
         "Fixed League Channels returning empty in the live catalog when the PlayZTV category feed is loaded through the published bundle.",
@@ -45,7 +46,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "b50ab03a7e714db77f6462f746aa5725ba091d259664f3dacc625f1a72207865"
+      "bundleSha256": "179a80cc9185ab3f5c8ee9533e834affb88e2e1b55141a8dc09dc5062cfa2edb"
     }
   ]
 }

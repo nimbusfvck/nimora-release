@@ -993,6 +993,7 @@ const FCTV_USER_AGENT =
 const FCTV_LIVE_WINDOW_MS = 6 * 60 * 60 * 1000;
 const FCTV_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const FCTV_MEMO_TTL_MS = 60 * 1000;
+const FCTV_MEDIA_TIMEOUT_MS = 5000;
 
 let fctvLiveMemo = null;
 
@@ -1107,24 +1108,28 @@ function fctvBodyHex(response) {
 async function fctvFetchBinary(path, timeoutMs = 10000) {
   const response = await fetch(`${FCTV_API_BASE}${path}`, {
     timeoutMs,
-    headers: {
-      Accept: 'application/json, text/plain, */*',
-      'User-Agent': FCTV_USER_AGENT,
-      Origin: FCTV_SITE_ORIGIN,
-      Referer: `${FCTV_SITE_ORIGIN}/`,
-      platform: 'WEB',
-      countrycode: 'ID',
-      language: 'eng',
-      languagecode: 'eng',
-      local: 'IND',
-      originalcountry: 'ID',
-      tenant_identifier: 'master',
-      timezone: 'Asia/Jakarta',
-    },
+    headers: fctvApiHeaders(),
   });
   const hex = fctvBodyHex(response);
   if (hex == null) throw new Error(`FCTV request failed: ${response.status}`);
   return fctvHexToBytes(hex);
+}
+
+function fctvApiHeaders() {
+  return {
+    Accept: 'application/json, text/plain, */*',
+    'User-Agent': FCTV_USER_AGENT,
+    Origin: FCTV_SITE_ORIGIN,
+    Referer: `${FCTV_SITE_ORIGIN}/`,
+    platform: 'WEB',
+    countrycode: 'ID',
+    language: 'eng',
+    languagecode: 'eng',
+    local: 'IND',
+    originalcountry: 'ID',
+    tenant_identifier: 'master',
+    timezone: 'Asia/Jakarta',
+  };
 }
 
 function fctvLeagueName(matchBytes) {
@@ -1219,6 +1224,12 @@ function fctvEntryIsLive(match, nowMs) {
   return match.startsAt <= nowMs && nowMs - match.startsAt <= FCTV_LIVE_WINDOW_MS;
 }
 
+function fctvIsHighlight(match) {
+  return fctvNormalize(
+    `${match.title || ''} ${match.leagueName || ''} ${match.slug || ''}`,
+  ).includes('sorotan');
+}
+
 function fctvEntryToCatalog(match, nowMs) {
   const sportName = fctvSportName(match.sportType);
   const live = fctvEntryIsLive(match, nowMs);
@@ -1260,6 +1271,7 @@ function fctvLiveMatchesMemo() {
 async function fctvSportEntries(nowMs) {
   const matches = await fctvLiveMatchesMemo();
   return matches
+    .filter((match) => !fctvIsHighlight(match))
     .filter((match) => match.startsAt - nowMs <= FCTV_UPCOMING_WINDOW_MS)
     .map((match) => fctvEntryToCatalog(match, nowMs));
 }
@@ -1367,7 +1379,7 @@ async function fctvSources(args) {
     sources: streams.map((stream) => ({
       id: `${FCTV_PROVIDER_KEY}:${match.matchId}:${match.sportType}:` +
         `${stream.siteType}:${stream.streamId}`,
-      label: `FCTV · ${stream.name}`,
+      label: fctvSourceLabel(stream.name),
       provider: 'FCTV33',
       providerId: FCTV_PROVIDER_ID,
     })),
@@ -1382,29 +1394,156 @@ function fctvSourceHeaders() {
   };
 }
 
+function fctvSourceLabel() {
+  return 'FCTV';
+}
+
+function fctvResponseBytes(response) {
+  const hex = fctvBodyHex(response);
+  return hex == null ? null : fctvHexToBytes(hex);
+}
+
+function fctvBytesToText(bytes) {
+  if (!Array.isArray(bytes)) return '';
+  try {
+    return host.codec.base64ToText(
+      host.codec.hexToBase64(fctvBytesToHex(bytes)),
+    );
+  } catch (_) {
+    return '';
+  }
+}
+
+function fctvResolveRelativeUrl(baseUrl, value) {
+  const child = String(value || '').trim();
+  if (/^https?:\/\//i.test(child)) return child;
+  const match = String(baseUrl || '').match(/^(https?:\/\/[^/]+)(\/.*)?$/i);
+  if (match == null) return '';
+  if (child.startsWith('/')) return `${match[1]}${child}`;
+  const path = match[2] || '/';
+  const directory = path.slice(0, path.lastIndexOf('/') + 1);
+  return `${match[1]}${directory}${child}`;
+}
+
+function fctvFirstHlsUri(text) {
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const value = line.trim();
+    if (value.length > 0 && !value.startsWith('#')) return value;
+  }
+  return '';
+}
+
+function fctvMediaBytesLookBinary(bytes) {
+  if (!Array.isArray(bytes) || bytes.length === 0) return false;
+  if (bytes[0] === 0x47) return true;
+  if (bytes.length >= 8) {
+    const brand = String.fromCharCode(
+      bytes[4], bytes[5], bytes[6], bytes[7],
+    );
+    if (brand === 'ftyp' || brand === 'moof') return true;
+  }
+  return bytes.length >= 2 && bytes[0] === 0xff &&
+    (bytes[1] === 0xf1 || bytes[1] === 0xf9);
+}
+
+function fctvMediaResponseIsUsable(response, bytes) {
+  if (response == null || response.status < 200 || response.status >= 300) {
+    return false;
+  }
+  if (!Array.isArray(bytes) || bytes.length === 0) return false;
+  const contentType = fctvHeader(response, 'content-type').toLowerCase();
+  if (/(text\/html|text\/plain)/i.test(contentType)) return false;
+  if (/application\/json/i.test(contentType)) {
+    return fctvMediaBytesLookBinary(bytes);
+  }
+  return true;
+}
+
+async function fctvValidateMediaUrl(mediaUrl, depth = 0) {
+  if (depth > 2) throw new Error('FCTV playlist nesting is too deep');
+  const response = await fetch(mediaUrl, {
+    timeoutMs: FCTV_MEDIA_TIMEOUT_MS,
+    redirect: 'manual',
+    headers: {
+      ...fctvSourceHeaders(),
+      Accept: '*/*',
+    },
+  });
+  const bytes = fctvResponseBytes(response);
+  if (bytes == null) throw new Error(`FCTV media HTTP ${response.status}`);
+  const text = fctvBytesToText(bytes);
+  if (text.trimLeft().startsWith('#EXTM3U')) {
+    const next = fctvFirstHlsUri(text);
+    if (next.length === 0) throw new Error('FCTV playlist has no media URI');
+    return fctvValidateMediaUrl(fctvResolveRelativeUrl(mediaUrl, next), depth + 1);
+  }
+  if (!fctvMediaResponseIsUsable(response, bytes)) {
+    throw new Error('FCTV media response is not playable');
+  }
+  return true;
+}
+
+function fctvMediaEntries(bytes) {
+  const data = fctvFirstField(bytes, 10, 2);
+  if (data == null) return [];
+  return fctvFieldsOf(data.value, 2, 2)
+    .map((entry) => {
+      const url = fctvFirstField(entry.value, 4, 2);
+      const name = fctvFirstField(entry.value, 3, 2);
+      const mediaUrl = url == null ? '' : fctvString(url.value);
+      if (!/^https?:\/\/[^\s]+$/i.test(mediaUrl)) return null;
+      return {
+        mediaUrl,
+        name: name == null ? 'Live stream' : fctvString(name.value),
+      };
+    })
+    .filter((entry) => entry != null);
+}
+
+async function fctvFirstPlayableMediaEntry(bytes) {
+  const entries = fctvMediaEntries(bytes);
+  let lastError = null;
+  for (const entry of entries) {
+    try {
+      await fctvValidateMediaUrl(entry.mediaUrl);
+      return entry;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError != null) throw lastError;
+  throw new Error('FCTV returned no playable media');
+}
+
 async function fctvResolve(sourceId) {
   const source = fctvMatchFromSourceId(sourceId);
   if (source == null) throw new Error(`Invalid FCTV source id: ${sourceId}`);
-  const bytes = await fctvFetchBinary(
+  const detailPath =
     `/api/stream/detail?sportType=${encodeURIComponent(source.sportType)}` +
     `&streamId=${encodeURIComponent(source.streamId)}` +
     `&siteType=${encodeURIComponent(source.siteType)}` +
-    '&continent=AS&country=ID&digit=0&notConfuse=true',
-  );
-  const data = fctvFirstField(bytes, 10, 2);
-  const entry = data == null ? null : fctvFirstField(data.value, 2, 2);
-  if (entry == null) throw new Error('FCTV returned no stream');
-  const url = fctvFirstField(entry.value, 4, 2);
-  const name = fctvFirstField(entry.value, 3, 2);
-  const mediaUrl = url == null ? '' : fctvString(url.value);
-  if (!/^https?:\/\/[^\s]+$/i.test(mediaUrl)) {
-    throw new Error('FCTV returned an invalid media URL');
+    '&continent=AS&country=ID&digit=0&notConfuse=true';
+  let selected = null;
+  let lastError = null;
+  // Signed media paths can rotate between the detail response and the first
+  // playlist request. Re-fetch once when every entry from the first response
+  // is unusable, so a transient bad edge does not become a dead source.
+  for (let attempt = 0; attempt < 2 && selected == null; attempt++) {
+    try {
+      const bytes = await fctvFetchBinary(detailPath);
+      selected = await fctvFirstPlayableMediaEntry(bytes);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (selected == null) {
+    throw lastError || new Error('FCTV returned no playable media');
   }
   return {
-    url: mediaUrl,
+    url: selected.mediaUrl,
     headers: fctvSourceHeaders(),
     format: 'hls',
-    label: `FCTV · ${name == null ? 'Live stream' : fctvString(name.value)}`,
+    label: fctvSourceLabel(selected.name),
   };
 }
 
@@ -6682,6 +6821,7 @@ const TMDB_WATCH_REGION = globalThis.__tmdbWatchRegion || 'US';
 const TMDB_STREAMING_TYPES = 'flatrate';
 const TMDB_LEAKS_BASE = globalThis.__flystreamBaseUrl || 'https://flystream.net';
 const TMDB_LEAKS_TTL_MS = 15 * 60 * 1000;
+const SHEGU_TRAILER_TIMEOUT_MS = 1500;
 
 let tmdbLeaksMemo = null;
 const tmdbTitleLogoMemo = new Map();
@@ -6859,12 +6999,29 @@ function sheguVideoTrailerFromResponse(data) {
 }
 
 async function sheguVideoTrailer(tmdbId, type) {
+  let timeoutHandle = null;
   try {
     const url = `${SHEGU_TRAILER_BASE}/trailer?tmdb=${encodeURIComponent(tmdbId)}&type=${encodeURIComponent(type)}`;
-    const response = await fetch(url);
+    // This is optional detail enrichment. Shegu is Cloudflare-fronted, and a
+    // 503 from its unavailable upstream must not be misclassified by the
+    // generic host detector as a browser challenge. The private header is
+    // consumed by the JS host and is never sent to Shegu; a slow/outage
+    // response is bounded as well.
+    const request = fetch(url, {
+      headers: { 'x-qjsr-disable-cloudflare': '1' },
+    });
+    const response = await Promise.race([
+      request,
+      new Promise((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(null), SHEGU_TRAILER_TIMEOUT_MS);
+      }),
+    ]);
+    if (timeoutHandle != null) clearTimeout(timeoutHandle);
+    if (response == null) return null;
     if (response.status < 200 || response.status >= 300) return null;
     return sheguVideoTrailerFromResponse(JSON.parse(response.body));
   } catch (_) {
+    if (timeoutHandle != null) clearTimeout(timeoutHandle);
     // Trailer previews are optional; a provider outage must not hide metadata.
     return null;
   }

@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.40",
+      "version": "1.0.41",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed FCTV live playback by validating playlist media segments before returning a source, retrying fresh signed stream details, filtering Sorotan items, and showing tournament names on live event cards.",
         "Added FCTV33 live-event fallback streams and provider-only football events to Live, while keeping FotMob as the Football schedule source.",
         "Added separate horizontal Movie and TV shelves to their category pages, including Top By Genre rows, while keeping mixed shelves on Home.",
         "Fixed League Channels returning empty in the live catalog when the PlayZTV category feed is loaded through the published bundle.",
@@ -185,7 +186,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "ae8bbfdd70c77e50af1ea42f717010b397bac7ed9b8cd59136614898a012a1b9"
+      "bundleSha256": "ec79badadc48690455e7358ac0d23bf4cf6a4583d1262f5833fc1c32121980ab"
     }
   ]
 }
