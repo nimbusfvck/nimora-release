@@ -5779,12 +5779,66 @@ const JIKAN_PROVIDER_ID = 'nimora.jikan';
 const JIKAN_PER_PAGE = 25;
 const JIKAN_HOME_PAGES = Number.isInteger(globalThis.__jikanHomePages)
   ? globalThis.__jikanHomePages
-  : 3;
+  : 1;
 const JIKAN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const JIKAN_CACHE_STORAGE_KEY = 'nimora.jikan.catalog.v1';
+const JIKAN_MIN_INTERVAL_MS = 400;
+const JIKAN_MAX_ATTEMPTS = 4;
 
 const jikanCache = new Map();
 const jikanInflight = new Map();
 let jikanQueue = Promise.resolve();
+let jikanNextRequestAt = 0;
+
+function jikanStorage() {
+  return typeof host === 'object' && host !== null && host.storage
+    ? host.storage : null;
+}
+
+function jikanRestoreCache() {
+  const storage = jikanStorage();
+  if (storage === null) return;
+  let raw;
+  try { raw = storage.read(JIKAN_CACHE_STORAGE_KEY); } catch (_) { return; }
+  if (typeof raw !== 'string' || raw.length === 0) return;
+  try {
+    const entries = JSON.parse(raw);
+    if (!entries || typeof entries !== 'object') return;
+    const now = Date.now();
+    for (const [url, entry] of Object.entries(entries)) {
+      if (!entry || typeof entry !== 'object' || entry.value == null) continue;
+      if (!Number.isFinite(entry.t) || now - entry.t >= JIKAN_CACHE_TTL_MS) continue;
+      jikanCache.set(url, {value: entry.value, t: entry.t});
+    }
+  } catch (_) {}
+}
+
+function jikanPersistCache() {
+  const storage = jikanStorage();
+  if (storage === null) return;
+  const now = Date.now();
+  const entries = {};
+  for (const [url, entry] of jikanCache) {
+    if (!entry || now - entry.t >= JIKAN_CACHE_TTL_MS) continue;
+    entries[url] = entry;
+  }
+  try {
+    storage.write(
+      JIKAN_CACHE_STORAGE_KEY,
+      JSON.stringify(entries),
+      JIKAN_CACHE_TTL_MS,
+    );
+  } catch (_) {}
+}
+
+function jikanDelay(milliseconds) {
+  // QuickJS hosts do not currently expose a timer primitive. Keep the queue
+  // compatible there and still use real spacing on hosts that do provide one.
+  if (typeof setTimeout !== 'function') return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+jikanRestoreCache();
 
 function jikanUrl(path, query) {
   const params = Object.entries(query || {})
@@ -5801,6 +5855,9 @@ async function jikanQueuedFetch(url) {
     release = resolve;
   });
   await previous;
+  const wait = Math.max(0, jikanNextRequestAt - Date.now());
+  if (wait > 0) await jikanDelay(wait);
+  jikanNextRequestAt = Date.now() + JIKAN_MIN_INTERVAL_MS;
   try {
     return await fetch(url);
   } finally {
@@ -5816,21 +5873,32 @@ async function jikanJson(path, query) {
   if (existing) return existing;
 
   const pending = (async () => {
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let attempt = 0; attempt < JIKAN_MAX_ATTEMPTS; attempt += 1) {
       try {
         const response = await jikanQueuedFetch(url);
-        if (response.status === 429) {
+        const retryable = response.status === 429 || response.status >= 500;
+        if (retryable && attempt + 1 < JIKAN_MAX_ATTEMPTS) {
+          await jikanDelay(response.status === 429
+            ? 1000 * (2 ** attempt)
+            : 500 * (2 ** attempt));
           continue;
         }
-        if (response.status < 200 || response.status >= 300) return null;
+        if (response.status < 200 || response.status >= 300) break;
         const value = JSON.parse(response.body);
         jikanCache.set(url, { value, t: Date.now() });
+        jikanPersistCache();
         return value;
       } catch (_) {
-        return null;
+        if (attempt + 1 < JIKAN_MAX_ATTEMPTS) {
+          await jikanDelay(500 * (2 ** attempt));
+          continue;
+        }
       }
     }
-    return null;
+    // Jikan can lose its connection to MAL while its own API remains up.
+    // Keep the last successful catalogue usable instead of hiding the row.
+    const stale = jikanCache.get(url);
+    return stale ? stale.value : null;
   })();
   jikanInflight.set(url, pending);
   try {

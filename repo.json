@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.35",
+      "version": "1.0.36",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Hardened the Jikan anime catalog against upstream 504s with persistent cache, serialized requests, retries, and stale-data fallback while reducing the initial All-category request burst.",
         "Added cached cross-source anime title aliases from MAL/Jikan and Anime Relations Mapping, so Sokuja, Indomax, LayarKaca, and Savefilm can search alternate anime names automatically for both series and episodes.",
         "Fixed LK21 movie matching so a partial title such as Dreams cannot select a different movie such as Train Dreams, and renamed the TMDB popularity shelves to Popular Movies and Popular TV Series.",
         "Fixed LK21 ratings so they appear on both catalog cards and detail pages.",
@@ -180,7 +181,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "50fd716d63d07a7b3e7f0b7ed6c09046a8c66b793d7f4213f288ec330fab4d81"
+      "bundleSha256": "3dec7dde7f876703cc619d62a48a9fa15888b77aa3bdf124147e97b81945e91a"
     }
   ]
 }
