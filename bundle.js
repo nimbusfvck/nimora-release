@@ -993,7 +993,9 @@ const FCTV_USER_AGENT =
 const FCTV_LIVE_WINDOW_MS = 6 * 60 * 60 * 1000;
 const FCTV_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const FCTV_MEMO_TTL_MS = 60 * 1000;
-const FCTV_MEDIA_TIMEOUT_MS = 5000;
+const FCTV_MEDIA_TIMEOUT_MS = 12000;
+const FCTV_TOKEN_KEY = 'a7981cc9eb2f4d19dcfea57b101ecd89';
+const FCTV_TOKEN_IV = '8017d3a8f1400d2f';
 
 let fctvLiveMemo = null;
 
@@ -1106,13 +1108,21 @@ function fctvBodyHex(response) {
 }
 
 async function fctvFetchBinary(path, timeoutMs = 10000) {
+  const response = await fctvFetchBinaryResponse(path, timeoutMs);
+  return response.bytes;
+}
+
+async function fctvFetchBinaryResponse(path, timeoutMs = 10000) {
   const response = await fetch(`${FCTV_API_BASE}${path}`, {
     timeoutMs,
     headers: fctvApiHeaders(),
   });
   const hex = fctvBodyHex(response);
   if (hex == null) throw new Error(`FCTV request failed: ${response.status}`);
-  return fctvHexToBytes(hex);
+  return {
+    bytes: fctvHexToBytes(hex),
+    rbSession: fctvHeader(response, 'rb-session'),
+  };
 }
 
 function fctvApiHeaders() {
@@ -1398,6 +1408,66 @@ function fctvSourceLabel() {
   return 'FCTV';
 }
 
+function fctvValidMediaUrl(value) {
+  return /^https?:\/\/[^\s]+$/i.test(String(value || ''));
+}
+
+function fctvRot47(value) {
+  return [...String(value || '')].map((char) => {
+    const code = char.charCodeAt(0);
+    if (code < 33 || code > 126) return char;
+    return String.fromCharCode(33 + ((code - 33 + 47) % 94));
+  }).join('');
+}
+
+function fctvDecodedMediaUrl(value) {
+  const raw = String(value || '').trim();
+  const decoded = fctvRot47(raw);
+  if (decoded.length > 8 && fctvValidMediaUrl(decoded.slice(8))) {
+    return decoded.slice(8);
+  }
+  if (fctvValidMediaUrl(decoded)) return decoded;
+  // `notConfuse=true` is useful for diagnostics and returns a plain URL.
+  if (fctvValidMediaUrl(raw)) return raw;
+  return '';
+}
+
+function fctvTokenizedMediaUrl(value, rbSession) {
+  const mediaUrl = fctvDecodedMediaUrl(value);
+  if (!fctvValidMediaUrl(mediaUrl)) return '';
+  const session = String(rbSession || '');
+  if (session.length === 0) return mediaUrl;
+  try {
+    const parsed = mediaUrl.match(
+      /^(https?:\/\/[^/]+)(\/[^?]*)?(\?.*)?$/i,
+    );
+    if (parsed == null) return '';
+    const encrypted = host.crypto.aesCbcEncrypt(
+      host.codec.textToBase64(FCTV_TOKEN_KEY),
+      host.codec.textToBase64(FCTV_TOKEN_IV),
+      host.codec.textToBase64(session),
+    );
+    const cipherHex = host.codec.base64ToHex(encrypted);
+    return `${parsed[1]}/token-${encodeURIComponent(cipherHex)}a` +
+      `${parsed[2] || '/'}${parsed[3] || ''}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+function fctvMediaUrlWithPath(candidate, primary) {
+  const candidateUrl = fctvDecodedMediaUrl(candidate);
+  const primaryUrl = fctvDecodedMediaUrl(primary);
+  if (!fctvValidMediaUrl(candidateUrl)) return '';
+  const candidatePathIndex = candidateUrl.indexOf('/', candidateUrl.indexOf('://') + 3);
+  if (candidatePathIndex >= 0 && candidateUrl.slice(candidatePathIndex) !== '/') {
+    return candidateUrl;
+  }
+  const primaryPathIndex = primaryUrl.indexOf('/', primaryUrl.indexOf('://') + 3);
+  if (primaryPathIndex < 0 || primaryUrl.slice(primaryPathIndex) === '/') return '';
+  return `${candidateUrl.replace(/\/$/, '')}${primaryUrl.slice(primaryPathIndex)}`;
+}
+
 function fctvResponseBytes(response) {
   const hex = fctvBodyHex(response);
   return hex == null ? null : fctvHexToBytes(hex);
@@ -1416,7 +1486,7 @@ function fctvBytesToText(bytes) {
 
 function fctvResolveRelativeUrl(baseUrl, value) {
   const child = String(value || '').trim();
-  if (/^https?:\/\//i.test(child)) return child;
+  if (fctvValidMediaUrl(child)) return child;
   const match = String(baseUrl || '').match(/^(https?:\/\/[^/]+)(\/.*)?$/i);
   if (match == null) return '';
   if (child.startsWith('/')) return `${match[1]}${child}`;
@@ -1463,7 +1533,6 @@ async function fctvValidateMediaUrl(mediaUrl, depth = 0) {
   if (depth > 2) throw new Error('FCTV playlist nesting is too deep');
   const response = await fetch(mediaUrl, {
     timeoutMs: FCTV_MEDIA_TIMEOUT_MS,
-    redirect: 'manual',
     headers: {
       ...fctvSourceHeaders(),
       Accept: '*/*',
@@ -1486,27 +1555,36 @@ async function fctvValidateMediaUrl(mediaUrl, depth = 0) {
 function fctvMediaEntries(bytes) {
   const data = fctvFirstField(bytes, 10, 2);
   if (data == null) return [];
-  return fctvFieldsOf(data.value, 2, 2)
-    .map((entry) => {
+  const entries = [];
+  for (const entry of fctvFieldsOf(data.value, 2, 2)) {
       const url = fctvFirstField(entry.value, 4, 2);
       const name = fctvFirstField(entry.value, 3, 2);
-      const mediaUrl = url == null ? '' : fctvString(url.value);
-      if (!/^https?:\/\/[^\s]+$/i.test(mediaUrl)) return null;
-      return {
-        mediaUrl,
-        name: name == null ? 'Live stream' : fctvString(name.value),
-      };
-    })
-    .filter((entry) => entry != null);
+      const primaryUrl = url == null ? '' : fctvDecodedMediaUrl(fctvString(url.value));
+      if (!fctvValidMediaUrl(primaryUrl)) continue;
+      const entryName = name == null ? 'Live stream' : fctvString(name.value);
+      const urls = [primaryUrl];
+      // FCTV returns backup edge hosts in repeated field 12. Each backup
+      // reuses the primary signed HLS path for this resolve attempt.
+      for (const backup of fctvFieldsOf(entry.value, 12, 2)) {
+        const backupUrl = fctvMediaUrlWithPath(fctvString(backup.value), primaryUrl);
+        if (backupUrl.length > 0 && !urls.includes(backupUrl)) urls.push(backupUrl);
+      }
+      for (const mediaUrl of urls) {
+        entries.push({ mediaUrl, name: entryName });
+      }
+  }
+  return entries;
 }
 
-async function fctvFirstPlayableMediaEntry(bytes) {
+async function fctvFirstPlayableMediaEntry(bytes, rbSession = '') {
   const entries = fctvMediaEntries(bytes);
   let lastError = null;
   for (const entry of entries) {
+    const mediaUrl = fctvTokenizedMediaUrl(entry.mediaUrl, rbSession);
+    if (!fctvValidMediaUrl(mediaUrl)) continue;
     try {
-      await fctvValidateMediaUrl(entry.mediaUrl);
-      return entry;
+      await fctvValidateMediaUrl(mediaUrl);
+      return { ...entry, mediaUrl };
     } catch (error) {
       lastError = error;
     }
@@ -1522,16 +1600,16 @@ async function fctvResolve(sourceId) {
     `/api/stream/detail?sportType=${encodeURIComponent(source.sportType)}` +
     `&streamId=${encodeURIComponent(source.streamId)}` +
     `&siteType=${encodeURIComponent(source.siteType)}` +
-    '&continent=AS&country=ID&digit=0&notConfuse=true';
+    '&continent=AS&country=ID&digit=0';
   let selected = null;
   let lastError = null;
   // Signed media paths can rotate between the detail response and the first
-  // playlist request. Re-fetch once when every entry from the first response
+  // playlist request. Re-fetch once when every edge from the first response
   // is unusable, so a transient bad edge does not become a dead source.
   for (let attempt = 0; attempt < 2 && selected == null; attempt++) {
     try {
-      const bytes = await fctvFetchBinary(detailPath);
-      selected = await fctvFirstPlayableMediaEntry(bytes);
+      const detail = await fctvFetchBinaryResponse(detailPath);
+      selected = await fctvFirstPlayableMediaEntry(detail.bytes, detail.rbSession);
     } catch (error) {
       lastError = error;
     }
