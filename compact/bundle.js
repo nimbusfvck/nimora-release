@@ -4672,6 +4672,54 @@ async function fetchDiscover(mediaType, page) {
   return fetchDiscoverPage(mediaType, {}, page);
 }
 
+// Keep the genre set deliberately small. Each entry becomes one horizontal
+// row, and a category page should not fan out to every genre TMDB exposes.
+const TOP_BY_GENRE = {
+  movie: [
+    { id: 'action', name: 'Action', tmdbId: 28, minimumVotes: 200 },
+    { id: 'comedy', name: 'Comedy', tmdbId: 35, minimumVotes: 200 },
+    { id: 'drama', name: 'Drama', tmdbId: 18, minimumVotes: 200 },
+    { id: 'horror', name: 'Horror', tmdbId: 27, minimumVotes: 200 },
+    { id: 'science_fiction', name: 'Sci-Fi', tmdbId: 878, minimumVotes: 200 },
+  ],
+  tv: [
+    { id: 'action_adventure', name: 'Action & Adventure', tmdbId: 10759, minimumVotes: 100 },
+    { id: 'comedy', name: 'Comedy', tmdbId: 35, minimumVotes: 100 },
+    { id: 'crime', name: 'Crime', tmdbId: 80, minimumVotes: 100 },
+    { id: 'drama', name: 'Drama', tmdbId: 18, minimumVotes: 100 },
+    { id: 'science_fiction_fantasy', name: 'Sci-Fi & Fantasy', tmdbId: 10765, minimumVotes: 100 },
+  ],
+};
+
+async function fetchTopByGenrePage(mediaType, genre, page) {
+  return fetchDiscoverPage(mediaType, {
+    with_genres: genre.tmdbId,
+    sort_by: 'vote_average.desc',
+    'vote_count.gte': genre.minimumVotes,
+  }, page);
+}
+
+async function fetchTopByGenre(mediaType, genre) {
+  const page = await fetchTopByGenrePage(mediaType, genre, 1);
+  return page.items;
+}
+
+function topByGenreGroups(mediaType) {
+  const genres = TOP_BY_GENRE[mediaType] || [];
+  return genres.map((genre) => ({
+    id: `top_by_genre_${mediaType}_${genre.id}`,
+    name: `Top By Genre · ${genre.name}`,
+    fetch: () => fetchTopByGenre(mediaType, genre),
+    fetchPage: async (page) => {
+      const result = await fetchTopByGenrePage(mediaType, genre, page);
+      return {
+        items: result.items,
+        nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
+      };
+    },
+  }));
+}
+
 async function fetchPopularStreamingMediaTypePage(mediaType, page) {
   try {
     const requestedPage = tmdbRequestedPage(page);
@@ -4773,8 +4821,8 @@ async function fetchGroupPage(label, fetchFn, page) {
   }
 }
 
-// --- "highlights" catalog: the `all` category — horizontal-row
-// sections, movie and tv mixed, exactly the shape originally asked for.
+// --- "highlights" catalog: horizontal-row sections. The `all` category is
+// mixed; movie and tv reuse the same catalog with only their own sections.
 // Separate from the `movie`/`tv` grid catalog below: same provider, second
 // catalog, own catalogId, so it can keep `display: "row"` while the other
 // one is `"grid"` (CatalogDecl.display is one value per catalog, not per
@@ -5022,6 +5070,57 @@ const HIGHLIGHT_GROUPS = [
   { id: 'cannes', name: 'Cannes Film Festival', fetch: () => fetchSheguList('cannes-film-festival') },
 ];
 
+// These are the shelves from the mixed Home catalog that have an unambiguous
+// movie or TV identity. Mixed rows such as Popular Today, Coming Soon, and
+// country rankings stay on `all` until they have a category-specific fetch.
+const CATEGORY_HIGHLIGHT_IDS = {
+  movie: [
+    'trending_movie',
+    'top_rated_movie',
+    'popular_movie_all_time',
+    'netflix_movies',
+    'hulu_movies',
+    'disney_movies',
+    'prime_movies',
+    'hbo_movies',
+    'appletv_movies',
+    'layarkaca_movies',
+    'rotten_tomatoes_best',
+    'based_on_true_story',
+    'oscar_nominees',
+    'cannes',
+    'top_by_genre',
+  ],
+  tv: [
+    'trending_tv',
+    'top_rated_tv',
+    'popular_tv_all_time',
+    'netflix_tv',
+    'disney_tv',
+    'appletv_tv',
+    'prime_tv',
+    'hbo_tv',
+    'layarkaca_tv',
+    'top_by_genre',
+  ],
+};
+
+function highlightGroupsForCategory(category) {
+  if (category === TMDB_ALL_CATEGORY) return HIGHLIGHT_GROUPS;
+  const ids = CATEGORY_HIGHLIGHT_IDS[category];
+  if (!Array.isArray(ids)) return [];
+  const groups = [];
+  for (const id of ids) {
+    if (id === 'top_by_genre') {
+      groups.push(...topByGenreGroups(category));
+      continue;
+    }
+    const group = HIGHLIGHT_GROUPS.find((entry) => entry.id === id);
+    if (group != null) groups.push(group);
+  }
+  return groups;
+}
+
 // Highlights declare `subCategories` — one per group, id-matched to the name
 // each group is tagged with. Groups backed by a paginated TMDB endpoint also
 // expose `nextPage`, allowing the app's See more grid to load more on scroll.
@@ -5033,11 +5132,12 @@ const HIGHLIGHT_GROUPS = [
 // section heading it came from; with none declared, every "See more" here
 // used to reopen everything, unfiltered, under a mismatched title).
 async function tmdbHighlightsCatalog(query) {
-  if (query.category !== TMDB_ALL_CATEGORY) return { sections: [] };
-  const subCategories = HIGHLIGHT_GROUPS.map((g) => ({ id: g.id, name: g.name }));
+  const groups = highlightGroupsForCategory(query.category);
+  if (groups.length === 0) return { sections: [] };
+  const subCategories = groups.map((g) => ({ id: g.id, name: g.name }));
 
   if (query.subCategory != null) {
-    const matched = HIGHLIGHT_GROUPS.find((g) => g.id === query.subCategory);
+    const matched = groups.find((g) => g.id === query.subCategory);
     if (matched == null) return { sections: [], subCategories };
     if (matched.id === 'football_highlights') {
       const page = await fetchTimesoccerHighlightsPage(query.page);
@@ -5062,10 +5162,10 @@ async function tmdbHighlightsCatalog(query) {
   }
 
   const itemGroups = await Promise.all(
-    HIGHLIGHT_GROUPS.map((g) => fetchGroup(g.name, g.fetch)),
+    groups.map((g) => fetchGroup(g.name, g.fetch)),
   );
   return {
-    sections: HIGHLIGHT_GROUPS.map((group, index) => ({
+    sections: groups.map((group, index) => ({
       id: group.id,
       title: group.name,
       items: itemGroups[index],
@@ -5076,9 +5176,8 @@ async function tmdbHighlightsCatalog(query) {
 
 // --- catalog: no sections, no subCategories — just the popularity-sorted
 // discover feed, straight from the API, paginated for infinite scroll. Named
-// curated lists (Trending/Top Rated/Oscar Nominees/Cannes) live only on the
-// `highlights` (`all`) catalog above; `movie`/`tv` is deliberately a single
-// flat, ungrouped list so nothing renders a section heading between pages.
+// curated lists live on the row-based `highlights` catalog above; this
+// `movie`/`tv` catalog remains a single flat, ungrouped list for the grid.
 
 async function tmdbCatalog(query) {
   const mediaType =
@@ -11593,6 +11692,27 @@ const LEAGUE_CHANNELS_PLAYZ_CATEGORY_NAMES = new Set([
   'arab sports', 'starzplay', 'general sports',
 ]);
 
+// Collapse numbered/variant feeds into one user-facing broadcaster card. The
+// match is intentionally conservative: unknown names remain separate instead
+// of being merged merely because they happen to share a common word.
+const LEAGUE_CHANNEL_BRANDS = [
+  { key: 'sky-sports', title: 'Sky Sports', aliases: ['sky sports', 'sky sport'] },
+  { key: 'tnt-sports', title: 'TNT Sports', aliases: ['tnt sports', 'tnt'] },
+  { key: 'bein-sports', title: 'beIN Sports', aliases: ['bein sports', 'bein sport'] },
+  { key: 'espn', title: 'ESPN', aliases: ['espn'] },
+  { key: 'fox-sports', title: 'Fox Sports', aliases: ['fox sports', 'fox sport'] },
+  { key: 'arena-sport', title: 'Arena Sport', aliases: ['arena sport'] },
+  { key: 'dazn', title: 'DAZN', aliases: ['dazn'] },
+  { key: 'movistar', title: 'Movistar', aliases: ['movistar liga de campeones', 'movistar'] },
+  { key: 'paramount', title: 'Paramount+', aliases: ['paramount plus', 'paramount+'] },
+  { key: 'super-sport', title: 'SuperSport', aliases: ['supersport', 'super sport'] },
+  { key: 'peacock', title: 'Peacock', aliases: ['peacock'] },
+  { key: 'viaplay', title: 'Viaplay', aliases: ['viaplay'] },
+  { key: 'canal-plus', title: 'Canal+', aliases: ['canal plus', 'canal+'] },
+  { key: 'sport-tv', title: 'Sport TV', aliases: ['sport tv'] },
+  { key: 'setanta', title: 'Setanta Sports', aliases: ['setanta sports', 'setanta'] },
+];
+
 let leagueChannelsMemo = null;
 
 function leagueChannelsText(value) {
@@ -11681,6 +11801,8 @@ function leagueChannelsParseM3u(text, provider, locator) {
     if (!line.startsWith('#EXTINF')) continue;
     const comma = line.indexOf(',');
     const name = comma < 0 ? '' : line.slice(comma + 1).trim();
+    const logoMatch = line.match(/\btvg-logo\s*=\s*["']([^"']+)["']/i);
+    const logo = logoMatch == null ? '' : leagueChannelsText(logoMatch[1]);
     let linkIndex = index + 1;
     while (linkIndex < lines.length && lines[linkIndex].trim().startsWith('#')) linkIndex += 1;
     const link = linkIndex < lines.length ? lines[linkIndex].trim() : '';
@@ -11691,7 +11813,7 @@ function leagueChannelsParseM3u(text, provider, locator) {
       index: rows.length,
       name,
       normalizedName: leagueChannelsNormalize(name),
-      logo: '',
+      logo,
       links: link,
       linkNames: [],
       m3u: true,
@@ -11707,10 +11829,35 @@ function leagueChannelsMatches(row, definition) {
   return definition.patterns.some((pattern) => haystack.includes(leagueChannelsNormalize(pattern)));
 }
 
+function leagueChannelsGroup(row) {
+  const haystack = leagueChannelsNormalize(
+    `${row.name} ${(row.linkNames || []).join(' ')}`,
+  );
+  const brand = LEAGUE_CHANNEL_BRANDS.find((candidate) =>
+    candidate.aliases.some((alias) => haystack.includes(leagueChannelsNormalize(alias))),
+  );
+  if (brand != null) return { key: brand.key, title: brand.title };
+  return { key: `channel:${row.normalizedName}`, title: row.name };
+}
+
+function leagueChannelsGroups(rows, definition) {
+  const groups = new Map();
+  rows.filter((row) => leagueChannelsMatches(row, definition)).forEach((row) => {
+    const group = leagueChannelsGroup(row);
+    let value = groups.get(group.key);
+    if (value == null) {
+      value = { key: group.key, title: group.title, rows: [] };
+      groups.set(group.key, value);
+    }
+    value.rows.push(row);
+  });
+  return Array.from(groups.values());
+}
+
 function leagueChannelsDedupe(rows) {
   const seen = new Set();
   return rows.filter((row) => {
-    const key = `${row.provider}:${row.normalizedName}`;
+    const key = `${row.provider}:${row.locator}:${row.normalizedName}:${row.links}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -11810,12 +11957,10 @@ async function leagueChannelsLoad() {
   return rows;
 }
 
-function leagueChannelsItem(definition, row) {
+function leagueChannelsItem(definition, group) {
   const id = leagueChannelsEncode({
     league: definition.id,
-    provider: row.provider,
-    locator: row.locator,
-    name: row.name,
+    channel: group.key,
   });
   const item = {
     ref: {
@@ -11824,10 +11969,13 @@ function leagueChannelsItem(definition, row) {
       id: `${LEAGUE_CHANNELS_PROVIDER_KEY}:${id}`,
     },
     kind: 'video',
-    title: row.name,
-    subtitle: `${definition.title} · ${row.provider === 'playz' ? 'PlayZTV' : 'Cricfy'}`,
+    title: group.title,
+    subtitle: definition.title,
   };
-  if (/^https?:\/\//i.test(row.logo)) item.artwork = { landscape: { url: row.logo } };
+  const logo = group.rows
+    .map((row) => row.logo)
+    .find((value) => /^https?:\/\//i.test(value));
+  if (logo != null) item.artwork = { portrait: { url: logo } };
   return item;
 }
 
@@ -11839,9 +11987,8 @@ async function leagueChannelsCatalog(query) {
     sections: LEAGUE_CHANNEL_DEFINITIONS.map((definition) => ({
       id: `${LEAGUE_CHANNELS_CATALOG_ID}:${definition.id}`,
       title: definition.title,
-      items: leagueChannelsDedupe(
-        rows.filter((row) => leagueChannelsMatches(row, definition)),
-      ).map((row) => leagueChannelsItem(definition, row)),
+      items: leagueChannelsGroups(rows, definition)
+        .map((group) => leagueChannelsItem(definition, group)),
     })).filter((section) => section.items.length > 0),
   };
 }
@@ -11857,45 +12004,51 @@ async function leagueChannelsSources(args) {
   const prefix = `${LEAGUE_CHANNELS_PROVIDER_KEY}:`;
   if (!rawId.startsWith(prefix)) return { sources: [] };
   const payload = leagueChannelsDecode(rawId.slice(prefix.length));
-  if (!payload || !payload.provider || !payload.locator || !payload.name) return { sources: [] };
-  let links = [];
-  try {
-    if (payload.provider === 'playz') {
-      const testFeeds = globalThis.__leagueChannelsPlayzFeeds;
-      const fetched = testFeeds && typeof testFeeds === 'object'
-        ? testFeeds[payload.locator]
-        : await playzFetchJson(payload.locator);
-      const rows = leagueChannelsRows(fetched);
-      const row = rows.map((entry) => leagueChannelsParseRow(entry, 'playz', payload.locator, 0))
-        .find((entry) => entry && entry.normalizedName === leagueChannelsNormalize(payload.name));
-      if (row) {
+  if (!payload || !payload.league || !payload.channel) return { sources: [] };
+  const definition = LEAGUE_CHANNEL_DEFINITIONS.find((entry) => entry.id === payload.league);
+  if (definition == null) return { sources: [] };
+  let rows;
+  try { rows = await leagueChannelsLoad(); } catch (_) { return { sources: [] }; }
+  const group = leagueChannelsGroups(rows, definition).find(
+    (entry) => entry.key === payload.channel,
+  );
+  if (group == null) return { sources: [] };
+  const sourceLists = await Promise.all(group.rows.map(async (row) => {
+    try {
+      if (row.provider === 'playz') {
+        const testFeeds = globalThis.__leagueChannelsPlayzFeeds;
         const rawLinksValue = testFeeds && typeof testFeeds === 'object'
           ? testFeeds[row.links]
           : await playzFetchJson(row.links);
-        const rawLinks = leagueChannelsRows(rawLinksValue);
-        links = rawLinks.map((link, index) => ({
+        return leagueChannelsRows(rawLinksValue).map((link, index) => ({
+            id: `${LEAGUE_CHANNELS_PROVIDER_KEY}:${leagueChannelsEncode({
+              provider: 'playz',
+              links: row.links,
+              index,
+              names: row.linkNames,
+            })}`,
+            label: `PlayZTV · ${leagueChannelsText(link.name) || row.linkNames[index] || `${row.name} ${index + 1}`}`,
+            provider: 'Nimora', providerId: LEAGUE_CHANNELS_PROVIDER_ID,
+          }));
+      } else if (row.provider === 'cricfy') {
+        return [{
           id: `${LEAGUE_CHANNELS_PROVIDER_KEY}:${leagueChannelsEncode({
-            provider: 'playz',
-            links: row.links,
-            index,
-            names: row.linkNames,
+            provider: 'cricfy', locator: row.locator, index: row.index,
           })}`,
-          label: leagueChannelsText(link.name) || row.linkNames[index] || `PlayZTV ${index + 1}`,
-          provider: 'Nimora', providerId: 'nimora.league_channels',
-        }));
+          label: `Cricfy · ${row.name}`,
+          provider: 'Nimora', providerId: LEAGUE_CHANNELS_PROVIDER_ID,
+        }];
       }
-    } else if (payload.provider === 'cricfy') {
-      const body = /^https?:\/\//i.test(payload.locator)
-        ? await cricfyGetText(payload.locator, cricfyDefaultHeaders(), CRICFY_CONTENT_TIMEOUT_MS)
-        : await cricfyFetchContent(payload.locator);
-      const rows = leagueChannelsParseM3u(body, 'cricfy', payload.locator);
-      links = rows.filter((row) => row.normalizedName === leagueChannelsNormalize(payload.name))
-        .map((row) => ({
-          id: leagueChannelsEncode({ ...payload, index: row.index }),
-          label: row.name, provider: 'Nimora', providerId: LEAGUE_CHANNELS_PROVIDER_ID,
-        }));
-    }
-  } catch (_) { return { sources: [] }; }
+    } catch (_) {}
+    return [];
+  }));
+  let links = sourceLists.flat();
+  const seen = new Set();
+  links = links.filter((link) => {
+    if (seen.has(link.id)) return false;
+    seen.add(link.id);
+    return true;
+  });
   return { sources: links };
 }
 

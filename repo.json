@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.38",
+      "version": "1.0.39",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added separate horizontal Movie and TV shelves to their category pages, including Top By Genre rows, while keeping mixed shelves on Home.",
         "Fixed League Channels returning empty in the live catalog when the PlayZTV category feed is loaded through the published bundle.",
         "Added League Channels to Live with Premier League, LaLiga, Serie A, Bundesliga, Ligue 1, Champions League, and Europa League shelves sourced from channel links in PlayZTV and Cricfy.",
         "Hardened the Jikan anime catalog against upstream 504s with persistent cache, serialized requests, retries, and stale-data fallback while reducing the initial All-category request burst.",
@@ -183,7 +184,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "e50feab4749db6ebc021b238dfb0216762d9dccaa59af12f5713f3871de881d1"
+      "bundleSha256": "7c1d097294a831d86c0c779562c1274e31cba8201712a102065fdfec65bf3af8"
     }
   ]
 }

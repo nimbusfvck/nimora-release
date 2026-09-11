@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -50,8 +50,7 @@
           "name": "League Channels",
           "categories": ["live"],
           "kind": "video",
-          "display": "row",
-          "expanded": true
+          "display": "row"
         }
       ]
     },
@@ -103,19 +102,19 @@
       "roles": ["catalog", "meta", "search"],
       "catalogs": [
         {
+          "id": "highlights",
+          "name": "Movie & Series",
+          "categories": ["all", "movie", "tv"],
+          "kind": "movie",
+          "display": "row"
+        },
+        {
           "id": "discover",
           "name": "Movie & Series",
           "categories": ["movie", "tv"],
           "kind": "movie",
           "display": "grid",
           "expanded": true
-        },
-        {
-          "id": "highlights",
-          "name": "Movie & Series",
-          "categories": ["all"],
-          "kind": "movie",
-          "display": "row"
         }
       ]
     },

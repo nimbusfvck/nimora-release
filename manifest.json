@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.38",
+  "version": "1.0.39",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -171,8 +171,7 @@
           "name": "League Channels",
           "categories": ["live"],
           "kind": "video",
-          "display": "row",
-          "expanded": true
+          "display": "row"
         }
       ]
     },
@@ -186,6 +185,17 @@
       ],
       "catalogs": [
         {
+          "id": "highlights",
+          "name": "Movie & Series",
+          "categories": [
+            "all",
+            "movie",
+            "tv"
+          ],
+          "kind": "movie",
+          "display": "row"
+        },
+        {
           "id": "discover",
           "name": "Movie & Series",
           "categories": [
@@ -195,15 +205,6 @@
           "kind": "movie",
           "display": "grid",
           "expanded": true
-        },
-        {
-          "id": "highlights",
-          "name": "Movie & Series",
-          "categories": [
-            "all"
-          ],
-          "kind": "movie",
-          "display": "row"
         }
       ]
     },
