@@ -549,9 +549,23 @@ function sortedByKickoff(matches) {
 // when a fixture kicks off, so a distant match from a league that happens to
 // come first in the feed could otherwise show ahead of one kicking off soon.
 function byDate(matches, nowMs, brandingByLeague) {
+  const items = matches
+    .map((match) => toMediaItem(match, nowMs, brandingByLeague))
+    .filter((item) => item != null);
+  return byDateItems(items, nowMs);
+}
+
+function byDateItems(items, nowMs) {
   const todayIndex = jakartaDayIndex(nowMs);
   const buckets = new Map();
-  for (const entry of sortedByKickoff(matches)) {
+  const sorted = items
+    .map((item) => ({
+      item,
+      kickoff: Date.parse(item.schedule && item.schedule.startsAt),
+    }))
+    .filter((entry) => Number.isFinite(entry.kickoff))
+    .sort((a, b) => a.kickoff - b.kickoff);
+  for (const entry of sorted) {
     const dayIndex = jakartaDayIndex(entry.kickoff);
     let bucket = buckets.get(dayIndex);
     if (bucket == null) {
@@ -563,20 +577,21 @@ function byDate(matches, nowMs, brandingByLeague) {
 
   const sections = [];
   for (const dayIndex of [...buckets.keys()].sort((a, b) => a - b)) {
-    // sortedByKickoff already put these in kickoff order; the Map bucket
+    // The sorted item list already put these in kickoff order; the Map bucket
     // preserves that insertion order, so no second sort is needed here.
     const entries = buckets.get(dayIndex);
-    const items = entries
-      .map((entry) => toMediaItem(entry.match, nowMs, brandingByLeague))
-      .filter((item) => item != null);
-    if (items.length === 0) continue;
+    if (entries.length === 0) continue;
     const offset = dayIndex - todayIndex;
     const title =
       offset === 0 ? 'Today'
       : offset === 1 ? 'Tomorrow'
       : offset === -1 ? 'Yesterday'
       : jakartaDateLabel(entries[0].kickoff);
-    sections.push({ id: `date:${dayIndex}`, title, items });
+    sections.push({
+      id: `date:${dayIndex}`,
+      title,
+      items: entries.map((entry) => entry.item),
+    });
   }
   return sections;
 }
@@ -584,9 +599,59 @@ function byDate(matches, nowMs, brandingByLeague) {
 // --- catalog navigation ---
 
 const FOOTBALL = { id: 'football', name: 'Football' };
+const TENNIS = { id: 'tennis', name: 'Tennis' };
+const MOTORSPORT = { id: 'motorsport', name: 'Motorsport' };
+const BADMINTON = { id: 'badminton', name: 'Badminton' };
+const BASKETBALL = { id: 'basketball', name: 'Basketball' };
+const VOLLEYBALL = { id: 'volleyball', name: 'Volleyball' };
+const OTHER_LIVE_SPORTS = {
+  id: 'other-live-sports',
+  name: 'Other Live Sports',
+};
+
+// Keep the Sport page predictable while allowing new upstream categories to
+// arrive without creating a new shelf for every spelling or niche sport.
+const SPORT_SECTION_ORDER = [
+  FOOTBALL,
+  TENNIS,
+  MOTORSPORT,
+  BADMINTON,
+  BASKETBALL,
+  VOLLEYBALL,
+  OTHER_LIVE_SPORTS,
+];
 
 function sportIdOf(name) {
-  return `${name}`.trim().toLowerCase().replace(/\s+/g, '-');
+  const value = `${name || ''}`.trim().toLowerCase();
+  if (value.includes('football') || value.includes('soccer')) {
+    return FOOTBALL.id;
+  }
+  if (value.includes('tennis') || /\batp\b|\bwta\b/.test(value)) {
+    return TENNIS.id;
+  }
+  if (
+    value.includes('motorsport') ||
+    value.includes('formula') ||
+    value.includes('racing') ||
+    value.includes('motogp') ||
+    value.includes('nascar') ||
+    value.includes('wrc')
+  ) {
+    return MOTORSPORT.id;
+  }
+  if (value.includes('badminton') || value.includes('bwf')) {
+    return BADMINTON.id;
+  }
+  if (value.includes('basketball') || /\bnba\b|\bwnba\b/.test(value)) {
+    return BASKETBALL.id;
+  }
+  if (value.includes('volleyball')) return VOLLEYBALL.id;
+  return OTHER_LIVE_SPORTS.id;
+}
+
+function sportNameOf(name) {
+  const id = sportIdOf(name);
+  return SPORT_SECTION_ORDER.find((sport) => sport.id === id).name;
 }
 
 function isFootballCategory(category) {
@@ -603,6 +668,62 @@ function isExcludedSportCategory(category) {
     name === 'mlb' ||
     name === 'nfl' ||
     name.includes('american football')
+  );
+}
+
+const FOOTBALL_DEDUPE_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+function footballNameKey(value) {
+  return `${value || ''}`
+    .toLowerCase()
+    .replace(/&amp;/g, '&')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\b(fc|afc|cf|sc|ac|cd)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function footballParticipantsKey(item) {
+  if (!Array.isArray(item?.participants) || item.participants.length !== 2) {
+    return null;
+  }
+  const names = item.participants
+    .map((participant) => footballNameKey(participant?.name))
+    .filter((name) => name.length > 0);
+  return names.length === 2 ? names.sort().join('|') : null;
+}
+
+function sameFootballEvent(first, second) {
+  const firstKey = footballParticipantsKey(first);
+  const secondKey = footballParticipantsKey(second);
+  if (firstKey == null || firstKey !== secondKey) return false;
+  const firstKickoff = Date.parse(first.schedule?.startsAt);
+  const secondKickoff = Date.parse(second.schedule?.startsAt);
+  return Number.isFinite(firstKickoff) && Number.isFinite(secondKickoff) &&
+    Math.abs(firstKickoff - secondKickoff) <= FOOTBALL_DEDUPE_WINDOW_MS;
+}
+
+function isFootballEntry(entry) {
+  return sportIdOf(entry.sportName || entry.sportId) === FOOTBALL.id;
+}
+
+// FotMob remains the canonical metadata source. Provider-only football events
+// are appended after it, and any matching provider event is discarded so the
+// FotMob title, branding, participants, and editorial ranking win.
+function footballCatalogItems(matches, entries, nowMs, brandingByLeague) {
+  const items = matches
+    .map((match) => toMediaItem(match, nowMs, brandingByLeague))
+    .filter((item) => item != null);
+  for (const entry of entries.filter(isFootballEntry)) {
+    const item = entry.item;
+    if (item == null || items.some((existing) => sameFootballEvent(existing, item))) {
+      continue;
+    }
+    items.push(item);
+  }
+  return items.sort(
+    (first, second) => Date.parse(first.schedule?.startsAt) -
+      Date.parse(second.schedule?.startsAt),
   );
 }
 
@@ -663,7 +784,6 @@ async function getCricfySportEntries(nowMs) {
     const entries = [];
     for (const event of events) {
       if (!event.visible) continue;
-      if (isFootballCategory(event.category)) continue;
       if (isExcludedSportCategory(event.category)) continue;
 
       const status = cricfyEventStatusAt(event, nowMs);
@@ -677,9 +797,9 @@ async function getCricfySportEntries(nowMs) {
 
       const item = cricfyEventItem(event, status);
       if (item === null) continue;
-      const sportName = event.category || 'Other';
+      const sportName = sportNameOf(event.category || 'Other');
       entries.push({
-        sportId: sportIdOf(sportName),
+        sportId: sportIdOf(event.category || 'Other'),
         sportName,
         live: status === 'live',
         item,
@@ -691,50 +811,78 @@ async function getCricfySportEntries(nowMs) {
   }
 }
 
+async function getFctvSportEntries(nowMs) {
+  if (typeof globalThis.__fctvSportEntries !== 'function') return [];
+  try {
+    return await globalThis.__fctvSportEntries(nowMs);
+  } catch (_) {
+    return [];
+  }
+}
+
 function sportsOf(matches, cricfyEntries) {
   const sports = [];
-  if (matches.length > 0) sports.push(FOOTBALL);
-  const seen = new Set();
+  const available = new Set();
+  if (matches.length > 0) available.add(FOOTBALL.id);
   for (const entry of cricfyEntries) {
-    if (seen.has(entry.sportId)) continue;
-    seen.add(entry.sportId);
-    sports.push({ id: entry.sportId, name: entry.sportName });
+    available.add(sportIdOf(entry.sportName || entry.sportId));
+  }
+  for (const sport of SPORT_SECTION_ORDER) {
+    if (available.has(sport.id)) sports.push(sport);
   }
   return sports;
 }
 
 function buildPage(query, matches, cricfyEntries, nowMs, brandingByLeague) {
-  const selected = query.subCategory == null ? null : query.subCategory;
+  const selected = query.subCategory == null
+    ? null
+    : sportIdOf(query.subCategory);
   const subCategories = sportsOf(matches, cricfyEntries);
 
   if (selected === FOOTBALL.id) {
+    const liveProviderEntries = query.category === LIVE_CATEGORY
+      ? cricfyEntries
+      : query.category === ALL_CATEGORY
+        ? cricfyEntries.filter((entry) => entry.live)
+        : [];
     return {
-      sections: byDate(matches, nowMs, brandingByLeague),
+      sections: byDateItems(
+        footballCatalogItems(matches, liveProviderEntries, nowMs, brandingByLeague),
+        nowMs,
+      ),
       subCategories,
     };
   }
 
   if (selected != null) {
-    const entries = cricfyEntries.filter((entry) => entry.sportId === selected);
+    const entries = cricfyEntries.filter(
+      (entry) => sportIdOf(entry.sportName || entry.sportId) === selected,
+    );
     return {
       sections: entries.length === 0
         ? []
-        : [{ id: `sport:${selected}`, title: entries[0].sportName, items: entries.map((e) => e.item) }],
+        : [{
+            id: `sport:${selected}`,
+            title: sportNameOf(entries[0].sportName || entries[0].sportId),
+            items: entries.map((e) => e.item),
+          }],
       subCategories,
     };
   }
 
   if (query.category === ALL_CATEGORY) {
-    const liveFootballMatches = sortedByKickoff(
-      matches.filter((match) => isMatchLive(match, nowMs)),
-    ).map((entry) => entry.match);
-    const footballItems = liveFootballMatches
-      .map((match) => toMediaItem(match, nowMs, brandingByLeague))
-      .filter((item) => item != null);
+    const footballItems = footballCatalogItems(
+      matches,
+      cricfyEntries,
+      nowMs,
+      brandingByLeague,
+    ).filter((item) => item.schedule?.state === 'live');
 
     const items = [
       ...footballItems,
-      ...cricfyEntries.filter((entry) => entry.live).map((entry) => entry.item),
+      ...cricfyEntries
+        .filter((entry) => entry.live && !isFootballEntry(entry))
+        .map((entry) => entry.item),
     ];
     return {
       sections: items.length === 0
@@ -745,16 +893,21 @@ function buildPage(query, matches, cricfyEntries, nowMs, brandingByLeague) {
   }
 
   const sections = [];
-  const footballItems = sortedByKickoff(matches)
-    .map((entry) => toMediaItem(entry.match, nowMs, brandingByLeague))
-    .filter((item) => item != null);
+  const footballItems = footballCatalogItems(
+    matches,
+    query.category === LIVE_CATEGORY ? cricfyEntries : [],
+    nowMs,
+    brandingByLeague,
+  );
   if (footballItems.length > 0) {
     sections.push({ id: `sport:${FOOTBALL.id}`, title: FOOTBALL.name, items: footballItems });
   }
   for (const sport of subCategories) {
     if (sport.id === FOOTBALL.id) continue;
     const items = cricfyEntries
-      .filter((entry) => entry.sportId === sport.id)
+      .filter(
+        (entry) => sportIdOf(entry.sportName || entry.sportId) === sport.id,
+      )
       .map((entry) => entry.item);
     if (items.length > 0) {
       sections.push({ id: `sport:${sport.id}`, title: sport.name, items });
@@ -791,6 +944,8 @@ async function fixturesCatalog(query) {
   const brandingByLeague = await leagueBrandingFor(matches);
 
   let cricfyEntries = await getCricfySportEntries(nowMs);
+  const fctvEntries = await getFctvSportEntries(nowMs);
+  cricfyEntries = [...cricfyEntries, ...fctvEntries];
   if (live) {
     cricfyEntries = cricfyEntries.filter((entry) => entry.live);
   }
@@ -819,6 +974,448 @@ if (!globalThis.__extension.catalog) {
     return provider.catalog(query);
   };
 }
+
+// FCTV33 live-event catalog and stream resolver.
+//
+// FCTV's public API returns protobuf payloads while the extension fetch bridge
+// exposes strings. The runtime marks binary responses as base64; this file
+// decodes only the small protobuf fields needed for event identity and HLS
+// source resolution. Signed media URLs are requested at playback time and are
+// never stored in the catalog or bundle.
+
+const FCTV_API_BASE =
+  globalThis.__fctvApiBaseUrl || 'https://apis-data10.tcdru136ovur.ru';
+const FCTV_PROVIDER_ID = 'nimora.fctv';
+const FCTV_PROVIDER_KEY = 'fctv';
+const FCTV_SITE_ORIGIN = 'https://www.fctv33hd.icu';
+const FCTV_USER_AGENT =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
+  '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
+const FCTV_LIVE_WINDOW_MS = 6 * 60 * 60 * 1000;
+const FCTV_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const FCTV_MEMO_TTL_MS = 60 * 1000;
+
+let fctvLiveMemo = null;
+
+function fctvHeader(response, wanted) {
+  const headers = response && response.headers;
+  if (headers == null || typeof headers !== 'object') return '';
+  const key = Object.keys(headers).find(
+    (name) => name.toLowerCase() === wanted.toLowerCase(),
+  );
+  return key == null ? '' : String(headers[key] || '');
+}
+
+function fctvHexToBytes(hex) {
+  const clean = String(hex || '').trim();
+  if (clean.length === 0 || clean.length % 2 !== 0) return [];
+  const bytes = [];
+  for (let i = 0; i < clean.length; i += 2) {
+    const value = Number.parseInt(clean.slice(i, i + 2), 16);
+    if (!Number.isFinite(value)) return [];
+    bytes.push(value);
+  }
+  return bytes;
+}
+
+function fctvBytesToHex(bytes) {
+  return bytes.map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function fctvReadVarint(bytes, state) {
+  let value = 0;
+  let shift = 0;
+  while (state.index < bytes.length && shift < 56) {
+    const next = bytes[state.index++];
+    value += (next & 0x7f) * (2 ** shift);
+    if ((next & 0x80) === 0) return value;
+    shift += 7;
+  }
+  throw new Error('invalid protobuf varint');
+}
+
+function fctvReadFields(bytes) {
+  const fields = [];
+  const state = { index: 0 };
+  while (state.index < bytes.length) {
+    const tag = fctvReadVarint(bytes, state);
+    const field = Math.floor(tag / 8);
+    const wire = tag & 7;
+    if (field <= 0) throw new Error('invalid protobuf field');
+    if (wire === 0) {
+      fields.push({ field, wire, value: fctvReadVarint(bytes, state) });
+    } else if (wire === 1) {
+      fields.push({ field, wire, value: bytes.slice(state.index, state.index + 8) });
+      state.index += 8;
+    } else if (wire === 2) {
+      const length = fctvReadVarint(bytes, state);
+      if (length < 0 || state.index + length > bytes.length) {
+        throw new Error('invalid protobuf length');
+      }
+      fields.push({
+        field,
+        wire,
+        value: bytes.slice(state.index, state.index + length),
+      });
+      state.index += length;
+    } else if (wire === 5) {
+      fields.push({ field, wire, value: bytes.slice(state.index, state.index + 4) });
+      state.index += 4;
+    } else {
+      throw new Error('unsupported protobuf wire type');
+    }
+  }
+  return fields;
+}
+
+function fctvFieldsOf(bytes, field, wire) {
+  return fctvReadFields(bytes).filter(
+    (entry) => entry.field === field && (wire == null || entry.wire === wire),
+  );
+}
+
+function fctvFirstField(bytes, field, wire) {
+  return fctvFieldsOf(bytes, field, wire)[0] || null;
+}
+
+function fctvString(bytes) {
+  if (!Array.isArray(bytes)) return '';
+  try {
+    return host.codec.base64ToText(
+      host.codec.hexToBase64(fctvBytesToHex(bytes)),
+    ).trim();
+  } catch (_) {
+    return '';
+  }
+}
+
+function fctvBodyHex(response) {
+  if (response == null || response.status < 200 || response.status >= 300) {
+    return null;
+  }
+  const body = String(response.body || '');
+  if (body.length === 0) return null;
+  try {
+    const encoding = fctvHeader(response, 'x-qjsr-body-encoding').toLowerCase();
+    return encoding === 'base64'
+      ? host.codec.base64ToHex(body)
+      : host.codec.base64ToHex(host.codec.textToBase64(body));
+  } catch (_) {
+    return null;
+  }
+}
+
+async function fctvFetchBinary(path, timeoutMs = 10000) {
+  const response = await fetch(`${FCTV_API_BASE}${path}`, {
+    timeoutMs,
+    headers: {
+      Accept: 'application/json, text/plain, */*',
+      'User-Agent': FCTV_USER_AGENT,
+      Origin: FCTV_SITE_ORIGIN,
+      Referer: `${FCTV_SITE_ORIGIN}/`,
+      platform: 'WEB',
+      countrycode: 'ID',
+      language: 'eng',
+      languagecode: 'eng',
+      local: 'IND',
+      originalcountry: 'ID',
+      tenant_identifier: 'master',
+      timezone: 'Asia/Jakarta',
+    },
+  });
+  const hex = fctvBodyHex(response);
+  if (hex == null) throw new Error(`FCTV request failed: ${response.status}`);
+  return fctvHexToBytes(hex);
+}
+
+function fctvLeagueName(matchBytes) {
+  const league = fctvFirstField(matchBytes, 10, 2);
+  if (league == null) return '';
+  const display = fctvFirstField(league.value, 3, 2);
+  if (display == null) return '';
+  const name = fctvFirstField(display.value, 2, 2);
+  return name == null ? '' : fctvString(name.value);
+}
+
+function fctvTeamName(wrapperBytes) {
+  const team = fctvFirstField(wrapperBytes, 10, 2);
+  if (team == null) return '';
+  const display = fctvFirstField(team.value, 3, 2);
+  if (display == null) return '';
+  const name = fctvFirstField(display.value, 2, 2);
+  return name == null ? '' : fctvString(name.value);
+}
+
+function fctvParseMatch(matchBytes) {
+  const id = fctvFirstField(matchBytes, 1, 0);
+  const sportType = fctvFirstField(matchBytes, 2, 0);
+  const startsAt = fctvFirstField(matchBytes, 3, 0);
+  if (id == null || sportType == null || startsAt == null) return null;
+
+  let title = '';
+  const participants = [];
+  for (const entry of fctvFieldsOf(matchBytes, 30, 2)) {
+    const directTitle = fctvFirstField(entry.value, 2, 2);
+    if (directTitle != null && title.length === 0) {
+      title = fctvString(directTitle.value);
+    }
+    if (fctvFirstField(entry.value, 10, 2) != null) {
+      const team = fctvTeamName(entry.value);
+      if (team.length > 0) participants.push(team);
+    }
+  }
+
+  const slugInfo = fctvFirstField(matchBytes, 150, 2);
+  const slug = slugInfo == null
+    ? ''
+    : fctvString((fctvFirstField(slugInfo.value, 20, 2) || {}).value || []);
+  return {
+    matchId: String(id.value),
+    sportType: Number(sportType.value),
+    startsAt: Number(startsAt.value),
+    title: title || participants.join(' vs '),
+    participants,
+    leagueName: fctvLeagueName(matchBytes),
+    slug,
+  };
+}
+
+function fctvParseLiveMatches(bytes) {
+  const data = fctvFirstField(bytes, 10, 2);
+  if (data == null) return [];
+  const matches = [];
+  for (const entry of fctvFieldsOf(data.value, 1, 2)) {
+    try {
+      const match = fctvParseMatch(entry.value);
+      if (match != null) matches.push(match);
+    } catch (_) {
+      // One malformed upstream item should not hide the remaining events.
+    }
+  }
+  return matches;
+}
+
+function fctvSportName(sportType) {
+  switch (Number(sportType)) {
+    case 1: return 'Football';
+    case 3: return 'Tennis';
+    case 4: return 'Basketball';
+    case 5: return 'Volleyball';
+    case 7: return 'Motorsport';
+    case 12: return 'Badminton';
+    case 15: return 'Fighting';
+    default: return 'Other Live Sports';
+  }
+}
+
+function fctvNormalize(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&amp;/g, '&')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function fctvEntryIsLive(match, nowMs) {
+  return match.startsAt <= nowMs && nowMs - match.startsAt <= FCTV_LIVE_WINDOW_MS;
+}
+
+function fctvEntryToCatalog(match, nowMs) {
+  const sportName = fctvSportName(match.sportType);
+  const live = fctvEntryIsLive(match, nowMs);
+  const item = {
+    ref: {
+      extensionId: globalThis.__nimoraExtensionId || 'nimora',
+      providerId: 'nimora.matches',
+      id: `fctv:${match.matchId}:${match.sportType}`,
+    },
+    kind: 'event',
+    title: match.title || `${sportName} event`,
+    subtitle: match.leagueName || sportName,
+    schedule: {
+      startsAt: new Date(match.startsAt).toISOString(),
+      state: live ? 'live' : 'scheduled',
+    },
+  };
+  if (match.participants.length === 2) {
+    item.participants = match.participants.map((name) => ({ name }));
+  }
+  return { sportId: sportName, sportName, live, item };
+}
+
+async function fctvFetchLiveMatches() {
+  const bytes = await fctvFetchBinary('/api/match/live?sportType=0&language=0&stream=true');
+  return fctvParseLiveMatches(bytes);
+}
+
+function fctvLiveMatchesMemo() {
+  const nowMs = Date.now();
+  if (fctvLiveMemo != null && nowMs - fctvLiveMemo.fetchedAt < FCTV_MEMO_TTL_MS) {
+    return fctvLiveMemo.promise;
+  }
+  const promise = fctvFetchLiveMatches().catch(() => []);
+  fctvLiveMemo = { fetchedAt: nowMs, promise };
+  return promise;
+}
+
+async function fctvSportEntries(nowMs) {
+  const matches = await fctvLiveMatchesMemo();
+  return matches
+    .filter((match) => match.startsAt - nowMs <= FCTV_UPCOMING_WINDOW_MS)
+    .map((match) => fctvEntryToCatalog(match, nowMs));
+}
+
+function fctvMatchFromSourceId(sourceId) {
+  const parts = String(sourceId || '').split(':');
+  if ((parts.length !== 4 && parts.length !== 5) || parts[0] !== FCTV_PROVIDER_KEY) return null;
+  const matchId = parts[1];
+  const sportType = Number(parts[2]);
+  const siteType = parts.length === 5 ? Number(parts[3]) : 2001;
+  const streamId = parts.length === 5 ? parts[4] : parts[3];
+  if (!/^\d+$/.test(matchId) || !Number.isFinite(sportType) || !/^\d+$/.test(streamId)) {
+    return null;
+  }
+  return {
+    matchId,
+    sportType,
+    siteType: Number.isFinite(siteType) && siteType > 0 ? siteType : 2001,
+    streamId,
+  };
+}
+
+function fctvMatchFromItemId(itemId) {
+  const parts = String(itemId || '').split(':');
+  if (parts.length !== 3 || parts[0] !== FCTV_PROVIDER_KEY) return null;
+  const matchId = parts[1];
+  const sportType = Number(parts[2]);
+  if (!/^\d+$/.test(matchId) || !Number.isFinite(sportType)) return null;
+  return { matchId, sportType };
+}
+
+async function fctvMatchForItem(item) {
+  const direct = fctvMatchFromItemId(item && item.ref && item.ref.id);
+  if (direct != null) return direct;
+  const participants = Array.isArray(item && item.participants)
+    ? item.participants.map((part) => fctvNormalize(part && part.name)).filter(Boolean)
+    : [];
+  if (participants.length !== 2) return null;
+  const kickoff = Date.parse(item.schedule && item.schedule.startsAt);
+  const candidates = await fctvLiveMatchesMemo();
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    if (candidate.participants.length !== 2) continue;
+    const names = candidate.participants.map(fctvNormalize);
+    const sameOrder = names[0] === participants[0] && names[1] === participants[1];
+    const reverseOrder = names[0] === participants[1] && names[1] === participants[0];
+    if (!sameOrder && !reverseOrder) continue;
+    const timeDelta = Number.isFinite(kickoff)
+      ? Math.abs(candidate.startsAt - kickoff)
+      : 0;
+    if (timeDelta > FCTV_LIVE_WINDOW_MS) continue;
+    const score = timeDelta + (sameOrder ? 0 : 1);
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best == null ? null : {
+    matchId: best.matchId,
+    sportType: best.sportType,
+  };
+}
+
+function fctvStreamsFromDetail(bytes) {
+  const data = fctvFirstField(bytes, 10, 2);
+  if (data == null) return [];
+  return fctvFieldsOf(data.value, 2, 2)
+    .map((entry) => {
+      const stream = entry.value;
+      const id = fctvFirstField(stream, 1, 0);
+      const name = fctvFirstField(stream, 3, 2);
+      const status = fctvFirstField(stream, 5, 0);
+      const siteType = fctvFirstField(stream, 9, 0);
+      if (id == null || status == null || status.value !== 1) return null;
+      return {
+        streamId: String(id.value),
+        name: name == null ? 'Live stream' : fctvString(name.value),
+        siteType: siteType == null ? 0 : Number(siteType.value),
+      };
+    })
+    .filter((stream) => stream != null);
+}
+
+async function fctvMatchStreams(match) {
+  const bytes = await fctvFetchBinary(
+    `/api/match/detail?matchId=${encodeURIComponent(match.matchId)}` +
+    `&sportType=${encodeURIComponent(match.sportType)}&language=34&stream=true`,
+  );
+  return fctvStreamsFromDetail(bytes);
+}
+
+async function fctvSources(args) {
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && enabled.indexOf(FCTV_PROVIDER_ID) === -1) return { sources: [] };
+  const match = await fctvMatchForItem(args && args.item);
+  if (match == null) return { sources: [] };
+  let streams;
+  try {
+    streams = await fctvMatchStreams(match);
+  } catch (_) {
+    return { sources: [] };
+  }
+  return {
+    sources: streams.map((stream) => ({
+      id: `${FCTV_PROVIDER_KEY}:${match.matchId}:${match.sportType}:` +
+        `${stream.siteType}:${stream.streamId}`,
+      label: `FCTV · ${stream.name}`,
+      provider: 'FCTV33',
+      providerId: FCTV_PROVIDER_ID,
+    })),
+  };
+}
+
+function fctvSourceHeaders() {
+  return {
+    Origin: FCTV_SITE_ORIGIN,
+    Referer: `${FCTV_SITE_ORIGIN}/`,
+    'User-Agent': FCTV_USER_AGENT,
+  };
+}
+
+async function fctvResolve(sourceId) {
+  const source = fctvMatchFromSourceId(sourceId);
+  if (source == null) throw new Error(`Invalid FCTV source id: ${sourceId}`);
+  const bytes = await fctvFetchBinary(
+    `/api/stream/detail?sportType=${encodeURIComponent(source.sportType)}` +
+    `&streamId=${encodeURIComponent(source.streamId)}` +
+    `&siteType=${encodeURIComponent(source.siteType)}` +
+    '&continent=AS&country=ID&digit=0&notConfuse=true',
+  );
+  const data = fctvFirstField(bytes, 10, 2);
+  const entry = data == null ? null : fctvFirstField(data.value, 2, 2);
+  if (entry == null) throw new Error('FCTV returned no stream');
+  const url = fctvFirstField(entry.value, 4, 2);
+  const name = fctvFirstField(entry.value, 3, 2);
+  const mediaUrl = url == null ? '' : fctvString(url.value);
+  if (!/^https?:\/\/[^\s]+$/i.test(mediaUrl)) {
+    throw new Error('FCTV returned an invalid media URL');
+  }
+  return {
+    url: mediaUrl,
+    headers: fctvSourceHeaders(),
+    format: 'hls',
+    label: `FCTV · ${name == null ? 'Live stream' : fctvString(name.value)}`,
+  };
+}
+
+globalThis.__fctvSportEntries = fctvSportEntries;
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: FCTV_PROVIDER_KEY,
+  sources: fctvSources,
+  resolve: (sourceId) => fctvResolve(sourceId),
+});
 
 // Shared helpers for source labels.
 //
@@ -4672,6 +5269,54 @@ async function fetchDiscover(mediaType, page) {
   return fetchDiscoverPage(mediaType, {}, page);
 }
 
+// Keep the genre set deliberately small. Each entry becomes one horizontal
+// row, and a category page should not fan out to every genre TMDB exposes.
+const TOP_BY_GENRE = {
+  movie: [
+    { id: 'action', name: 'Action', tmdbId: 28, minimumVotes: 200 },
+    { id: 'comedy', name: 'Comedy', tmdbId: 35, minimumVotes: 200 },
+    { id: 'drama', name: 'Drama', tmdbId: 18, minimumVotes: 200 },
+    { id: 'horror', name: 'Horror', tmdbId: 27, minimumVotes: 200 },
+    { id: 'science_fiction', name: 'Sci-Fi', tmdbId: 878, minimumVotes: 200 },
+  ],
+  tv: [
+    { id: 'action_adventure', name: 'Action & Adventure', tmdbId: 10759, minimumVotes: 100 },
+    { id: 'comedy', name: 'Comedy', tmdbId: 35, minimumVotes: 100 },
+    { id: 'crime', name: 'Crime', tmdbId: 80, minimumVotes: 100 },
+    { id: 'drama', name: 'Drama', tmdbId: 18, minimumVotes: 100 },
+    { id: 'science_fiction_fantasy', name: 'Sci-Fi & Fantasy', tmdbId: 10765, minimumVotes: 100 },
+  ],
+};
+
+async function fetchTopByGenrePage(mediaType, genre, page) {
+  return fetchDiscoverPage(mediaType, {
+    with_genres: genre.tmdbId,
+    sort_by: 'vote_average.desc',
+    'vote_count.gte': genre.minimumVotes,
+  }, page);
+}
+
+async function fetchTopByGenre(mediaType, genre) {
+  const page = await fetchTopByGenrePage(mediaType, genre, 1);
+  return page.items;
+}
+
+function topByGenreGroups(mediaType) {
+  const genres = TOP_BY_GENRE[mediaType] || [];
+  return genres.map((genre) => ({
+    id: `top_by_genre_${mediaType}_${genre.id}`,
+    name: `Top By Genre · ${genre.name}`,
+    fetch: () => fetchTopByGenre(mediaType, genre),
+    fetchPage: async (page) => {
+      const result = await fetchTopByGenrePage(mediaType, genre, page);
+      return {
+        items: result.items,
+        nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
+      };
+    },
+  }));
+}
+
 async function fetchPopularStreamingMediaTypePage(mediaType, page) {
   try {
     const requestedPage = tmdbRequestedPage(page);
@@ -4773,8 +5418,8 @@ async function fetchGroupPage(label, fetchFn, page) {
   }
 }
 
-// --- "highlights" catalog: the `all` category — horizontal-row
-// sections, movie and tv mixed, exactly the shape originally asked for.
+// --- "highlights" catalog: horizontal-row sections. The `all` category is
+// mixed; movie and tv reuse the same catalog with only their own sections.
 // Separate from the `movie`/`tv` grid catalog below: same provider, second
 // catalog, own catalogId, so it can keep `display: "row"` while the other
 // one is `"grid"` (CatalogDecl.display is one value per catalog, not per
@@ -5022,6 +5667,57 @@ const HIGHLIGHT_GROUPS = [
   { id: 'cannes', name: 'Cannes Film Festival', fetch: () => fetchSheguList('cannes-film-festival') },
 ];
 
+// These are the shelves from the mixed Home catalog that have an unambiguous
+// movie or TV identity. Mixed rows such as Popular Today, Coming Soon, and
+// country rankings stay on `all` until they have a category-specific fetch.
+const CATEGORY_HIGHLIGHT_IDS = {
+  movie: [
+    'trending_movie',
+    'top_rated_movie',
+    'popular_movie_all_time',
+    'netflix_movies',
+    'hulu_movies',
+    'disney_movies',
+    'prime_movies',
+    'hbo_movies',
+    'appletv_movies',
+    'layarkaca_movies',
+    'rotten_tomatoes_best',
+    'based_on_true_story',
+    'oscar_nominees',
+    'cannes',
+    'top_by_genre',
+  ],
+  tv: [
+    'trending_tv',
+    'top_rated_tv',
+    'popular_tv_all_time',
+    'netflix_tv',
+    'disney_tv',
+    'appletv_tv',
+    'prime_tv',
+    'hbo_tv',
+    'layarkaca_tv',
+    'top_by_genre',
+  ],
+};
+
+function highlightGroupsForCategory(category) {
+  if (category === TMDB_ALL_CATEGORY) return HIGHLIGHT_GROUPS;
+  const ids = CATEGORY_HIGHLIGHT_IDS[category];
+  if (!Array.isArray(ids)) return [];
+  const groups = [];
+  for (const id of ids) {
+    if (id === 'top_by_genre') {
+      groups.push(...topByGenreGroups(category));
+      continue;
+    }
+    const group = HIGHLIGHT_GROUPS.find((entry) => entry.id === id);
+    if (group != null) groups.push(group);
+  }
+  return groups;
+}
+
 // Highlights declare `subCategories` — one per group, id-matched to the name
 // each group is tagged with. Groups backed by a paginated TMDB endpoint also
 // expose `nextPage`, allowing the app's See more grid to load more on scroll.
@@ -5033,11 +5729,12 @@ const HIGHLIGHT_GROUPS = [
 // section heading it came from; with none declared, every "See more" here
 // used to reopen everything, unfiltered, under a mismatched title).
 async function tmdbHighlightsCatalog(query) {
-  if (query.category !== TMDB_ALL_CATEGORY) return { sections: [] };
-  const subCategories = HIGHLIGHT_GROUPS.map((g) => ({ id: g.id, name: g.name }));
+  const groups = highlightGroupsForCategory(query.category);
+  if (groups.length === 0) return { sections: [] };
+  const subCategories = groups.map((g) => ({ id: g.id, name: g.name }));
 
   if (query.subCategory != null) {
-    const matched = HIGHLIGHT_GROUPS.find((g) => g.id === query.subCategory);
+    const matched = groups.find((g) => g.id === query.subCategory);
     if (matched == null) return { sections: [], subCategories };
     if (matched.id === 'football_highlights') {
       const page = await fetchTimesoccerHighlightsPage(query.page);
@@ -5062,10 +5759,10 @@ async function tmdbHighlightsCatalog(query) {
   }
 
   const itemGroups = await Promise.all(
-    HIGHLIGHT_GROUPS.map((g) => fetchGroup(g.name, g.fetch)),
+    groups.map((g) => fetchGroup(g.name, g.fetch)),
   );
   return {
-    sections: HIGHLIGHT_GROUPS.map((group, index) => ({
+    sections: groups.map((group, index) => ({
       id: group.id,
       title: group.name,
       items: itemGroups[index],
@@ -5076,9 +5773,8 @@ async function tmdbHighlightsCatalog(query) {
 
 // --- catalog: no sections, no subCategories — just the popularity-sorted
 // discover feed, straight from the API, paginated for infinite scroll. Named
-// curated lists (Trending/Top Rated/Oscar Nominees/Cannes) live only on the
-// `highlights` (`all`) catalog above; `movie`/`tv` is deliberately a single
-// flat, ungrouped list so nothing renders a section heading between pages.
+// curated lists live on the row-based `highlights` catalog above; this
+// `movie`/`tv` catalog remains a single flat, ungrouped list for the grid.
 
 async function tmdbCatalog(query) {
   const mediaType =
@@ -11593,6 +12289,27 @@ const LEAGUE_CHANNELS_PLAYZ_CATEGORY_NAMES = new Set([
   'arab sports', 'starzplay', 'general sports',
 ]);
 
+// Collapse numbered/variant feeds into one user-facing broadcaster card. The
+// match is intentionally conservative: unknown names remain separate instead
+// of being merged merely because they happen to share a common word.
+const LEAGUE_CHANNEL_BRANDS = [
+  { key: 'sky-sports', title: 'Sky Sports', aliases: ['sky sports', 'sky sport'] },
+  { key: 'tnt-sports', title: 'TNT Sports', aliases: ['tnt sports', 'tnt'] },
+  { key: 'bein-sports', title: 'beIN Sports', aliases: ['bein sports', 'bein sport'] },
+  { key: 'espn', title: 'ESPN', aliases: ['espn'] },
+  { key: 'fox-sports', title: 'Fox Sports', aliases: ['fox sports', 'fox sport'] },
+  { key: 'arena-sport', title: 'Arena Sport', aliases: ['arena sport'] },
+  { key: 'dazn', title: 'DAZN', aliases: ['dazn'] },
+  { key: 'movistar', title: 'Movistar', aliases: ['movistar liga de campeones', 'movistar'] },
+  { key: 'paramount', title: 'Paramount+', aliases: ['paramount plus', 'paramount+'] },
+  { key: 'super-sport', title: 'SuperSport', aliases: ['supersport', 'super sport'] },
+  { key: 'peacock', title: 'Peacock', aliases: ['peacock'] },
+  { key: 'viaplay', title: 'Viaplay', aliases: ['viaplay'] },
+  { key: 'canal-plus', title: 'Canal+', aliases: ['canal plus', 'canal+'] },
+  { key: 'sport-tv', title: 'Sport TV', aliases: ['sport tv'] },
+  { key: 'setanta', title: 'Setanta Sports', aliases: ['setanta sports', 'setanta'] },
+];
+
 let leagueChannelsMemo = null;
 
 function leagueChannelsText(value) {
@@ -11681,6 +12398,8 @@ function leagueChannelsParseM3u(text, provider, locator) {
     if (!line.startsWith('#EXTINF')) continue;
     const comma = line.indexOf(',');
     const name = comma < 0 ? '' : line.slice(comma + 1).trim();
+    const logoMatch = line.match(/\btvg-logo\s*=\s*["']([^"']+)["']/i);
+    const logo = logoMatch == null ? '' : leagueChannelsText(logoMatch[1]);
     let linkIndex = index + 1;
     while (linkIndex < lines.length && lines[linkIndex].trim().startsWith('#')) linkIndex += 1;
     const link = linkIndex < lines.length ? lines[linkIndex].trim() : '';
@@ -11691,7 +12410,7 @@ function leagueChannelsParseM3u(text, provider, locator) {
       index: rows.length,
       name,
       normalizedName: leagueChannelsNormalize(name),
-      logo: '',
+      logo,
       links: link,
       linkNames: [],
       m3u: true,
@@ -11707,10 +12426,35 @@ function leagueChannelsMatches(row, definition) {
   return definition.patterns.some((pattern) => haystack.includes(leagueChannelsNormalize(pattern)));
 }
 
+function leagueChannelsGroup(row) {
+  const haystack = leagueChannelsNormalize(
+    `${row.name} ${(row.linkNames || []).join(' ')}`,
+  );
+  const brand = LEAGUE_CHANNEL_BRANDS.find((candidate) =>
+    candidate.aliases.some((alias) => haystack.includes(leagueChannelsNormalize(alias))),
+  );
+  if (brand != null) return { key: brand.key, title: brand.title };
+  return { key: `channel:${row.normalizedName}`, title: row.name };
+}
+
+function leagueChannelsGroups(rows, definition) {
+  const groups = new Map();
+  rows.filter((row) => leagueChannelsMatches(row, definition)).forEach((row) => {
+    const group = leagueChannelsGroup(row);
+    let value = groups.get(group.key);
+    if (value == null) {
+      value = { key: group.key, title: group.title, rows: [] };
+      groups.set(group.key, value);
+    }
+    value.rows.push(row);
+  });
+  return Array.from(groups.values());
+}
+
 function leagueChannelsDedupe(rows) {
   const seen = new Set();
   return rows.filter((row) => {
-    const key = `${row.provider}:${row.normalizedName}`;
+    const key = `${row.provider}:${row.locator}:${row.normalizedName}:${row.links}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -11810,12 +12554,10 @@ async function leagueChannelsLoad() {
   return rows;
 }
 
-function leagueChannelsItem(definition, row) {
+function leagueChannelsItem(definition, group) {
   const id = leagueChannelsEncode({
     league: definition.id,
-    provider: row.provider,
-    locator: row.locator,
-    name: row.name,
+    channel: group.key,
   });
   const item = {
     ref: {
@@ -11824,10 +12566,13 @@ function leagueChannelsItem(definition, row) {
       id: `${LEAGUE_CHANNELS_PROVIDER_KEY}:${id}`,
     },
     kind: 'video',
-    title: row.name,
-    subtitle: `${definition.title} · ${row.provider === 'playz' ? 'PlayZTV' : 'Cricfy'}`,
+    title: group.title,
+    subtitle: definition.title,
   };
-  if (/^https?:\/\//i.test(row.logo)) item.artwork = { landscape: { url: row.logo } };
+  const logo = group.rows
+    .map((row) => row.logo)
+    .find((value) => /^https?:\/\//i.test(value));
+  if (logo != null) item.artwork = { portrait: { url: logo } };
   return item;
 }
 
@@ -11839,9 +12584,8 @@ async function leagueChannelsCatalog(query) {
     sections: LEAGUE_CHANNEL_DEFINITIONS.map((definition) => ({
       id: `${LEAGUE_CHANNELS_CATALOG_ID}:${definition.id}`,
       title: definition.title,
-      items: leagueChannelsDedupe(
-        rows.filter((row) => leagueChannelsMatches(row, definition)),
-      ).map((row) => leagueChannelsItem(definition, row)),
+      items: leagueChannelsGroups(rows, definition)
+        .map((group) => leagueChannelsItem(definition, group)),
     })).filter((section) => section.items.length > 0),
   };
 }
@@ -11857,45 +12601,51 @@ async function leagueChannelsSources(args) {
   const prefix = `${LEAGUE_CHANNELS_PROVIDER_KEY}:`;
   if (!rawId.startsWith(prefix)) return { sources: [] };
   const payload = leagueChannelsDecode(rawId.slice(prefix.length));
-  if (!payload || !payload.provider || !payload.locator || !payload.name) return { sources: [] };
-  let links = [];
-  try {
-    if (payload.provider === 'playz') {
-      const testFeeds = globalThis.__leagueChannelsPlayzFeeds;
-      const fetched = testFeeds && typeof testFeeds === 'object'
-        ? testFeeds[payload.locator]
-        : await playzFetchJson(payload.locator);
-      const rows = leagueChannelsRows(fetched);
-      const row = rows.map((entry) => leagueChannelsParseRow(entry, 'playz', payload.locator, 0))
-        .find((entry) => entry && entry.normalizedName === leagueChannelsNormalize(payload.name));
-      if (row) {
+  if (!payload || !payload.league || !payload.channel) return { sources: [] };
+  const definition = LEAGUE_CHANNEL_DEFINITIONS.find((entry) => entry.id === payload.league);
+  if (definition == null) return { sources: [] };
+  let rows;
+  try { rows = await leagueChannelsLoad(); } catch (_) { return { sources: [] }; }
+  const group = leagueChannelsGroups(rows, definition).find(
+    (entry) => entry.key === payload.channel,
+  );
+  if (group == null) return { sources: [] };
+  const sourceLists = await Promise.all(group.rows.map(async (row) => {
+    try {
+      if (row.provider === 'playz') {
+        const testFeeds = globalThis.__leagueChannelsPlayzFeeds;
         const rawLinksValue = testFeeds && typeof testFeeds === 'object'
           ? testFeeds[row.links]
           : await playzFetchJson(row.links);
-        const rawLinks = leagueChannelsRows(rawLinksValue);
-        links = rawLinks.map((link, index) => ({
+        return leagueChannelsRows(rawLinksValue).map((link, index) => ({
+            id: `${LEAGUE_CHANNELS_PROVIDER_KEY}:${leagueChannelsEncode({
+              provider: 'playz',
+              links: row.links,
+              index,
+              names: row.linkNames,
+            })}`,
+            label: `PlayZTV · ${leagueChannelsText(link.name) || row.linkNames[index] || `${row.name} ${index + 1}`}`,
+            provider: 'Nimora', providerId: LEAGUE_CHANNELS_PROVIDER_ID,
+          }));
+      } else if (row.provider === 'cricfy') {
+        return [{
           id: `${LEAGUE_CHANNELS_PROVIDER_KEY}:${leagueChannelsEncode({
-            provider: 'playz',
-            links: row.links,
-            index,
-            names: row.linkNames,
+            provider: 'cricfy', locator: row.locator, index: row.index,
           })}`,
-          label: leagueChannelsText(link.name) || row.linkNames[index] || `PlayZTV ${index + 1}`,
-          provider: 'Nimora', providerId: 'nimora.league_channels',
-        }));
+          label: `Cricfy · ${row.name}`,
+          provider: 'Nimora', providerId: LEAGUE_CHANNELS_PROVIDER_ID,
+        }];
       }
-    } else if (payload.provider === 'cricfy') {
-      const body = /^https?:\/\//i.test(payload.locator)
-        ? await cricfyGetText(payload.locator, cricfyDefaultHeaders(), CRICFY_CONTENT_TIMEOUT_MS)
-        : await cricfyFetchContent(payload.locator);
-      const rows = leagueChannelsParseM3u(body, 'cricfy', payload.locator);
-      links = rows.filter((row) => row.normalizedName === leagueChannelsNormalize(payload.name))
-        .map((row) => ({
-          id: leagueChannelsEncode({ ...payload, index: row.index }),
-          label: row.name, provider: 'Nimora', providerId: LEAGUE_CHANNELS_PROVIDER_ID,
-        }));
-    }
-  } catch (_) { return { sources: [] }; }
+    } catch (_) {}
+    return [];
+  }));
+  let links = sourceLists.flat();
+  const seen = new Set();
+  links = links.filter((link) => {
+    if (seen.has(link.id)) return false;
+    seen.add(link.id);
+    return true;
+  });
   return { sources: links };
 }
 
