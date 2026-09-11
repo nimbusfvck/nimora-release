@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.31",
+      "version": "1.0.32",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Disabled FCTV33 Live Events because its provider CDN rejects the app playback path with HTTP 403.",
         "Fixed FCTV playback by matching the web token flow: decoding obfuscated stream URLs, creating the rb-session AES-CBC token URL, validating playlist media, and retrying fallback edges.",
         "Fixed FCTV live playback by validating playlist media segments before returning a source, retrying fresh signed stream details, filtering Sorotan items, and showing tournament names on live event cards.",
         "Added FCTV33 live-event fallback streams and provider-only football events to Live, while keeping FotMob as the Football schedule source.",
@@ -47,7 +48,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "76250fa462da82ac5c68b9bef56bc89087c70c2cb8906b17d05bc515b1eedab9"
+      "bundleSha256": "20166c4d551d4720b29881d83aeb7ab6cba1a5f995d1a79970eac3fc59d10767"
     }
   ]
 }
