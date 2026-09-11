@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -39,6 +39,21 @@
       "id": "nimora.cricfy",
       "name": "Cricfy",
       "roles": ["stream"]
+    },
+    {
+      "id": "nimora.league_channels",
+      "name": "League Channels",
+      "roles": ["catalog", "stream"],
+      "catalogs": [
+        {
+          "id": "league_channels",
+          "name": "League Channels",
+          "categories": ["live"],
+          "kind": "video",
+          "display": "row",
+          "expanded": true
+        }
+      ]
     },
     {
       "id": "nimora.moviebox",
