@@ -847,6 +847,132 @@ function sourceQuality(value) {
   return numeric == null ? normalized.toUpperCase() : `${numeric[1]}p`;
 }
 
+// Cross-source anime title aliases.
+//
+// Catalog providers keep a stable source ref, while streaming sites often use
+// a different title spelling. Harbor solves that by resolving the ref through
+// Anime Relations Mapping (Yuna) and then asking Jikan for MAL's full title
+// list. Keep this helper independent from any provider so every source can
+// reuse the same cached aliases.
+
+const ANIME_ALIAS_JIKAN_BASE =
+  globalThis.__animeAliasJikanBaseUrl || 'https://api.jikan.moe/v4';
+const ANIME_ALIAS_ARM_BASE =
+  globalThis.__animeAliasArmBaseUrl || 'https://relations.yuna.moe/api/ids';
+const ANIME_ALIAS_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const animeAliasCache = new Map();
+const animeAliasInflight = new Map();
+
+function animeAliasSourceRef(item) {
+  const id = item && item.ref && typeof item.ref.id === 'string'
+    ? item.ref.id : '';
+  let match = /^mal:(?:anime|episode):(\d+)(?::\d+)?$/i.exec(id);
+  if (match) return {source: 'mal', id: Number(match[1])};
+  match = /^anilist:(?:media|episode):(\d+)(?::\d+)?$/i.exec(id);
+  if (match) return {source: 'anilist', id: Number(match[1])};
+  match = /^kitsu:(?:anime|episode)?:?(\d+)$/i.exec(id);
+  if (match) return {source: 'kitsu', id: Number(match[1])};
+  match = /^anidb:(?:anime|episode)?:?(\d+)$/i.exec(id);
+  if (match) return {source: 'anidb', id: Number(match[1])};
+  return null;
+}
+
+function animeAliasBaseTitle(item) {
+  const extra = item && item.extra && typeof item.extra === 'object'
+    ? item.extra : {};
+  const value = extra.seriesTitle || (item && item.subtitle) || (item && item.title);
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+async function animeAliasJson(url) {
+  try {
+    const controller = typeof AbortController === 'function'
+      ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 5000) : null;
+    const response = await fetch(url, controller ? {signal: controller.signal} : undefined);
+    if (timer) clearTimeout(timer);
+    if (response.status < 200 || response.status >= 300) return null;
+    return JSON.parse(response.body);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function animeAliasMalId(source, id) {
+  if (source === 'mal') return id;
+  const url = `${ANIME_ALIAS_ARM_BASE}?source=${encodeURIComponent(source)}&id=${id}`;
+  const data = await animeAliasJson(url);
+  const mal = Number(data && data.mal);
+  return Number.isInteger(mal) && mal > 0 ? mal : null;
+}
+
+async function animeAliasTitlesForMal(malId) {
+  const data = await animeAliasJson(`${ANIME_ALIAS_JIKAN_BASE}/anime/${malId}`);
+  const anime = data && data.data;
+  if (!anime || typeof anime !== 'object') return [];
+  const titles = [];
+  const seen = new Set();
+  const add = (value) => {
+    const title = typeof value === 'string' ? value.trim() : '';
+    if (title && !seen.has(title.toLowerCase())) {
+      seen.add(title.toLowerCase());
+      titles.push(title);
+    }
+  };
+  add(anime.title_english);
+  add(anime.title);
+  add(anime.title_japanese);
+  for (const entry of Array.isArray(anime.titles) ? anime.titles : []) {
+    add(entry && entry.title);
+  }
+  return titles;
+}
+
+async function animeAliasTitles(item) {
+  const ref = animeAliasSourceRef(item);
+  if (!ref) return [];
+  const malId = await animeAliasMalId(ref.source, ref.id);
+  return malId == null ? [] : animeAliasTitlesForMal(malId);
+}
+
+async function animeTitleVariants(item) {
+  const original = animeAliasBaseTitle(item);
+  const key = item && item.ref && typeof item.ref.id === 'string'
+    ? item.ref.id : `title:${original.toLowerCase()}`;
+  const cached = animeAliasCache.get(key);
+  if (cached && Date.now() - cached.t < ANIME_ALIAS_TTL_MS) {
+    return cached.titles.slice();
+  }
+  const existing = animeAliasInflight.get(key);
+  if (existing) return existing;
+  const pending = (async () => {
+    const titles = [];
+    const seen = new Set();
+    const add = (value) => {
+      const title = typeof value === 'string' ? value.trim() : '';
+      if (title && !seen.has(title.toLowerCase())) {
+        seen.add(title.toLowerCase());
+        titles.push(title);
+      }
+    };
+    add(original);
+    try {
+      for (const title of await animeAliasTitles(item)) add(title);
+    } catch (_) {}
+    const value = titles.length > 0 ? titles : [original];
+    animeAliasCache.set(key, {titles: value, t: Date.now()});
+    return value.slice();
+  })();
+  animeAliasInflight.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    animeAliasInflight.delete(key);
+  }
+}
+
+globalThis.__animeTitleVariants = animeTitleVariants;
+
 // VaPlayer as a stream provider, over the host `fetch` API.
 //
 // Ported from CineStream's `invokeVaPlayer` (CineStreamExtractors.kt). The
@@ -3613,6 +3739,229 @@ if (!globalThis.__extension.sources) {
   };
 }
 
+// Jikan/MAL anime catalogue helpers.
+//
+// The highlights catalogue owns the row layout, while this file owns the
+// anime data source. Jikan is a read-only wrapper around MyAnimeList data, so
+// the catalogue deliberately exposes MAL identities and does not copy any
+// third-party rating into the protocol item.
+
+const JIKAN_BASE = globalThis.__jikanBaseUrl || 'https://api.jikan.moe/v4';
+const JIKAN_PROVIDER_ID = 'nimora.jikan';
+const JIKAN_PER_PAGE = 25;
+const JIKAN_HOME_PAGES = Number.isInteger(globalThis.__jikanHomePages)
+  ? globalThis.__jikanHomePages
+  : 3;
+const JIKAN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+const jikanCache = new Map();
+const jikanInflight = new Map();
+let jikanQueue = Promise.resolve();
+
+function jikanUrl(path, query) {
+  const params = Object.entries(query || {})
+    .filter(([, value]) => value != null && String(value).length > 0)
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+  return `${JIKAN_BASE}${path}${params ? `?${params}` : ''}`;
+}
+
+async function jikanQueuedFetch(url) {
+  const previous = jikanQueue;
+  let release;
+  jikanQueue = new Promise((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await fetch(url);
+  } finally {
+    release();
+  }
+}
+
+async function jikanJson(path, query) {
+  const url = jikanUrl(path, query);
+  const cached = jikanCache.get(url);
+  if (cached && Date.now() - cached.t < JIKAN_CACHE_TTL_MS) return cached.value;
+  const existing = jikanInflight.get(url);
+  if (existing) return existing;
+
+  const pending = (async () => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const response = await jikanQueuedFetch(url);
+        if (response.status === 429) {
+          continue;
+        }
+        if (response.status < 200 || response.status >= 300) return null;
+        const value = JSON.parse(response.body);
+        jikanCache.set(url, { value, t: Date.now() });
+        return value;
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  })();
+  jikanInflight.set(url, pending);
+  try {
+    return await pending;
+  } finally {
+    jikanInflight.delete(url);
+  }
+}
+
+function jikanTitle(anime) {
+  return anime.title_english || anime.title || anime.title_japanese || 'Untitled';
+}
+
+function jikanYear(anime) {
+  const direct = Number(anime.year);
+  if (Number.isInteger(direct) && direct > 0) return direct;
+  const match = /^(\d{4})/.exec(String(anime.aired && anime.aired.from || ''));
+  return match == null ? null : Number(match[1]);
+}
+
+function jikanPoster(anime) {
+  const images = anime.images || {};
+  const webp = images.webp || {};
+  const jpg = images.jpg || {};
+  return webp.large_image_url || jpg.large_image_url ||
+    webp.image_url || jpg.image_url || null;
+}
+
+function jikanKind(anime) {
+  return String(anime.type || '').toUpperCase() === 'MOVIE' ? 'video' : 'series';
+}
+
+function jikanRefId(malId) {
+  return `mal:anime:${malId}`;
+}
+
+function jikanToMediaItem(anime) {
+  const malId = Number(anime.mal_id);
+  const item = {
+    ref: {
+      extensionId: EXTENSION_ID,
+      providerId: JIKAN_PROVIDER_ID,
+      id: jikanRefId(malId),
+    },
+    kind: jikanKind(anime),
+    title: jikanTitle(anime),
+  };
+  const year = jikanYear(anime);
+  if (year != null) item.releaseYear = year;
+  const poster = jikanPoster(anime);
+  if (poster) item.artwork = { portrait: { url: poster } };
+  return item;
+}
+
+async function jikanCatalogue(path, query) {
+  const out = [];
+  const seen = new Set();
+  const pages = Math.max(1, JIKAN_HOME_PAGES);
+  for (let page = 1; page <= pages; page += 1) {
+    const payload = await jikanJson(path, {
+      ...query,
+      page,
+      limit: JIKAN_PER_PAGE,
+    });
+    const data = payload && Array.isArray(payload.data) ? payload.data : [];
+    for (const anime of data) {
+      const malId = Number(anime && anime.mal_id);
+      if (!Number.isInteger(malId) || malId < 1 || seen.has(malId)) continue;
+      seen.add(malId);
+      out.push(jikanToMediaItem(anime));
+    }
+  }
+  return out.slice(0, 60);
+}
+
+// These match Harbor's Home rows. Jikan has no standalone trending feed, so
+// the closest stable MAL equivalent is the highest-ranked currently airing
+// catalogue.
+async function jikanTrendingAnime() {
+  return jikanCatalogue('/top/anime', { filter: 'airing', sfw: 'true' });
+}
+
+async function jikanNewAnimeRelease() {
+  return jikanCatalogue('/anime', {
+    order_by: 'start_date',
+    sort: 'desc',
+    status: 'airing',
+    min_score: 6,
+    sfw: 'true',
+  });
+}
+
+async function jikanPopularAnime() {
+  return jikanCatalogue('/top/anime', { filter: 'bypopularity', sfw: 'true' });
+}
+
+async function jikanUpcomingAnime() {
+  return jikanCatalogue('/seasons/upcoming', { sfw: 'true' });
+}
+
+function jikanAnimeId(refId) {
+  const match = /^mal:anime:(\d+)$/.exec(String(refId || ''));
+  return match == null ? null : Number(match[1]);
+}
+
+function jikanEpisodeRefId(malId, position) {
+  return `mal:episode:${malId}:${position}`;
+}
+
+function jikanEpisodeGuide(anime) {
+  const total = Number(anime.episodes);
+  if (jikanKind(anime) !== 'series' || !Number.isInteger(total) || total < 1) return null;
+  const episodes = [];
+  for (let position = 1; position <= total; position += 1) {
+    episodes.push({
+      ref: {
+        extensionId: EXTENSION_ID,
+        providerId: JIKAN_PROVIDER_ID,
+        id: jikanEpisodeRefId(anime.mal_id, position),
+      },
+      title: `Episode ${position}`,
+      position,
+    });
+  }
+  return { groups: [{ id: 'season:1', title: 'Episodes', episodes }] };
+}
+
+async function jikanMeta(args) {
+  const malId = jikanAnimeId(args && args.ref && args.ref.id);
+  if (malId == null) throw new Error(`Not a Jikan ref id: ${args && args.ref && args.ref.id}`);
+  const payload = await jikanJson(`/anime/${malId}`, {});
+  const anime = payload && payload.data;
+  if (!anime) throw new Error(`Jikan has no anime ${malId}`);
+  const detail = { item: { ...jikanToMediaItem(anime), ref: args.ref } };
+  if (typeof anime.synopsis === 'string' && anime.synopsis.trim()) {
+    detail.description = anime.synopsis.trim();
+  }
+  if (Array.isArray(anime.genres)) {
+    const tags = anime.genres
+      .map((genre) => genre && genre.name)
+      .filter((name) => typeof name === 'string' && name.length > 0);
+    if (tags.length > 0) detail.tags = tags;
+  }
+  const guide = jikanEpisodeGuide(anime);
+  if (guide) detail.episodeGuide = guide;
+  return detail;
+}
+
+globalThis.__jikanTrendingAnime = jikanTrendingAnime;
+globalThis.__jikanNewAnimeRelease = jikanNewAnimeRelease;
+globalThis.__jikanPopularAnime = jikanPopularAnime;
+globalThis.__jikanUpcomingAnime = jikanUpcomingAnime;
+
+globalThis.__metaProviders = globalThis.__metaProviders || [];
+globalThis.__metaProviders.push({
+  providerId: JIKAN_PROVIDER_ID,
+  meta: jikanMeta,
+});
+
 // TMDB + shegu.st curated-lists catalog, as a JS extension — Movies and TV.
 //
 // Talks to TMDB and lists.shegu.st directly. Items use stable
@@ -4415,6 +4764,17 @@ async function fetchSokujaAnimeRanking(rank) {
   }
 }
 
+async function fetchJikanAnime(loaderName) {
+  const loader = globalThis[loaderName];
+  if (typeof loader !== 'function') return [];
+  try {
+    const items = await loader();
+    return Array.isArray(items) ? items : [];
+  } catch (_) {
+    return [];
+  }
+}
+
 const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
@@ -4426,6 +4786,26 @@ const HIGHLIGHT_GROUPS = [
   },
   { id: 'football_highlights', name: 'Football Highlights', fetch: fetchTimesoccerHighlights },
   { id: 'coming_soon', name: 'Coming Soon', fetch: () => fetchComingSoon() },
+  {
+    id: 'trending_anime',
+    name: 'Trending Anime',
+    fetch: () => fetchJikanAnime('__jikanTrendingAnime'),
+  },
+  {
+    id: 'new_anime_release',
+    name: 'New Anime Release',
+    fetch: () => fetchJikanAnime('__jikanNewAnimeRelease'),
+  },
+  {
+    id: 'popular_anime',
+    name: 'Popular Anime',
+    fetch: () => fetchJikanAnime('__jikanPopularAnime'),
+  },
+  {
+    id: 'upcoming_anime',
+    name: 'Upcoming Anime',
+    fetch: () => fetchJikanAnime('__jikanUpcomingAnime'),
+  },
   {
     id: 'top_anime_all_time',
     name: 'Top Anime All Time',
@@ -6747,6 +7127,16 @@ function sokujaCatalogEpisodeGuide(parentRef, html) {
   };
 }
 
+async function sokujaItemTitleVariants(item, fallback) {
+  if (typeof globalThis.__animeTitleVariants !== 'function') return [fallback];
+  try {
+    const variants = await globalThis.__animeTitleVariants(item);
+    return Array.isArray(variants) && variants.length > 0 ? variants : [fallback];
+  } catch (_) {
+    return [fallback];
+  }
+}
+
 function sokujaEpisodeGuideDate(value) {
   if (typeof value !== 'string' || value.length === 0) return null;
   // Next.js RSC serializes Date values with a `$D` prefix. The extension
@@ -6887,17 +7277,22 @@ async function sokujaSources(args) {
   if (!query.title) return { sources: [] };
   await sokujaEnsureBase();
   const availableAt = await sokujaEpisodeAvailableAt(item);
-  let found = await sokujaFindAnime(query.title, query.season, availableAt);
-  if (found === SOKUJA_UNREACHABLE) {
-    // A mirror that stops answering mid-session is the usual sign it rotated.
-    // Re-run discovery once and retry, but only if it named a different host:
-    // otherwise this is an outage and the second request buys nothing.
-    const stale = sokujaActiveBase;
-    sokujaForgetBase();
-    const refreshed = await sokujaEnsureBase();
-    found = refreshed === stale
-      ? null
-      : await sokujaFindAnime(query.title, query.season, availableAt);
+  const titleVariants = await sokujaItemTitleVariants(item, query.title);
+  let found = null;
+  for (const title of titleVariants) {
+    found = await sokujaFindAnime(title, query.season, availableAt);
+    if (found === SOKUJA_UNREACHABLE) {
+      // A mirror that stops answering mid-session is the usual sign it rotated.
+      // Re-run discovery once and retry, but only if it named a different host:
+      // otherwise this is an outage and the second request buys nothing.
+      const stale = sokujaActiveBase;
+      sokujaForgetBase();
+      const refreshed = await sokujaEnsureBase();
+      found = refreshed === stale
+        ? null
+        : await sokujaFindAnime(title, query.season, availableAt);
+    }
+    if (found != null && found !== SOKUJA_UNREACHABLE) break;
   }
   if (found == null || found === SOKUJA_UNREACHABLE) return { sources: [] };
   const result = found.result;
@@ -8090,6 +8485,16 @@ function layarkacaItemQuery(item) {
   };
 }
 
+async function layarkacaItemTitleVariants(item, fallback) {
+  if (typeof globalThis.__animeTitleVariants !== 'function') return [fallback];
+  try {
+    const variants = await globalThis.__animeTitleVariants(item);
+    return Array.isArray(variants) && variants.length > 0 ? variants : [fallback];
+  } catch (_) {
+    return [fallback];
+  }
+}
+
 function layarkacaCatalogRefPayload(ref) {
   const id = ref && typeof ref.id === 'string' ? ref.id : '';
   const prefix = `${LAYARKACA_PROVIDER_KEY}:catalog:`;
@@ -8132,21 +8537,34 @@ function layarkacaSlug(value, year) {
 }
 
 async function layarkacaSlugFallback(query) {
-  const slug = layarkacaSlug(query && query.title, query && query.year);
-  if (!slug) return null;
-  const slugs = [slug, slug.replace(/-(?:19|20)\d{2}$/, '')];
+  const titles = Array.isArray(query && query.titles) && query.titles.length > 0
+    ? query.titles : [query && query.title];
+  const slugs = [];
+  const seen = new Set();
+  for (const title of titles) {
+    const slug = layarkacaSlug(title, query && query.year);
+    if (!slug) continue;
+    for (const candidate of [slug, slug.replace(/-(?:19|20)\d{2}$/, '')]) {
+      if (!seen.has(candidate)) {
+        seen.add(candidate);
+        slugs.push({candidate, title});
+      }
+    }
+  }
+  if (slugs.length === 0) return null;
   const bases = query.isEpisode
     ? [layarkacaSeriesBase, layarkacaBase]
     : [layarkacaBase, layarkacaSeriesBase];
   for (const base of bases) {
-    for (const candidate of slugs) {
+    for (const entry of slugs) {
+      const candidate = entry.candidate;
       const url = `${base.replace(/\/$/, '')}/${candidate}`;
       const response = await layarkacaFetch(url, `${base.replace(/\/$/, '')}/`);
       if (response == null) continue;
       const finalUrl = response.url || url;
       if (!new RegExp(`/${candidate}(?:[/?#]|$)`, 'i').test(finalUrl)) continue;
       if (!/<(?:script\b[^>]*id\s*=\s*["']season-data|h1\b|title\b)/i.test(response.body || '')) continue;
-      return {url: finalUrl, title: query.title, year: query.year};
+      return {url: finalUrl, title: entry.title || query.title, year: query.year};
     }
   }
   return null;
@@ -8159,9 +8577,20 @@ async function layarkacaSearch(query) {
   const bases = query.isEpisode
     ? [requestedSeriesBase, layarkacaBase]
     : [layarkacaBase, layarkacaSeriesBase];
-  const variants = [query.title];
-  const withoutYear = query.title.replace(/\s*\(?((?:19|20)\d{2})\)?\s*$/i, '').trim();
-  if (withoutYear && withoutYear !== query.title) variants.push(withoutYear);
+  const titleVariants = Array.isArray(query.titles) && query.titles.length > 0
+    ? query.titles : [query.title];
+  const variants = [];
+  const seenVariants = new Set();
+  for (const title of titleVariants) {
+    const value = String(title || '').trim();
+    const withoutYear = value.replace(/\s*\(?((?:19|20)\d{2})\)?\s*$/i, '').trim();
+    for (const variant of [value, withoutYear]) {
+      if (variant && !seenVariants.has(variant.toLowerCase())) {
+        seenVariants.add(variant.toLowerCase());
+        variants.push(variant);
+      }
+    }
+  }
   let best = null;
   for (const base of bases) {
     for (const variant of variants) {
@@ -8170,8 +8599,9 @@ async function layarkacaSearch(query) {
       if (response == null) continue;
       const finalOrigin = layarkacaOrigin(response.url || url);
       const results = layarkacaParseSearchResults(response.body, finalOrigin || base);
+      const searchQuery = {...query, title: variant};
       results.forEach((result, index) => {
-        const score = layarkacaSearchScore(result, query, index);
+        const score = layarkacaSearchScore(result, searchQuery, index);
         if (score == null || (best != null && score >= best.score)) return;
         best = {result, score};
       });
@@ -8184,9 +8614,10 @@ async function layarkacaSearch(query) {
     const apiUrl = `${layarkacaSearchBase.replace(/\/$/, '')}/search.php?s=${encodeURIComponent(variant)}&page=1`;
     const response = await layarkacaFetch(apiUrl, `${layarkacaBase}/`);
     if (response == null) continue;
-    const results = layarkacaParseSearchApi(response.body, query);
+    const searchQuery = {...query, title: variant};
+    const results = layarkacaParseSearchApi(response.body, searchQuery);
     results.forEach((result, index) => {
-      const score = layarkacaSearchScore(result, query, index);
+      const score = layarkacaSearchScore(result, searchQuery, index);
       if (score == null || (best != null && score >= best.score)) return;
       best = {result, score};
     });
@@ -8466,6 +8897,7 @@ async function layarkacaDiscover(item) {
   if (!query || (query.isEpisode && (!Number.isInteger(query.season) || !Number.isInteger(query.episode)))) {
     return null;
   }
+  query.titles = await layarkacaItemTitleVariants(item, query.title);
   let found = query.detailUrl
     ? {url: query.detailUrl, title: query.title, year: query.year}
     : await layarkacaSearch(query);

@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.23",
+      "version": "1.0.24",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added cached cross-source anime title aliases from MAL/Jikan and Anime Relations Mapping, so Sokuja and LayarKaca can search alternate anime names automatically for both series and episodes.",
         "Fixed LK21 movie matching so a partial title such as Dreams cannot select a different movie such as Train Dreams, and renamed the TMDB popularity shelves to Popular Movies and Popular TV Series.",
         "Fixed LK21 ratings so they appear on both catalog cards and detail pages.",
         "Changed the All Time movie and series shelves to popularity rankings and moved Oscar Nominees and Cannes Film Festival to the bottom of Home.",
@@ -39,7 +40,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "2df206e47f22058e1992488f26740868a97296561bfc6d1c48920d986a504da6"
+      "bundleSha256": "f85a0b9e14a09ada559a0782cb7ca12799ecf7805b617c71064a9149fee1a1b8"
     }
   ]
 }
