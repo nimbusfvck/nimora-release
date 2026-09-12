@@ -38,7 +38,7 @@ const EXTENSION_ID = globalThis.__nimoraExtensionId || 'nimora';
 const PROVIDER_ID = 'nimora.matches';
 
 // The one catalog this extension declares, and the categories inside it.
-// `live` is based on FotMob's match status; `sport` is the daily match
+// `live` is based on FotMob's match status; `schedule` is the daily match
 // schedule. `all` includes the live football items alongside the other live
 // sports catalog entries.
 const CATALOG_ID = 'fixtures';
@@ -53,6 +53,47 @@ const FIXTURES_TTL_MS = 15 * 60 * 1000;
 const LEAGUE_BRANDING_TTL_MS = 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const JAKARTA_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+// These durations are deliberately conservative event windows, not claims
+// about the exact final whistle or checkered flag. Providers can override
+// them when an upstream end time becomes available.
+const EVENT_DURATION_MINUTES = [
+  { match: /fighting|boxing|ufc|mma|wwe|wrestling|combat|kickboxing/i, minutes: 240 },
+  { match: /motorsport|formula\s*1|motogp|nascar|wrc|racing/i, minutes: 210 },
+  { match: /american football|nfl/i, minutes: 210 },
+  { match: /cricket/i, minutes: 240 },
+  { match: /tennis/i, minutes: 180 },
+  { match: /basketball|nba|wnba/i, minutes: 150 },
+  { match: /volleyball/i, minutes: 135 },
+  { match: /badminton|bwf/i, minutes: 120 },
+  { match: /football|soccer/i, minutes: 135 },
+];
+const DEFAULT_EVENT_DURATION_MINUTES = 180;
+
+function eventDurationMinutes(sportName, title) {
+  const identity = `${sportName || ''} ${title || ''}`;
+  return EVENT_DURATION_MINUTES.find((entry) => entry.match.test(identity))
+    ?.minutes || DEFAULT_EVENT_DURATION_MINUTES;
+}
+
+function eventSchedule(startsAt, state, sportName, title, explicitEndsAt = null) {
+  const startsAtMs = startsAt instanceof Date
+    ? startsAt.getTime()
+    : typeof startsAt === 'number' ? startsAt : Date.parse(startsAt);
+  const explicitEndMs = explicitEndsAt instanceof Date
+    ? explicitEndsAt.getTime()
+    : typeof explicitEndsAt === 'number'
+        ? explicitEndsAt
+        : Date.parse(explicitEndsAt);
+  const endsAtMs = Number.isFinite(explicitEndMs) && explicitEndMs > startsAtMs
+    ? explicitEndMs
+    : startsAtMs + eventDurationMinutes(sportName, title) * 60 * 1000;
+  return {
+    startsAt: new Date(startsAtMs).toISOString(),
+    endsAt: new Date(endsAtMs).toISOString(),
+    state,
+  };
+}
 
 // Editorial ranking for globally recognisable clubs. FotMob ids are the
 // primary key; aliases cover alternate names returned by football feeds. This
@@ -472,12 +513,15 @@ function leagueLogoUrl(leagueId) {
 function fotmobParticipantsOf(match) {
   const home = match.home;
   const away = match.away;
-  if (home == null || away == null || home.name == null || away.name == null) {
+  const teamName = (team) => team?.name || team?.longName || team?.shortName;
+  if (home == null || away == null || teamName(home) == null || teamName(away) == null) {
     return [];
   }
   const side = (team) => {
-    const p = { name: team.name };
-    if (team.id != null) p.logo = { url: teamLogoUrl(team.id) };
+    const p = { name: teamName(team) };
+    const teamId = team.id ?? team.teamId ?? team.team?.id;
+    if (teamId != null) p.logo = { url: teamLogoUrl(teamId) };
+    if (team.shortName != null) p.shortName = team.shortName;
     return p;
   };
   return [side(home), side(away)];
@@ -497,10 +541,15 @@ function toMediaItem(match, nowMs, brandingByLeague) {
     title: `${home.name == null ? 'Unknown' : home.name} vs ${
       away.name == null ? 'Unknown' : away.name
     }`,
-    schedule: {
-      startsAt: new Date(kickoffMs(match)).toISOString(),
-      state: isMatchLive(match, nowMs) ? 'live' : 'scheduled',
-    },
+    schedule: eventSchedule(
+      kickoffMs(match),
+      isMatchLive(match, nowMs) ? 'live' : 'scheduled',
+      FOOTBALL.name,
+      `${home.name == null ? 'Unknown' : home.name} vs ${
+        away.name == null ? 'Unknown' : away.name
+      }`,
+      match.endsAt || match.endTime || match.status?.endTime,
+    ),
   };
 
   const topClubRating = topClubEditorialRating(match);
@@ -702,7 +751,27 @@ const AMBIGUOUS_FOOTBALL_NAMES = new Set([
   'county', 'real', 'atletico', 'sporting', 'dynamo', 'racing', 'olympique',
 ]);
 
+const FOOTBALL_NAME_ALIASES = new Map([
+  ['atleti', 'atletico madrid'],
+  ['barca', 'barcelona'],
+  ['birmingham', 'birmingham city'],
+  ['derby', 'derby county'],
+  ['inter', 'internazionale'],
+  ['juve', 'juventus'],
+  ['man city', 'manchester city'],
+  ['man utd', 'manchester united'],
+  ['nottm forest', 'nottingham forest'],
+  ['psg', 'paris saint germain'],
+  ['qpr', 'queens park rangers'],
+  ['spurs', 'tottenham hotspur'],
+  ['west brom', 'west bromwich albion'],
+  ['west bromwich', 'west bromwich albion'],
+  ['wolves', 'wolverhampton wanderers'],
+]);
+
 function footballNameMatches(first, second) {
+  first = FOOTBALL_NAME_ALIASES.get(first) || first;
+  second = FOOTBALL_NAME_ALIASES.get(second) || second;
   if (first === second) return true;
   const shorter = first.length <= second.length ? first : second;
   const longer = first.length <= second.length ? second : first;
@@ -812,10 +881,13 @@ function cricfyEventItem(event, status) {
     kind: 'event',
     title,
     subtitle: event.category || 'Other',
-    schedule: {
-      startsAt: startsAt.toISOString(),
-      state: status === 'live' ? 'live' : 'scheduled',
-    },
+    schedule: eventSchedule(
+      startsAt,
+      status === 'live' ? 'live' : 'scheduled',
+      event.category || 'Other',
+      title,
+      event.endsAt || event.endTime,
+    ),
   };
   if (eventLogo !== null) {
     item.artwork = { landscape: { url: eventLogo } };
@@ -893,6 +965,8 @@ function catalogTitleKey(value) {
     .replace(/&amp;/g, '&')
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
+    .replace(/\bformula one\b|\bf1\b/g, 'formula 1')
+    .replace(/\bmoto gp\b/g, 'motogp')
     .trim();
 }
 
@@ -909,22 +983,67 @@ function sameProviderEvent(first, second) {
     Math.abs(firstKickoff - secondKickoff) <= FOOTBALL_DEDUPE_WINDOW_MS;
 }
 
-// Provider-backed catalog contributors are intentionally ordered before Roxie
-// so an existing item keeps its original metadata and stable identity. A
-// contributor can still mark that retained item live when it has fresher
-// status for the same event.
-function dedupeProviderEntries(entries) {
+function providerEntryIsLive(entry, nowMs) {
+  if (entry?.live !== true) return false;
+  const startsAt = Date.parse(entry.item?.schedule?.startsAt);
+  // A provider may refresh its stream flag before refreshing the countdown.
+  // Never expose a future item in Live when its start time is known.
+  return !Number.isFinite(startsAt) || startsAt <= nowMs;
+}
+
+function providerEntryStartMs(entry) {
+  const startsAt = Date.parse(entry.item?.schedule?.startsAt);
+  return Number.isFinite(startsAt) ? startsAt : null;
+}
+
+function normalizeProviderEntry(entry, nowMs) {
+  const live = providerEntryIsLive(entry, nowMs);
+  const schedule = entry.item?.schedule;
+  if (schedule == null) return { ...entry, live };
+  return {
+    ...entry,
+    live,
+    item: {
+      ...entry.item,
+      schedule: {
+        ...schedule,
+        state: live ? 'live' : 'scheduled',
+      },
+    },
+  };
+}
+
+// Provider-backed catalog contributors are merged by event identity. The
+// earliest known kickoff wins the displayed metadata, while live status is
+// merged so the retained card remains current when providers refresh at
+// slightly different times.
+function dedupeProviderEntries(entries, nowMs = Date.now()) {
   const result = [];
-  for (const entry of entries) {
-    const existing = result.find((candidate) => sameProviderEvent(candidate, entry));
+  for (const entry of entries.map((value) => normalizeProviderEntry(value, nowMs))) {
+    const existingIndex = result.findIndex((candidate) =>
+      sameProviderEvent(candidate, entry));
+    const existing = existingIndex === -1 ? null : result[existingIndex];
     if (existing == null) {
       result.push(entry);
       continue;
     }
-    if (entry.live) {
-      existing.live = true;
-      if (existing.item?.schedule != null) existing.item.schedule.state = 'live';
+
+    const existingStart = providerEntryStartMs(existing);
+    const entryStart = providerEntryStartMs(entry);
+    const preferEntry = entryStart != null &&
+      (existingStart == null || entryStart < existingStart);
+    const merged = preferEntry ? { ...entry } : { ...existing };
+    merged.live = existing.live || entry.live;
+    if (merged.item?.schedule != null) {
+      merged.item = {
+        ...merged.item,
+        schedule: {
+          ...merged.item.schedule,
+          state: merged.live ? 'live' : 'scheduled',
+        },
+      };
     }
+    result[existingIndex] = merged;
   }
   return result;
 }
@@ -951,6 +1070,8 @@ function buildPage(
   requireLiveProviderMatches = false,
   knownFotmobMatches = matches,
 ) {
+  providerEntries = providerEntries.map((entry) =>
+    normalizeProviderEntry(entry, nowMs));
   const selected = query.subCategory == null
     ? null
     : sportIdOf(query.subCategory);
@@ -1014,7 +1135,7 @@ function buildPage(
     return {
       sections: items.length === 0
         ? []
-        : [{ id: 'live', title: 'Live', items }],
+        : [{ id: 'live', title: 'Live Now', items }],
       subCategories,
     };
   }
@@ -1080,7 +1201,7 @@ async function fixturesCatalog(query) {
     ...providerEntries,
     ...fctvEntries,
     ...roxieEntries,
-  ]);
+  ], nowMs);
   if (live) {
     providerEntries = providerEntries.filter((entry) => entry.live);
   }
@@ -5235,6 +5356,30 @@ async function cricfySources(args) {
       return { sources: await cricfySourcesForEvent(event) };
     } catch (_) {
       return { sources: [] };
+    }
+  }
+
+  // A shared catalog card may keep Roxie's or another provider's stable id.
+  // Generic events such as Formula 1 have no participants, so recover the
+  // Cricfy event by its canonical catalog title before declining the item.
+  const titleKey = typeof catalogTitleKey === 'function'
+    ? catalogTitleKey
+    : (value) => String(value || '').trim().toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/\bformula one\b|\bf1\b/g, 'formula 1')
+        .replace(/\bmoto gp\b/g, 'motogp')
+        .trim();
+  const itemTitle = titleKey(item.title);
+  if (itemTitle.length > 0) {
+    const event = events.find((candidate) =>
+      titleKey(candidate.eventName) === itemTitle);
+    if (event) {
+      try {
+        return { sources: await cricfySourcesForEvent(event) };
+      } catch (_) {
+        return { sources: [] };
+      }
     }
   }
 
@@ -15743,7 +15888,11 @@ function timesoccerHasNextPage(response, page, rawPosts) {
 }
 
 async function timesoccerCatalog(query) {
-  if (query.category !== 'all' && query.category !== 'sport') {
+  if (
+    query.category !== 'all' &&
+    query.category !== 'sport' &&
+    query.category !== 'schedule'
+  ) {
     return { sections: [] };
   }
   const requestedPage = query.page == null ? 1 : Number(query.page);
@@ -16758,6 +16907,13 @@ function roxieSportName(event) {
   return 'Other Live Sports';
 }
 
+function roxieCatalogTitleKey(value) {
+  if (typeof catalogTitleKey === 'function') return catalogTitleKey(value);
+  return roxieNormalize(value)
+    .replace(/\bformula one\b|\bf1\b/g, 'formula 1')
+    .replace(/\bmoto gp\b/g, 'motogp');
+}
+
 function roxieEventDedupeKey(event) {
   if (!event.teamA || !event.teamB) {
     return `generic:${event.pagePath}:${roxieNormalize(event.title)}`;
@@ -16795,9 +16951,9 @@ function roxieCatalogId(event) {
 
 function roxieCatalogEntry(event, nowMs = Date.now()) {
   const startsAt = Date.parse(event.startsAt);
-  const state = event.live === true
-    ? 'live'
-    : roxieCountdownState(event, nowMs);
+  // The event page countdown is the source of truth. A stale `live` flag from
+  // an index/cache must not promote a future event into the Live catalog.
+  const state = roxieCountdownState(event, nowMs);
   const live = state === 'live';
   const item = {
     ref: {
@@ -16808,10 +16964,12 @@ function roxieCatalogEntry(event, nowMs = Date.now()) {
     kind: 'event',
     title: event.title,
     subtitle: roxieSportName(event),
-    schedule: {
-      startsAt: new Date(startsAt).toISOString(),
-      state,
-    },
+    schedule: typeof eventSchedule === 'function'
+      ? eventSchedule(startsAt, state, roxieSportName(event), event.title)
+      : {
+          startsAt: new Date(startsAt).toISOString(),
+          state,
+        },
   };
   if (event.teamA && event.teamB) {
     item.participants = [{ name: event.teamA }, { name: event.teamB }];
@@ -16911,8 +17069,9 @@ async function roxieSources(args) {
     }
     event = result && events[result.index];
   } else {
-    const title = roxieNormalize(item.title);
-    event = events.find((candidate) => roxieNormalize(candidate.title) === title);
+    const title = roxieCatalogTitleKey(item.title);
+    event = events.find((candidate) =>
+      roxieCatalogTitleKey(candidate.title) === title);
   }
   if (!event) return { sources: [] };
 

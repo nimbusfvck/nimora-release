@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.33",
+      "version": "1.0.34",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed duplicate football matches caused by abbreviated provider team names, renamed the Home live shelf to Live Now, and renamed the Sport category to Schedule.",
         "Added RoxieStreams as a source-only sports provider: its countdown determines live/upcoming status, unmatched events can be added, and FotMob remains the Football SSOT.",
         "Disabled FCTV33 Live Events because its provider CDN rejects the app playback path with HTTP 403.",
         "Fixed FCTV playback by matching the web token flow: decoding obfuscated stream URLs, creating the rb-session AES-CBC token URL, validating playlist media, and retrying fallback edges.",
@@ -49,7 +50,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "6efd7a1412db1e5cfd307fa4962348c09a3e49efa9188f40b296785595bee7cf"
+      "bundleSha256": "d801458645be1cd565c3c3f7dc5986a4f0e04744bfcbd58ea755387a7deac20e"
     }
   ]
 }

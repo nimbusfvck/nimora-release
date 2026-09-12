@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.44",
+  "version": "1.0.45",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -10,7 +10,7 @@
   "categories": [
     "all",
     "live",
-    "sport",
+    "schedule",
     "movie",
     "tv",
     "anime",
@@ -19,26 +19,26 @@
   "providers": [
     {
       "id": "nimora.matches",
-      "name": "Live Sport & Event",
+      "name": "Live Now",
       "roles": [
         "catalog"
       ],
       "catalogs": [
         {
           "id": "fixtures",
-          "name": "Live Sport & Event",
+          "name": "Live Now",
           "categories": [
             "all",
             "live",
-            "sport"
+            "schedule"
           ],
           "kind": "liveEvent",
           "display": "row"
         },
         {
           "id": "timesoccer",
-          "name": "Live Sport & Event",
-          "categories": ["sport"],
+          "name": "Time Soccer TV",
+          "categories": ["schedule"],
           "kind": "movie",
           "display": "row"
         }
