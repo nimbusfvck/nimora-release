@@ -1,7 +1,8 @@
 // Football fixtures catalog, as a JS extension.
 //
-// Sourced from FotMob's daily match feed for schedule and live status. Stream
-// providers only resolve a selected event and never create catalog metadata.
+// Sourced from FotMob's daily match feed for schedule and live status. A small
+// set of provider-only contributors may add missing live events, while stream
+// providers still resolve the selected event independently.
 //
 // The host provides: `fetch(url, options)` -> Promise<{status, headers, url,
 // body}>. Nothing else — no fs, no process, no ambient network.
@@ -600,6 +601,7 @@ function byDateItems(items, nowMs) {
 const FOOTBALL = { id: 'football', name: 'Football' };
 const TENNIS = { id: 'tennis', name: 'Tennis' };
 const MOTORSPORT = { id: 'motorsport', name: 'Motorsport' };
+const FIGHTING = { id: 'fighting', name: 'Fighting' };
 const BADMINTON = { id: 'badminton', name: 'Badminton' };
 const BASKETBALL = { id: 'basketball', name: 'Basketball' };
 const VOLLEYBALL = { id: 'volleyball', name: 'Volleyball' };
@@ -614,6 +616,7 @@ const SPORT_SECTION_ORDER = [
   FOOTBALL,
   TENNIS,
   MOTORSPORT,
+  FIGHTING,
   BADMINTON,
   BASKETBALL,
   VOLLEYBALL,
@@ -627,6 +630,18 @@ function sportIdOf(name) {
   }
   if (value.includes('tennis') || /\batp\b|\bwta\b/.test(value)) {
     return TENNIS.id;
+  }
+  if (
+    value.includes('fighting') ||
+    value.includes('boxing') ||
+    value.includes('mma') ||
+    value.includes('ufc') ||
+    value.includes('wwe') ||
+    value.includes('wrestling') ||
+    value.includes('combat') ||
+    value.includes('kickboxing')
+  ) {
+    return FIGHTING.id;
   }
   if (
     value.includes('motorsport') ||
@@ -682,20 +697,46 @@ function footballNameKey(value) {
     .trim();
 }
 
-function footballParticipantsKey(item) {
-  if (!Array.isArray(item?.participants) || item.participants.length !== 2) {
-    return null;
+const AMBIGUOUS_FOOTBALL_NAMES = new Set([
+  'united', 'city', 'town', 'rovers', 'wanderers', 'albion', 'athletic',
+  'county', 'real', 'atletico', 'sporting', 'dynamo', 'racing', 'olympique',
+]);
+
+function footballNameMatches(first, second) {
+  if (first === second) return true;
+  const shorter = first.length <= second.length ? first : second;
+  const longer = first.length <= second.length ? second : first;
+  if (
+    shorter.length < 5 ||
+    AMBIGUOUS_FOOTBALL_NAMES.has(shorter)
+  ) {
+    return false;
   }
-  const names = item.participants
-    .map((participant) => footballNameKey(participant?.name))
-    .filter((name) => name.length > 0);
-  return names.length === 2 ? names.sort().join('|') : null;
+  return longer.startsWith(`${shorter} `) || longer.endsWith(` ${shorter}`);
+}
+
+function footballParticipantsMatch(first, second) {
+  if (!Array.isArray(first?.participants) ||
+      !Array.isArray(second?.participants) ||
+      first.participants.length !== 2 ||
+      second.participants.length !== 2) {
+    return false;
+  }
+  const firstNames = first.participants.map((participant) =>
+    footballNameKey(participant?.name));
+  const secondNames = second.participants.map((participant) =>
+    footballNameKey(participant?.name));
+  return (
+    footballNameMatches(firstNames[0], secondNames[0]) &&
+    footballNameMatches(firstNames[1], secondNames[1])
+  ) || (
+    footballNameMatches(firstNames[0], secondNames[1]) &&
+    footballNameMatches(firstNames[1], secondNames[0])
+  );
 }
 
 function sameFootballEvent(first, second) {
-  const firstKey = footballParticipantsKey(first);
-  const secondKey = footballParticipantsKey(second);
-  if (firstKey == null || firstKey !== secondKey) return false;
+  if (!footballParticipantsMatch(first, second)) return false;
   const firstKickoff = Date.parse(first.schedule?.startsAt);
   const secondKickoff = Date.parse(second.schedule?.startsAt);
   return Number.isFinite(firstKickoff) && Number.isFinite(secondKickoff) &&
@@ -708,14 +749,32 @@ function isFootballEntry(entry) {
 
 // FotMob remains the canonical metadata source. Provider-only football events
 // are appended after it, and any matching provider event is discarded so the
-// FotMob title, branding, participants, and editorial ranking win.
-function footballCatalogItems(matches, entries, nowMs, brandingByLeague) {
-  const items = matches
+// FotMob title, branding, participants, status, and editorial ranking win.
+function footballCatalogItems(
+  matches,
+  entries,
+  nowMs,
+  brandingByLeague,
+  requireProviderMatch = false,
+  knownFotmobMatches = matches,
+) {
+  let items = matches
     .map((match) => toMediaItem(match, nowMs, brandingByLeague))
     .filter((item) => item != null);
+  const knownFotmobItems = knownFotmobMatches
+    .map((match) => toMediaItem(match, nowMs, brandingByLeague))
+    .filter((item) => item != null);
+  if (requireProviderMatch) {
+    items = items.filter((item) =>
+      entries.some((entry) => sameFootballEvent(item, entry.item)));
+  }
   for (const entry of entries.filter(isFootballEntry)) {
     const item = entry.item;
-    if (item == null || items.some((existing) => sameFootballEvent(existing, item))) {
+    if (
+      item == null ||
+      knownFotmobItems.some((existing) => sameFootballEvent(existing, item)) ||
+      items.some((existing) => sameFootballEvent(existing, item))
+    ) {
       continue;
     }
     items.push(item);
@@ -819,11 +878,62 @@ async function getFctvSportEntries(nowMs) {
   }
 }
 
-function sportsOf(matches, cricfyEntries) {
+async function getRoxieSportEntries(nowMs) {
+  if (typeof globalThis.__roxieSportEntries !== 'function') return [];
+  try {
+    return await globalThis.__roxieSportEntries(nowMs);
+  } catch (_) {
+    return [];
+  }
+}
+
+function catalogTitleKey(value) {
+  return `${value || ''}`
+    .toLowerCase()
+    .replace(/&amp;/g, '&')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sameProviderEvent(first, second) {
+  const firstKickoff = Date.parse(first.item?.schedule?.startsAt);
+  const secondKickoff = Date.parse(second.item?.schedule?.startsAt);
+  if (!Number.isFinite(firstKickoff) || !Number.isFinite(secondKickoff)) {
+    return false;
+  }
+  const sameTeams = footballParticipantsMatch(first.item, second.item);
+  const sameTitle = catalogTitleKey(first.item?.title) ===
+    catalogTitleKey(second.item?.title);
+  return (sameTeams || sameTitle) &&
+    Math.abs(firstKickoff - secondKickoff) <= FOOTBALL_DEDUPE_WINDOW_MS;
+}
+
+// Provider-backed catalog contributors are intentionally ordered before Roxie
+// so an existing item keeps its original metadata and stable identity. A
+// contributor can still mark that retained item live when it has fresher
+// status for the same event.
+function dedupeProviderEntries(entries) {
+  const result = [];
+  for (const entry of entries) {
+    const existing = result.find((candidate) => sameProviderEvent(candidate, entry));
+    if (existing == null) {
+      result.push(entry);
+      continue;
+    }
+    if (entry.live) {
+      existing.live = true;
+      if (existing.item?.schedule != null) existing.item.schedule.state = 'live';
+    }
+  }
+  return result;
+}
+
+function sportsOf(matches, providerEntries) {
   const sports = [];
   const available = new Set();
   if (matches.length > 0) available.add(FOOTBALL.id);
-  for (const entry of cricfyEntries) {
+  for (const entry of providerEntries) {
     available.add(sportIdOf(entry.sportName || entry.sportId));
   }
   for (const sport of SPORT_SECTION_ORDER) {
@@ -832,21 +942,36 @@ function sportsOf(matches, cricfyEntries) {
   return sports;
 }
 
-function buildPage(query, matches, cricfyEntries, nowMs, brandingByLeague) {
+function buildPage(
+  query,
+  matches,
+  providerEntries,
+  nowMs,
+  brandingByLeague,
+  requireLiveProviderMatches = false,
+  knownFotmobMatches = matches,
+) {
   const selected = query.subCategory == null
     ? null
     : sportIdOf(query.subCategory);
-  const subCategories = sportsOf(matches, cricfyEntries);
+  const subCategories = sportsOf(matches, providerEntries);
 
   if (selected === FOOTBALL.id) {
-    const liveProviderEntries = query.category === LIVE_CATEGORY
-      ? cricfyEntries
-      : query.category === ALL_CATEGORY
-        ? cricfyEntries.filter((entry) => entry.live)
-        : [];
+    const requireProviderMatch = requireLiveProviderMatches &&
+      (query.category === LIVE_CATEGORY || query.category === ALL_CATEGORY);
+    const footballProviderEntries = query.category === ALL_CATEGORY
+      ? providerEntries.filter((entry) => entry.live)
+      : providerEntries;
     return {
       sections: byDateItems(
-        footballCatalogItems(matches, liveProviderEntries, nowMs, brandingByLeague),
+        footballCatalogItems(
+          matches,
+          footballProviderEntries,
+          nowMs,
+          brandingByLeague,
+          requireProviderMatch,
+          knownFotmobMatches,
+        ),
         nowMs,
       ),
       subCategories,
@@ -854,7 +979,7 @@ function buildPage(query, matches, cricfyEntries, nowMs, brandingByLeague) {
   }
 
   if (selected != null) {
-    const entries = cricfyEntries.filter(
+    const entries = providerEntries.filter(
       (entry) => sportIdOf(entry.sportName || entry.sportId) === selected,
     );
     return {
@@ -870,16 +995,19 @@ function buildPage(query, matches, cricfyEntries, nowMs, brandingByLeague) {
   }
 
   if (query.category === ALL_CATEGORY) {
+    const liveProviderEntries = providerEntries.filter((entry) => entry.live);
     const footballItems = footballCatalogItems(
       matches,
-      cricfyEntries,
+      liveProviderEntries,
       nowMs,
       brandingByLeague,
+      requireLiveProviderMatches,
+      knownFotmobMatches,
     ).filter((item) => item.schedule?.state === 'live');
 
     const items = [
       ...footballItems,
-      ...cricfyEntries
+      ...providerEntries
         .filter((entry) => entry.live && !isFootballEntry(entry))
         .map((entry) => entry.item),
     ];
@@ -894,16 +1022,18 @@ function buildPage(query, matches, cricfyEntries, nowMs, brandingByLeague) {
   const sections = [];
   const footballItems = footballCatalogItems(
     matches,
-    query.category === LIVE_CATEGORY ? cricfyEntries : [],
+    providerEntries,
     nowMs,
     brandingByLeague,
+    requireLiveProviderMatches && query.category === LIVE_CATEGORY,
+    knownFotmobMatches,
   );
   if (footballItems.length > 0) {
     sections.push({ id: `sport:${FOOTBALL.id}`, title: FOOTBALL.name, items: footballItems });
   }
   for (const sport of subCategories) {
     if (sport.id === FOOTBALL.id) continue;
-    const items = cricfyEntries
+    const items = providerEntries
       .filter(
         (entry) => sportIdOf(entry.sportName || entry.sportId) === sport.id,
       )
@@ -923,9 +1053,10 @@ async function fixturesCatalog(query) {
   // and the other catalog entries are judged against the same "now".
   const nowMs = Date.now();
 
-  let [matches, popularLeagues] = await Promise.all([
+  let [matches, popularLeagues, roxieEntries] = await Promise.all([
     fetchFixturesMemo(nowMs),
     fetchPopularLeaguesMemo(),
+    getRoxieSportEntries(nowMs),
   ]);
   matches = matches
     .filter(
@@ -936,20 +1067,33 @@ async function fixturesCatalog(query) {
     );
   matches = filterPopularMatches(matches, popularLeagues);
   matches = prioritizeTopClubMatches(matches);
+  const knownFotmobMatches = matches;
   if (live) {
     matches = matches.filter((match) => isMatchLive(match, nowMs));
   }
 
   const brandingByLeague = await leagueBrandingFor(matches);
 
-  let cricfyEntries = await getCricfySportEntries(nowMs);
+  let providerEntries = await getCricfySportEntries(nowMs);
   const fctvEntries = await getFctvSportEntries(nowMs);
-  cricfyEntries = [...cricfyEntries, ...fctvEntries];
+  providerEntries = dedupeProviderEntries([
+    ...providerEntries,
+    ...fctvEntries,
+    ...roxieEntries,
+  ]);
   if (live) {
-    cricfyEntries = cricfyEntries.filter((entry) => entry.live);
+    providerEntries = providerEntries.filter((entry) => entry.live);
   }
 
-  return buildPage(query, matches, cricfyEntries, nowMs, brandingByLeague);
+  return buildPage(
+    query,
+    matches,
+    providerEntries,
+    nowMs,
+    brandingByLeague,
+    true,
+    knownFotmobMatches,
+  );
 }
 
 // Registers into `__catalogProviders` rather than assigning
@@ -16358,6 +16502,489 @@ globalThis.__streamProviders.push({
   providerKey: PLAYZ_PROVIDER_KEY,
   sources: playzSources,
   resolve: playzResolve,
+});
+
+// RoxieStreams live-event source provider.
+//
+// RoxieStreams publishes event pages separately from its stream host list.
+// Roxie contributes missing items to the existing Nimora live-event catalog,
+// but does not declare a separate user-facing catalog. Its current event page
+// and domain list are fetched again when a source is resolved.
+
+const ROXIE_PROVIDER_ID = 'nimora.roxie';
+const ROXIE_PROVIDER_KEY = 'roxie';
+const ROXIE_ORIGIN = 'https://roxiestreams.su';
+const ROXIE_HOME_PATH = '/';
+const ROXIE_INDEX_PATH = '/soccer';
+const ROXIE_DOMAINS_PATH = '/domainsz74.txt';
+const ROXIE_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const ROXIE_RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+// countdownfinal2.js reparses the displayed local time as Pacific daylight
+// time before comparing it with Date.now(). Keep the same fixed offset here;
+// the source page currently uses -07:00 for both its countdown and localized
+// start-time display.
+const ROXIE_COUNTDOWN_OFFSET = '-07:00';
+const ROXIE_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
+
+// Keep Roxie's matching independent from the full profile's Kora source.
+// Compact bundles do not include kora.js, but both profiles still need to
+// match Roxie soccer broadcasts against FotMob's existing match items.
+const ROXIE_MATCH_PROFILE = {
+  aliases: {
+    'man utd': 'manchester united',
+    'man united': 'manchester united',
+    'man city': 'manchester city',
+    spurs: 'tottenham hotspur',
+    psg: 'paris saint germain',
+    barca: 'barcelona',
+    inter: 'internazionale',
+    juve: 'juventus',
+    atleti: 'atletico madrid',
+    'athletic club': 'athletic bilbao',
+    wolves: 'wolverhampton wanderers',
+    'west brom': 'west bromwich albion',
+    'west bromwich': 'west bromwich albion',
+    'deportivo a coruna': 'deportivo la coruna',
+  },
+  stopTokens: ['fc', 'afc', 'cf', 'sc', 'ac', 'cd', 'club'],
+  ambiguousAlone: [
+    'united', 'city', 'town', 'rovers', 'wanderers', 'albion', 'athletic',
+    'county', 'real', 'atletico', 'sporting', 'dynamo', 'racing', 'olympique',
+  ],
+};
+
+function roxieText(value) {
+  return value == null ? '' : String(value).trim();
+}
+
+function roxieOrigin() {
+  return roxieText(globalThis.__roxieOrigin) || ROXIE_ORIGIN;
+}
+
+function roxiePageUrl(path) {
+  const target = roxieText(path);
+  if (/^https?:\/\//i.test(target)) return target;
+  return `${roxieOrigin().replace(/\/+$/, '')}/${target.replace(/^\/+/, '')}`;
+}
+
+async function roxieFetch(path, options) {
+  const response = await fetch(roxiePageUrl(path), options || {});
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`RoxieStreams request failed: ${response.status}`);
+  }
+  return response;
+}
+
+function roxieResponseText(response) {
+  return response && typeof response.body === 'string' ? response.body : '';
+}
+
+function roxieDecodeEntities(value) {
+  return roxieText(value)
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&nbsp;/gi, ' ');
+}
+
+function roxieStripHtml(value) {
+  return roxieDecodeEntities(
+    roxieText(value)
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' '),
+  );
+}
+
+function roxieNormalize(value) {
+  let text = roxieDecodeEntities(value).toLowerCase();
+  try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (_) {}
+  return text.replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function roxieDate(value) {
+  const text = roxieText(value);
+  if (!text) return null;
+  const localDate = text.match(
+    /^(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:,)?\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:AM|PM)$/i,
+  );
+  // The raw Roxie table has no timezone. Append the same offset used by its
+  // countdown script instead of inheriting the extension runtime timezone.
+  const timestamp = Date.parse(
+    localDate == null ? text : `${text}${ROXIE_COUNTDOWN_OFFSET}`,
+  );
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+function roxieDateInContext(body, start, end) {
+  const rowStart = body.lastIndexOf('<tr', start);
+  const rowClose = body.indexOf('</tr>', end);
+  const context = rowStart !== -1 && rowClose !== -1
+    ? body.slice(rowStart, rowClose)
+    : body.slice(Math.max(0, start - 700), Math.min(body.length, end + 700));
+  const text = roxieStripHtml(context);
+  const dateMatch = text.match(
+    /\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:,)?\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:AM|PM)\b/i,
+  );
+  return roxieDate(dateMatch && dateMatch[0]);
+}
+
+function roxieParseIndex(html) {
+  const body = roxieText(html);
+  const events = [];
+  const linkPattern = /<a\b[^>]*href\s*=\s*["'](\/soccer-streams-[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = linkPattern.exec(body)) != null) {
+    const title = roxieStripHtml(match[2]);
+    const sides = title.split(/\s+vs\.?\s+/i).map(roxieText);
+    if (sides.length !== 2 || !sides[0] || !sides[1]) continue;
+
+    events.push({
+      pagePath: match[1],
+      title,
+      teamA: sides[0],
+      teamB: sides[1],
+      startsAt: roxieDateInContext(body, match.index, linkPattern.lastIndex),
+    });
+  }
+  return events;
+}
+
+function roxieParseGenericIndex(html) {
+  const body = roxieText(html);
+  const events = [];
+  const linkPattern = /<a\b[^>]*href\s*=\s*["'](\/(?:ppv-streams-\d+|f1|nfl|ufc|tennis-\d+))["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = linkPattern.exec(body)) != null) {
+    const title = roxieStripHtml(match[2]);
+    if (!title) continue;
+    events.push({
+      pagePath: match[1],
+      title,
+      teamA: '',
+      teamB: '',
+      startsAt: roxieDateInContext(body, match.index, linkPattern.lastIndex),
+    });
+  }
+  return events;
+}
+
+function roxieParseStreamPage(html) {
+  const match = /getRandomStream\s*\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*\)/i.exec(roxieText(html));
+  if (!match) return null;
+  return {
+    streamPath: match[1].trim(),
+    subdomain: match[2].trim(),
+  };
+}
+
+function roxieParseDomains(value) {
+  const domains = [];
+  for (const line of roxieText(value).split(/\r?\n/)) {
+    const domain = line
+      .trim()
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/.*$/, '');
+    if (!domain || !/^[a-z0-9.-]+(?::\d+)?$/i.test(domain)) continue;
+    if (!domains.includes(domain)) domains.push(domain);
+  }
+  return domains;
+}
+
+function roxieSourceId(payload) {
+  return `${ROXIE_PROVIDER_KEY}:${host.codec.textToBase64(JSON.stringify(payload))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '')}`;
+}
+
+function roxieFromSourceId(sourceId) {
+  const prefix = `${ROXIE_PROVIDER_KEY}:`;
+  if (!roxieText(sourceId).startsWith(prefix)) {
+    throw new Error(`Invalid RoxieStreams source id: ${sourceId}`);
+  }
+  let encoded = sourceId.slice(prefix.length).replace(/-/g, '+').replace(/_/g, '/');
+  while (encoded.length % 4) encoded += '=';
+  const payload = JSON.parse(host.codec.base64ToText(encoded));
+  if (!payload || !payload.p || !payload.s || !payload.h || !payload.d) {
+    throw new Error('Invalid RoxieStreams source payload');
+  }
+  return payload;
+}
+
+function roxieStreamUrl(subdomain, domain, streamPath) {
+  const override = roxieText(globalThis.__roxieStreamBaseUrl);
+  if (override) {
+    return `${override.replace(/\/+$/, '')}/${roxieText(streamPath).replace(/^\/+/, '')}`;
+  }
+  const scheme = /^https:/i.test(roxieOrigin()) ? 'https' : 'http';
+  return `${scheme}://${roxieText(subdomain)}.${roxieText(domain)}/${roxieText(streamPath).replace(/^\/+/, '')}`;
+}
+
+async function roxieLoadEvents() {
+  const response = await roxieFetch(ROXIE_INDEX_PATH, {
+    headers: {
+      Accept: 'text/html,*/*;q=0.8',
+      Referer: `${roxieOrigin().replace(/\/+$/, '')}/`,
+      'User-Agent': ROXIE_UA,
+    },
+  });
+  return roxieParseIndex(roxieResponseText(response));
+}
+
+async function roxieLoadGenericEvents() {
+  const response = await roxieFetch(ROXIE_HOME_PATH, {
+    headers: {
+      Accept: 'text/html,*/*;q=0.8',
+      Referer: `${roxieOrigin().replace(/\/+$/, '')}/`,
+      'User-Agent': ROXIE_UA,
+    },
+  });
+  return roxieParseGenericIndex(roxieResponseText(response));
+}
+
+function roxieSportName(event) {
+  if (event.teamA && event.teamB) return 'Football';
+  if (/\/f1(?:$|-)/i.test(event.pagePath)) return 'Motorsport';
+  if (/\/tennis-/i.test(event.pagePath)) return 'Tennis';
+  const identity = roxieNormalize(`${event.title} ${event.pagePath}`);
+  if (
+    /ppv streams|ufc|boxing|mma|wwe|wrestling|fighting|combat|kickboxing|one samurai|one championship|fight night/.test(identity)
+  ) {
+    return 'Fighting';
+  }
+  return 'Other Live Sports';
+}
+
+function roxieEventDedupeKey(event) {
+  if (!event.teamA || !event.teamB) {
+    return `generic:${event.pagePath}:${roxieNormalize(event.title)}`;
+  }
+  return `football:${[event.teamA, event.teamB]
+    .map(roxieNormalize)
+    .sort()
+    .join('|')}:${event.startsAt}`;
+}
+
+function roxieEventIsRelevant(event, nowMs) {
+  const startsAt = Date.parse(event.startsAt);
+  if (!Number.isFinite(startsAt)) return false;
+  return startsAt - nowMs <= ROXIE_UPCOMING_WINDOW_MS &&
+    nowMs - startsAt <= ROXIE_RECENT_WINDOW_MS;
+}
+
+function roxieCountdownState(event, nowMs) {
+  const startsAt = Date.parse(event.startsAt);
+  if (!Number.isFinite(startsAt)) return 'scheduled';
+  return startsAt <= nowMs ? 'live' : 'scheduled';
+}
+
+function roxieCatalogId(event) {
+  const payload = {
+    p: event.pagePath,
+    t: roxieNormalize(event.title),
+    k: event.startsAt,
+  };
+  return `roxie:${host.codec.textToBase64(JSON.stringify(payload))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '')}`;
+}
+
+function roxieCatalogEntry(event, nowMs = Date.now()) {
+  const startsAt = Date.parse(event.startsAt);
+  const state = event.live === true
+    ? 'live'
+    : roxieCountdownState(event, nowMs);
+  const live = state === 'live';
+  const item = {
+    ref: {
+      extensionId: globalThis.__nimoraExtensionId || 'nimora',
+      providerId: 'nimora.matches',
+      id: roxieCatalogId(event),
+    },
+    kind: 'event',
+    title: event.title,
+    subtitle: roxieSportName(event),
+    schedule: {
+      startsAt: new Date(startsAt).toISOString(),
+      state,
+    },
+  };
+  if (event.teamA && event.teamB) {
+    item.participants = [{ name: event.teamA }, { name: event.teamB }];
+  }
+  return {
+    sportId: roxieSportName(event),
+    sportName: roxieSportName(event),
+    live,
+    item,
+  };
+}
+
+async function roxieSportEntries(nowMs) {
+  const [soccer, generic] = await Promise.all([
+    roxieLoadEvents().catch(() => []),
+    roxieLoadGenericEvents().catch(() => []),
+  ]);
+  const seen = new Set();
+  return [...soccer, ...generic]
+    .filter((event) => roxieEventIsRelevant(event, nowMs))
+    .filter((event) => {
+      const key = roxieEventDedupeKey(event);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((event) => roxieCatalogEntry(event, nowMs));
+}
+
+async function roxieLoadStream(event) {
+  const response = await roxieFetch(event.pagePath, {
+    headers: {
+      Accept: 'text/html,*/*;q=0.8',
+      Referer: `${roxieOrigin().replace(/\/+$/, '')}${ROXIE_INDEX_PATH}`,
+      'User-Agent': ROXIE_UA,
+    },
+  });
+  const stream = roxieParseStreamPage(roxieResponseText(response));
+  if (!stream || !stream.streamPath || !stream.subdomain) {
+    throw new Error('RoxieStreams event has no stream');
+  }
+  return stream;
+}
+
+async function roxieLoadDomains(referer) {
+  const response = await roxieFetch(ROXIE_DOMAINS_PATH, {
+    headers: {
+      Accept: 'text/plain,*/*;q=0.8',
+      Referer: `${roxieOrigin().replace(/\/+$/, '')}${roxieText(referer) || ROXIE_INDEX_PATH}`,
+      'User-Agent': ROXIE_UA,
+    },
+  });
+  return roxieParseDomains(roxieResponseText(response));
+}
+
+async function roxieSources(args) {
+  if (args.enabledProviders != null && !args.enabledProviders.includes(ROXIE_PROVIDER_ID)) {
+    return { sources: [] };
+  }
+  const item = args.item || {};
+  if (!item.ref || item.ref.providerId !== 'nimora.matches') return { sources: [] };
+  let events;
+  try {
+    if (Array.isArray(item.participants) && item.participants.length === 2) {
+      events = await roxieLoadEvents();
+    } else if (roxieText(item.title)) {
+      events = await roxieLoadGenericEvents();
+    } else {
+      return { sources: [] };
+    }
+  } catch (_) {
+    return { sources: [] };
+  }
+  if (events.length === 0) return { sources: [] };
+
+  let event;
+  if (Array.isArray(item.participants) && item.participants.length === 2) {
+    let result;
+    try {
+      result = host.match.resolve(
+        {
+          teamA: item.participants[0].name,
+          teamB: item.participants[1].name,
+          teamAShort: item.participants[0].shortName || null,
+          teamBShort: item.participants[1].shortName || null,
+          kickoff: item.schedule ? item.schedule.startsAt : null,
+        },
+        events.map((candidate) => ({
+          teamA: candidate.teamA,
+          teamB: candidate.teamB,
+          startsAt: candidate.startsAt,
+        })),
+        { profile: ROXIE_MATCH_PROFILE },
+      );
+    } catch (_) {
+      return { sources: [] };
+    }
+    event = result && events[result.index];
+  } else {
+    const title = roxieNormalize(item.title);
+    event = events.find((candidate) => roxieNormalize(candidate.title) === title);
+  }
+  if (!event) return { sources: [] };
+
+  try {
+    const stream = await roxieLoadStream(event);
+    const domains = await roxieLoadDomains(event.pagePath);
+    return {
+      sources: domains.map((domain) => ({
+        id: roxieSourceId({
+          p: event.pagePath,
+          s: stream.streamPath,
+          h: stream.subdomain,
+          d: domain,
+        }),
+        label: `RoxieStreams · ${domain}`,
+        provider: 'Nimora',
+        providerId: ROXIE_PROVIDER_ID,
+      })),
+    };
+  } catch (_) {
+    return { sources: [] };
+  }
+}
+
+async function roxieResolve(sourceId) {
+  const payload = roxieFromSourceId(sourceId);
+  const eventResponse = await roxieFetch(payload.p, {
+    headers: {
+      Accept: 'text/html,*/*;q=0.8',
+      Referer: `${roxieOrigin().replace(/\/+$/, '')}${ROXIE_INDEX_PATH}`,
+      'User-Agent': ROXIE_UA,
+    },
+  });
+  const stream = roxieParseStreamPage(roxieResponseText(eventResponse));
+  if (!stream || stream.streamPath !== payload.s || stream.subdomain !== payload.h) {
+    throw new Error('RoxieStreams event stream changed; refresh sources');
+  }
+
+  const domains = await roxieLoadDomains(payload.p);
+  if (!domains.includes(payload.d)) {
+    throw new Error('RoxieStreams stream domain is no longer available');
+  }
+
+  const origin = roxieOrigin().replace(/\/+$/, '');
+  const headers = {
+    Accept: '*/*',
+    Origin: origin,
+    Referer: `${origin}${payload.p}`,
+    'User-Agent': ROXIE_UA,
+  };
+  const url = roxieStreamUrl(payload.h, payload.d, payload.s);
+  const response = await fetch(url, { headers });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`RoxieStreams playback request failed: ${response.status}`);
+  }
+  if (!roxieResponseText(response).startsWith('#EXTM3U')) {
+    throw new Error('RoxieStreams returned an invalid HLS manifest');
+  }
+  return {
+    url,
+    headers,
+    format: 'hls',
+    label: `RoxieStreams · ${payload.d}`,
+  };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__roxieSportEntries = roxieSportEntries;
+globalThis.__streamProviders.push({
+  providerKey: ROXIE_PROVIDER_KEY,
+  sources: roxieSources,
+  resolve: roxieResolve,
 });
 
 // League channel catalog.
