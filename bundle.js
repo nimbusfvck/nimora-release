@@ -1325,132 +1325,6 @@ function sourceQuality(value) {
   return numeric == null ? normalized.toUpperCase() : `${numeric[1]}p`;
 }
 
-// Cross-source anime title aliases.
-//
-// Catalog providers keep a stable source ref, while streaming sites often use
-// a different title spelling. Harbor solves that by resolving the ref through
-// Anime Relations Mapping (Yuna) and then asking Jikan for MAL's full title
-// list. Keep this helper independent from any provider so every source can
-// reuse the same cached aliases.
-
-const ANIME_ALIAS_JIKAN_BASE =
-  globalThis.__animeAliasJikanBaseUrl || 'https://api.jikan.moe/v4';
-const ANIME_ALIAS_ARM_BASE =
-  globalThis.__animeAliasArmBaseUrl || 'https://relations.yuna.moe/api/ids';
-const ANIME_ALIAS_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const animeAliasCache = new Map();
-const animeAliasInflight = new Map();
-
-function animeAliasSourceRef(item) {
-  const id = item && item.ref && typeof item.ref.id === 'string'
-    ? item.ref.id : '';
-  let match = /^mal:(?:anime|episode):(\d+)(?::\d+)?$/i.exec(id);
-  if (match) return {source: 'mal', id: Number(match[1])};
-  match = /^anilist:(?:media|episode):(\d+)(?::\d+)?$/i.exec(id);
-  if (match) return {source: 'anilist', id: Number(match[1])};
-  match = /^kitsu:(?:anime|episode)?:?(\d+)$/i.exec(id);
-  if (match) return {source: 'kitsu', id: Number(match[1])};
-  match = /^anidb:(?:anime|episode)?:?(\d+)$/i.exec(id);
-  if (match) return {source: 'anidb', id: Number(match[1])};
-  return null;
-}
-
-function animeAliasBaseTitle(item) {
-  const extra = item && item.extra && typeof item.extra === 'object'
-    ? item.extra : {};
-  const value = extra.seriesTitle || (item && item.subtitle) || (item && item.title);
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-async function animeAliasJson(url) {
-  try {
-    const controller = typeof AbortController === 'function'
-      ? new AbortController() : null;
-    const timer = controller ? setTimeout(() => controller.abort(), 5000) : null;
-    const response = await fetch(url, controller ? {signal: controller.signal} : undefined);
-    if (timer) clearTimeout(timer);
-    if (response.status < 200 || response.status >= 300) return null;
-    return JSON.parse(response.body);
-  } catch (_) {
-    return null;
-  }
-}
-
-async function animeAliasMalId(source, id) {
-  if (source === 'mal') return id;
-  const url = `${ANIME_ALIAS_ARM_BASE}?source=${encodeURIComponent(source)}&id=${id}`;
-  const data = await animeAliasJson(url);
-  const mal = Number(data && data.mal);
-  return Number.isInteger(mal) && mal > 0 ? mal : null;
-}
-
-async function animeAliasTitlesForMal(malId) {
-  const data = await animeAliasJson(`${ANIME_ALIAS_JIKAN_BASE}/anime/${malId}`);
-  const anime = data && data.data;
-  if (!anime || typeof anime !== 'object') return [];
-  const titles = [];
-  const seen = new Set();
-  const add = (value) => {
-    const title = typeof value === 'string' ? value.trim() : '';
-    if (title && !seen.has(title.toLowerCase())) {
-      seen.add(title.toLowerCase());
-      titles.push(title);
-    }
-  };
-  add(anime.title_english);
-  add(anime.title);
-  add(anime.title_japanese);
-  for (const entry of Array.isArray(anime.titles) ? anime.titles : []) {
-    add(entry && entry.title);
-  }
-  return titles;
-}
-
-async function animeAliasTitles(item) {
-  const ref = animeAliasSourceRef(item);
-  if (!ref) return [];
-  const malId = await animeAliasMalId(ref.source, ref.id);
-  return malId == null ? [] : animeAliasTitlesForMal(malId);
-}
-
-async function animeTitleVariants(item) {
-  const original = animeAliasBaseTitle(item);
-  const key = item && item.ref && typeof item.ref.id === 'string'
-    ? item.ref.id : `title:${original.toLowerCase()}`;
-  const cached = animeAliasCache.get(key);
-  if (cached && Date.now() - cached.t < ANIME_ALIAS_TTL_MS) {
-    return cached.titles.slice();
-  }
-  const existing = animeAliasInflight.get(key);
-  if (existing) return existing;
-  const pending = (async () => {
-    const titles = [];
-    const seen = new Set();
-    const add = (value) => {
-      const title = typeof value === 'string' ? value.trim() : '';
-      if (title && !seen.has(title.toLowerCase())) {
-        seen.add(title.toLowerCase());
-        titles.push(title);
-      }
-    };
-    add(original);
-    try {
-      for (const title of await animeAliasTitles(item)) add(title);
-    } catch (_) {}
-    const value = titles.length > 0 ? titles : [original];
-    animeAliasCache.set(key, {titles: value, t: Date.now()});
-    return value.slice();
-  })();
-  animeAliasInflight.set(key, pending);
-  try {
-    return await pending;
-  } finally {
-    animeAliasInflight.delete(key);
-  }
-}
-
-globalThis.__animeTitleVariants = animeTitleVariants;
-
 // VaPlayer as a stream provider, over the host `fetch` API.
 //
 // Ported from CineStream's `invokeVaPlayer` (CineStreamExtractors.kt). The
@@ -4080,13 +3954,10 @@ const CRICFY_CONFIG_UA = 'Mozilla/5.0 Cricfy2/1.0';
 const CRICFY_PROVIDER_KEY = 'cricfy';
 const CRICFY_PROVIDER_ID = 'nimora.cricfy';
 
-// Cricfy's own API answers in ~20 s when it is having a bad day, well past
-// the engine-wide fetch budget every provider shares. Asking for more time
-// on *these* calls only (see JsEngine's `timeoutMs`) keeps the fan-out to
-// every other provider as tight as it was: this is the one host that needs
-// it, so it is the only one that gets it. A host too old to know the option
-// ignores it and times out as before.
-const CRICFY_CONTENT_TIMEOUT_MS = 30 * 1000;
+// Catalog data is optional. Keep both the configured API and the fallback
+// attempt inside the app's discovery budget; a slow Cricfy endpoint must not
+// hide sources from Roxie or the other providers.
+const CRICFY_CONTENT_TIMEOUT_MS = 8 * 1000;
 
 // The event list, kept across app launches (see `host.storage`). A cold
 // start would otherwise have to wait out that same slow call before it could
@@ -4606,7 +4477,16 @@ async function cricfyValidatePlaybackManifest(url, { headers, format }) {
 let cricfyConfigCache = null;
 
 async function cricfyGetText(url, headers, timeoutMs) {
-  const response = await fetch(url, { headers, timeoutMs: timeoutMs || null });
+  // A Cloudflare challenge on Cricfy's catalog API must not block the whole
+  // discovery fan-out. Catalog data is optional and can fall back to the
+  // persisted event cache; playback sources use their own request path below.
+  const response = await fetch(url, {
+    headers: {
+      ...headers,
+      'x-qjsr-disable-cloudflare': '1',
+    },
+    timeoutMs: timeoutMs || null,
+  });
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`Cricfy request failed: ${response.status}`);
   }
@@ -6315,297 +6195,6 @@ if (!globalThis.__extension.sources) {
   };
 }
 
-// Jikan/MAL anime catalogue helpers.
-//
-// The highlights catalogue owns the row layout, while this file owns the
-// anime data source. Jikan is a read-only wrapper around MyAnimeList data, so
-// the catalogue deliberately exposes MAL identities and does not copy any
-// third-party rating into the protocol item.
-
-const JIKAN_BASE = globalThis.__jikanBaseUrl || 'https://api.jikan.moe/v4';
-const JIKAN_PROVIDER_ID = 'nimora.jikan';
-const JIKAN_PER_PAGE = 25;
-const JIKAN_HOME_PAGES = Number.isInteger(globalThis.__jikanHomePages)
-  ? globalThis.__jikanHomePages
-  : 1;
-const JIKAN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const JIKAN_CACHE_STORAGE_KEY = 'nimora.jikan.catalog.v1';
-const JIKAN_MIN_INTERVAL_MS = 400;
-const JIKAN_MAX_ATTEMPTS = 4;
-
-const jikanCache = new Map();
-const jikanInflight = new Map();
-let jikanQueue = Promise.resolve();
-let jikanNextRequestAt = 0;
-
-function jikanStorage() {
-  return typeof host === 'object' && host !== null && host.storage
-    ? host.storage : null;
-}
-
-function jikanRestoreCache() {
-  const storage = jikanStorage();
-  if (storage === null) return;
-  let raw;
-  try { raw = storage.read(JIKAN_CACHE_STORAGE_KEY); } catch (_) { return; }
-  if (typeof raw !== 'string' || raw.length === 0) return;
-  try {
-    const entries = JSON.parse(raw);
-    if (!entries || typeof entries !== 'object') return;
-    const now = Date.now();
-    for (const [url, entry] of Object.entries(entries)) {
-      if (!entry || typeof entry !== 'object' || entry.value == null) continue;
-      if (!Number.isFinite(entry.t) || now - entry.t >= JIKAN_CACHE_TTL_MS) continue;
-      jikanCache.set(url, {value: entry.value, t: entry.t});
-    }
-  } catch (_) {}
-}
-
-function jikanPersistCache() {
-  const storage = jikanStorage();
-  if (storage === null) return;
-  const now = Date.now();
-  const entries = {};
-  for (const [url, entry] of jikanCache) {
-    if (!entry || now - entry.t >= JIKAN_CACHE_TTL_MS) continue;
-    entries[url] = entry;
-  }
-  try {
-    storage.write(
-      JIKAN_CACHE_STORAGE_KEY,
-      JSON.stringify(entries),
-      JIKAN_CACHE_TTL_MS,
-    );
-  } catch (_) {}
-}
-
-function jikanDelay(milliseconds) {
-  // QuickJS hosts do not currently expose a timer primitive. Keep the queue
-  // compatible there and still use real spacing on hosts that do provide one.
-  if (typeof setTimeout !== 'function') return Promise.resolve();
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-jikanRestoreCache();
-
-function jikanUrl(path, query) {
-  const params = Object.entries(query || {})
-    .filter(([, value]) => value != null && String(value).length > 0)
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join('&');
-  return `${JIKAN_BASE}${path}${params ? `?${params}` : ''}`;
-}
-
-async function jikanQueuedFetch(url) {
-  const previous = jikanQueue;
-  let release;
-  jikanQueue = new Promise((resolve) => {
-    release = resolve;
-  });
-  await previous;
-  const wait = Math.max(0, jikanNextRequestAt - Date.now());
-  if (wait > 0) await jikanDelay(wait);
-  jikanNextRequestAt = Date.now() + JIKAN_MIN_INTERVAL_MS;
-  try {
-    return await fetch(url);
-  } finally {
-    release();
-  }
-}
-
-async function jikanJson(path, query) {
-  const url = jikanUrl(path, query);
-  const cached = jikanCache.get(url);
-  if (cached && Date.now() - cached.t < JIKAN_CACHE_TTL_MS) return cached.value;
-  const existing = jikanInflight.get(url);
-  if (existing) return existing;
-
-  const pending = (async () => {
-    for (let attempt = 0; attempt < JIKAN_MAX_ATTEMPTS; attempt += 1) {
-      try {
-        const response = await jikanQueuedFetch(url);
-        const retryable = response.status === 429 || response.status >= 500;
-        if (retryable && attempt + 1 < JIKAN_MAX_ATTEMPTS) {
-          await jikanDelay(response.status === 429
-            ? 1000 * (2 ** attempt)
-            : 500 * (2 ** attempt));
-          continue;
-        }
-        if (response.status < 200 || response.status >= 300) break;
-        const value = JSON.parse(response.body);
-        jikanCache.set(url, { value, t: Date.now() });
-        jikanPersistCache();
-        return value;
-      } catch (_) {
-        if (attempt + 1 < JIKAN_MAX_ATTEMPTS) {
-          await jikanDelay(500 * (2 ** attempt));
-          continue;
-        }
-      }
-    }
-    // Jikan can lose its connection to MAL while its own API remains up.
-    // Keep the last successful catalogue usable instead of hiding the row.
-    const stale = jikanCache.get(url);
-    return stale ? stale.value : null;
-  })();
-  jikanInflight.set(url, pending);
-  try {
-    return await pending;
-  } finally {
-    jikanInflight.delete(url);
-  }
-}
-
-function jikanTitle(anime) {
-  return anime.title_english || anime.title || anime.title_japanese || 'Untitled';
-}
-
-function jikanYear(anime) {
-  const direct = Number(anime.year);
-  if (Number.isInteger(direct) && direct > 0) return direct;
-  const match = /^(\d{4})/.exec(String(anime.aired && anime.aired.from || ''));
-  return match == null ? null : Number(match[1]);
-}
-
-function jikanPoster(anime) {
-  const images = anime.images || {};
-  const webp = images.webp || {};
-  const jpg = images.jpg || {};
-  return webp.large_image_url || jpg.large_image_url ||
-    webp.image_url || jpg.image_url || null;
-}
-
-function jikanKind(anime) {
-  return String(anime.type || '').toUpperCase() === 'MOVIE' ? 'video' : 'series';
-}
-
-function jikanRefId(malId) {
-  return `mal:anime:${malId}`;
-}
-
-function jikanToMediaItem(anime) {
-  const malId = Number(anime.mal_id);
-  const item = {
-    ref: {
-      extensionId: EXTENSION_ID,
-      providerId: JIKAN_PROVIDER_ID,
-      id: jikanRefId(malId),
-    },
-    kind: jikanKind(anime),
-    title: jikanTitle(anime),
-  };
-  const year = jikanYear(anime);
-  if (year != null) item.releaseYear = year;
-  const poster = jikanPoster(anime);
-  if (poster) item.artwork = { portrait: { url: poster } };
-  return item;
-}
-
-async function jikanCatalogue(path, query) {
-  const out = [];
-  const seen = new Set();
-  const pages = Math.max(1, JIKAN_HOME_PAGES);
-  for (let page = 1; page <= pages; page += 1) {
-    const payload = await jikanJson(path, {
-      ...query,
-      page,
-      limit: JIKAN_PER_PAGE,
-    });
-    const data = payload && Array.isArray(payload.data) ? payload.data : [];
-    for (const anime of data) {
-      const malId = Number(anime && anime.mal_id);
-      if (!Number.isInteger(malId) || malId < 1 || seen.has(malId)) continue;
-      seen.add(malId);
-      out.push(jikanToMediaItem(anime));
-    }
-  }
-  return out.slice(0, 60);
-}
-
-// These match Harbor's Home rows. Jikan has no standalone trending feed, so
-// the closest stable MAL equivalent is the highest-ranked currently airing
-// catalogue.
-async function jikanTrendingAnime() {
-  return jikanCatalogue('/top/anime', { filter: 'airing', sfw: 'true' });
-}
-
-async function jikanNewAnimeRelease() {
-  return jikanCatalogue('/anime', {
-    order_by: 'start_date',
-    sort: 'desc',
-    status: 'airing',
-    min_score: 6,
-    sfw: 'true',
-  });
-}
-
-async function jikanPopularAnime() {
-  return jikanCatalogue('/top/anime', { filter: 'bypopularity', sfw: 'true' });
-}
-
-async function jikanUpcomingAnime() {
-  return jikanCatalogue('/seasons/upcoming', { sfw: 'true' });
-}
-
-function jikanAnimeId(refId) {
-  const match = /^mal:anime:(\d+)$/.exec(String(refId || ''));
-  return match == null ? null : Number(match[1]);
-}
-
-function jikanEpisodeRefId(malId, position) {
-  return `mal:episode:${malId}:${position}`;
-}
-
-function jikanEpisodeGuide(anime) {
-  const total = Number(anime.episodes);
-  if (jikanKind(anime) !== 'series' || !Number.isInteger(total) || total < 1) return null;
-  const episodes = [];
-  for (let position = 1; position <= total; position += 1) {
-    episodes.push({
-      ref: {
-        extensionId: EXTENSION_ID,
-        providerId: JIKAN_PROVIDER_ID,
-        id: jikanEpisodeRefId(anime.mal_id, position),
-      },
-      title: `Episode ${position}`,
-      position,
-    });
-  }
-  return { groups: [{ id: 'season:1', title: 'Episodes', episodes }] };
-}
-
-async function jikanMeta(args) {
-  const malId = jikanAnimeId(args && args.ref && args.ref.id);
-  if (malId == null) throw new Error(`Not a Jikan ref id: ${args && args.ref && args.ref.id}`);
-  const payload = await jikanJson(`/anime/${malId}`, {});
-  const anime = payload && payload.data;
-  if (!anime) throw new Error(`Jikan has no anime ${malId}`);
-  const detail = { item: { ...jikanToMediaItem(anime), ref: args.ref } };
-  if (typeof anime.synopsis === 'string' && anime.synopsis.trim()) {
-    detail.description = anime.synopsis.trim();
-  }
-  if (Array.isArray(anime.genres)) {
-    const tags = anime.genres
-      .map((genre) => genre && genre.name)
-      .filter((name) => typeof name === 'string' && name.length > 0);
-    if (tags.length > 0) detail.tags = tags;
-  }
-  const guide = jikanEpisodeGuide(anime);
-  if (guide) detail.episodeGuide = guide;
-  return detail;
-}
-
-globalThis.__jikanTrendingAnime = jikanTrendingAnime;
-globalThis.__jikanNewAnimeRelease = jikanNewAnimeRelease;
-globalThis.__jikanPopularAnime = jikanPopularAnime;
-globalThis.__jikanUpcomingAnime = jikanUpcomingAnime;
-
-globalThis.__metaProviders = globalThis.__metaProviders || [];
-globalThis.__metaProviders.push({
-  providerId: JIKAN_PROVIDER_ID,
-  meta: jikanMeta,
-});
-
 // TMDB + shegu.st curated-lists catalog, as a JS extension — Movies and TV.
 //
 // Talks to TMDB and lists.shegu.st directly. Items use stable
@@ -7474,17 +7063,6 @@ async function fetchSokujaAnimeRanking(rank) {
   }
 }
 
-async function fetchJikanAnime(loaderName) {
-  const loader = globalThis[loaderName];
-  if (typeof loader !== 'function') return [];
-  try {
-    const items = await loader();
-    return Array.isArray(items) ? items : [];
-  } catch (_) {
-    return [];
-  }
-}
-
 const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
@@ -7496,26 +7074,6 @@ const HIGHLIGHT_GROUPS = [
   },
   { id: 'football_highlights', name: 'Football Highlights', fetch: fetchTimesoccerHighlights },
   { id: 'coming_soon', name: 'Coming Soon', fetch: () => fetchComingSoon() },
-  {
-    id: 'trending_anime',
-    name: 'Trending Anime',
-    fetch: () => fetchJikanAnime('__jikanTrendingAnime'),
-  },
-  {
-    id: 'new_anime_release',
-    name: 'New Anime Release',
-    fetch: () => fetchJikanAnime('__jikanNewAnimeRelease'),
-  },
-  {
-    id: 'popular_anime',
-    name: 'Popular Anime',
-    fetch: () => fetchJikanAnime('__jikanPopularAnime'),
-  },
-  {
-    id: 'upcoming_anime',
-    name: 'Upcoming Anime',
-    fetch: () => fetchJikanAnime('__jikanUpcomingAnime'),
-  },
   {
     id: 'top_anime_all_time',
     name: 'Top Anime All Time',
@@ -17288,6 +16846,10 @@ async function roxieResolve(sourceId) {
     Origin: origin,
     Referer: `${origin}${payload.p}`,
     'User-Agent': ROXIE_UA,
+    // A Roxie edge may be Cloudflare-protected. Do not open a challenge
+    // automatically during source discovery; expose the event page instead
+    // so the user can explicitly choose WebView playback.
+    'x-qjsr-disable-cloudflare': '1',
   };
   const url = roxieStreamUrl(payload.h, payload.d, payload.s);
   const response = await fetch(url, { headers });

@@ -3,15 +3,17 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.51",
+      "version": "1.0.52",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Removed Jikan completely, including its anime provider, anime shelves, alias lookups, and health probes.",
         "Switched Motorsport catalog data back to RoxieStreams so live and recently finished events remain available in the timeline; SPOTV is no longer used for catalog data.",
         "Removed the Live Now shelf from the All category; live events remain available through the Live timeline.",
+        "Removed Jikan completely, including its anime provider, anime shelves, alias lookups, and health probes.",
         "Made SPOTV the authoritative Motorsport catalog source with current timestamps and artwork; Cricfy, PlayZTV, and RoxieStreams remain stream resolvers with kickoff-based matching.",
         "Removed stale or duplicate generic Motorsport catalog rows so events such as MotoGP use SPOTV's schedule and live state.",
         "Added Roxie Fighting and Motorsports page feeds so current UFC, boxing, MXGP, MotoGP, NASCAR, and related events appear in Nimora.",
@@ -197,7 +199,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "82de7ad5ac53c4ada920386676dc42e361ac1320a85bfc793fa8dd47aa3d7a57"
+      "bundleSha256": "1db84136d508a0ad856854b621f7733418682e45b8084bc96c7e82a304829e74"
     }
   ]
 }
