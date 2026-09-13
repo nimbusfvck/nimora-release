@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.50",
+  "version": "1.0.51",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -23,13 +23,6 @@
         "catalog"
       ],
       "catalogs": [
-        {
-          "id": "fixtures",
-          "name": "Live Now",
-          "categories": ["all"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
         {
           "id": "fixtures_schedule",
           "name": "Live Timeline",

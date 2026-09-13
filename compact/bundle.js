@@ -834,13 +834,6 @@ function isFootballEntry(entry) {
   return sportIdOf(entry.sportName || entry.sportId) === FOOTBALL.id;
 }
 
-function isMotorsportCatalogEntry(entry) {
-  const identity = `${entry?.sportName || entry?.sportId || ''} ` +
-    `${entry?.item?.title || ''} ${entry?.item?.subtitle || ''}`;
-  return sportIdOf(entry?.sportName || entry?.sportId) === MOTORSPORT.id ||
-    /motogp|motorsport|formula|nascar|racing|mxgp|wrc/i.test(identity);
-}
-
 function isFotmobItem(item) {
   return `${item?.ref?.id || ''}`.startsWith('fotmob:');
 }
@@ -1245,13 +1238,10 @@ async function fixturesCatalog(query) {
   // and the other catalog entries are judged against the same "now".
   const nowMs = Date.now();
 
-  let [matches, popularLeagues, roxieEntries, spotvEntries] = await Promise.all([
+  let [matches, popularLeagues, roxieEntries] = await Promise.all([
     fetchFixturesMemo(nowMs),
     fetchPopularLeaguesMemo(),
     getRoxieSportEntries(nowMs),
-    typeof globalThis.__spotvSportEntries === 'function'
-      ? globalThis.__spotvSportEntries(nowMs).catch(() => [])
-      : Promise.resolve([]),
   ]);
   // Keep the complete FotMob feed as the identity authority for provider
   // dedupe. Finished matches remain available to schedule, but a stale
@@ -1269,23 +1259,9 @@ async function fixturesCatalog(query) {
   const brandingByLeague = await leagueBrandingFor(matches);
 
   let providerEntries = await getCricfySportEntries(nowMs);
-  // SPOTV is the authoritative motorsport catalog. Roxie can retain older
-  // generic rows such as "Coverage (Warmup)" after SPOTV has moved on, so
-  // keep Roxie available for source resolution but do not let it create a
-  // competing Motorsport card in Live Now or the timeline.
-  // SPOTV owns the Motorsport catalog. Cricfy and Roxie remain stream
-  // resolvers for those cards, but their generic event rows must never create
-  // a competing title or schedule in the catalog.
-  const cricfyCatalogEntries = providerEntries.filter(
-    (entry) => !isMotorsportCatalogEntry(entry),
-  );
-  const roxieCatalogEntries = roxieEntries.filter(
-    (entry) => !isMotorsportCatalogEntry(entry),
-  );
   providerEntries = dedupeProviderEntries([
-    ...cricfyCatalogEntries,
-    ...roxieCatalogEntries,
-    ...spotvEntries,
+    ...providerEntries,
+    ...roxieEntries,
   ], nowMs);
   return buildPage(
     query,
@@ -1322,169 +1298,6 @@ if (!globalThis.__extension.catalog) {
     return provider.catalog(query);
   };
 }
-
-// SPOTV NOW sports schedule contributor.
-//
-// SPOTV is catalog-only here. Its protected playback metadata is deliberately
-// not placed in source ids; existing stream providers resolve the shared event
-// card independently.
-
-const SPOTV_API_ORIGIN =
-  globalThis.__spotvApiBaseUrl || 'https://api.vstv.videoready.tv';
-const SPOTV_IMAGE_ORIGIN =
-  globalThis.__spotvImageBaseUrl ||
-  'https://cnimg.vstv.videoready.tv/spotv-prod/image/fetch/';
-const SPOTV_RAIL_ID = '6870cebe6473fd31b0ad6919';
-const SPOTV_API_KEY = globalThis.__spotvApiKey || 'ed6becd6cd33';
-const SPOTV_WINDOW_BEFORE_MS = 24 * 60 * 60 * 1000;
-const SPOTV_WINDOW_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
-const SPOTV_TTL_MS = 15 * 60 * 1000;
-
-let spotvMemo = null;
-
-function spotvNormalize(value) {
-  return `${value || ''}`
-    .toLowerCase()
-    .replace(/&amp;/g, '&')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function spotvCanonicalTitle(value) {
-  return spotvNormalize(value)
-    .replace(/^spotv race zone\s*[:|-]?\s*/, '')
-    .replace(/\s*\|\s*(live tracking|on board\d*|helicam|live timing)\s*$/i, '')
-    .replace(/\s+(live tracking|on board\d*|helicam|live timing)$/i, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function spotvSportName(item) {
-  const game = spotvNormalize(item.gameTypeTitle || item.defaultGameTypeTitle);
-  const league = spotvNormalize(item.leagueTitle || item.defaultLeagueTitle);
-  if (game === 'motorsports' || league.includes('motogp') ||
-      league.includes('formula 1') || league.includes('nascar')) {
-    return 'Motorsport';
-  }
-  if (game === 'tennis' || league.includes('tennis')) return 'Tennis';
-  return null;
-}
-
-function spotvEventKey(item) {
-  return `${spotvSportName(item)}:${spotvCanonicalTitle(item.title)}:${item.startDate}`;
-}
-
-function spotvArtworkUrl(value) {
-  const text = `${value || ''}`.trim();
-  if (!text) return null;
-  if (/^https?:\/\//i.test(text)) return text;
-  return `${SPOTV_IMAGE_ORIGIN.replace(/\/+$/, '')}/${text.replace(/^\/+/, '')}`;
-}
-
-function spotvState(item, nowMs) {
-  const start = Number(item.startDate);
-  const end = Number(item.endDate);
-  if (!Number.isFinite(start)) return 'scheduled';
-  if (Number.isFinite(end) && nowMs >= end) return 'ended';
-  if (nowMs >= start) return 'live';
-  return 'scheduled';
-}
-
-function spotvParseRail(payload) {
-  const list = payload?.data?.results?.contentList;
-  if (!Array.isArray(list)) return [];
-  const selected = new Map();
-  for (const item of list) {
-    if (item == null || spotvSportName(item) == null) continue;
-    const key = spotvEventKey(item);
-    const previous = selected.get(key);
-    const title = spotvNormalize(item.title);
-    const isPrimary = !title.includes('|') && !title.startsWith('spotv race zone');
-    const previousTitle = spotvNormalize(previous?.title);
-    const previousIsPrimary = previous != null &&
-      !previousTitle.includes('|') && !previousTitle.startsWith('spotv race zone');
-    if (previous == null || (isPrimary && !previousIsPrimary)) selected.set(key, item);
-  }
-  return [...selected.values()];
-}
-
-function spotvCatalogEntries(items, nowMs) {
-  return items.map((item) => {
-    const sportName = spotvSportName(item);
-    const start = Number(item.startDate);
-    const end = Number(item.endDate);
-    const state = spotvState(item, nowMs);
-    const artwork = spotvArtworkUrl(
-      item.posterImage || item.coverImage || item.boxCoverImage,
-    );
-    return {
-      sportId: sportName,
-      sportName,
-      live: state === 'live',
-      item: {
-        ref: {
-          extensionId: globalThis.__nimoraExtensionId || 'nimora',
-          providerId: 'nimora.matches',
-          id: `spotv:${item.id}`,
-        },
-        kind: 'event',
-        title: item.title,
-        subtitle: item.leagueTitle || item.gameTypeTitle || sportName,
-        ...(artwork ? { artwork: { landscape: { url: artwork } } } : {}),
-        schedule: {
-          startsAt: new Date(start).toISOString(),
-          ...(Number.isFinite(end) ? { endsAt: new Date(end).toISOString() } : {}),
-          state,
-        },
-      },
-    };
-  });
-}
-
-async function spotvFetchEntries(nowMs = Date.now()) {
-  const startDate = nowMs - SPOTV_WINDOW_BEFORE_MS;
-  const endDate = nowMs + SPOTV_WINDOW_AFTER_MS;
-  const query = `offset=0&limit=100&gameTypeId=&endDate=${endDate}&startDate=${startDate}`;
-  const response = await fetch(
-    `${SPOTV_API_ORIGIN.replace(/\/+$/, '')}/homescreen-service/pub/v1/rail/${SPOTV_RAIL_ID}?${query}`,
-    {
-      headers: {
-        Accept: 'application/json, text/plain, */*',
-        Authorization: 'Bearer null',
-        'Accept-Language': 'en-US,en;q=0.8',
-        countrycode: 'id',
-        language: 'eng',
-        languagecode: 'eng',
-        local: 'IND',
-        Origin: 'https://www.spotvnow.com',
-        platform: 'WEB',
-        Referer: 'https://www.spotvnow.com/',
-        tenant_identifier: 'master',
-        timezone: 'Asia/Jakarta',
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 Version/18.5 Mobile/15E148 Safari/604.1',
-        'x-api-key': SPOTV_API_KEY,
-      },
-    },
-  );
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`SPOTV rail request failed: ${response.status}`);
-  }
-  const payload = JSON.parse(await response.text());
-  return spotvCatalogEntries(spotvParseRail(payload), nowMs);
-}
-
-async function spotvSportEntries(nowMs = Date.now()) {
-  const now = nowMs;
-  if (spotvMemo != null && now - spotvMemo.fetchedAt < SPOTV_TTL_MS) {
-    return spotvMemo.promise;
-  }
-  const promise = spotvFetchEntries(now).catch(() => []);
-  spotvMemo = { fetchedAt: now, promise };
-  return promise;
-}
-
-globalThis.__spotvSportEntries = spotvSportEntries;
 
 // Shared helpers for source labels.
 //
