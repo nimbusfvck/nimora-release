@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.35",
+      "version": "1.0.36",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Removed the global Schedule category, kept Live as a timeline, and filtered stale Cricfy events after their sport-specific expiry window.",
         "Removed FCTV33, kept finished FotMob matches in Schedule as ended, and prevented stale provider events from reappearing in Live Now.",
         "Fixed duplicate football matches caused by abbreviated provider team names, renamed the Home live shelf to Live Now, and renamed the Sport category to Schedule.",
         "Added RoxieStreams as a source-only sports provider: its countdown determines live/upcoming status, unmatched events can be added, and FotMob remains the Football SSOT.",
@@ -51,7 +52,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "5a60fc8d80e3f5646a8e7d487efeb2728383c1159142d0b9078fc4ae544f0780"
+      "bundleSha256": "9b56a7021efd22f9c054e573033239073fe6066782f7537260ee0284b8355636"
     }
   ]
 }

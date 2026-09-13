@@ -43,6 +43,7 @@ const PROVIDER_ID = 'nimora.matches';
 // schedule. `all` includes the live football items alongside the other live
 // sports catalog entries.
 const CATALOG_ID = 'fixtures';
+const SCHEDULE_CATALOG_ID = 'fixtures_schedule';
 const LIVE_CATEGORY = 'live';
 const ALL_CATEGORY = 'all';
 
@@ -303,9 +304,13 @@ function fetchPopularLeaguesMemo() {
 }
 
 async function fetchFotmobMatches(nowMs) {
+  // FotMob's current-day feed can omit an earlier match once it is no longer
+  // part of the late-night carryover. Keep one Jakarta calendar day of
+  // lookback so a provider cannot re-introduce an already-known FotMob event
+  // as a provider-only card.
   const payloads = await Promise.all(
-    Array.from({ length: 8 }, (_, offset) =>
-      fetchFotmobMatchesForDate(fotmobDateKey(nowMs, offset)),
+    Array.from({ length: 9 }, (_, index) =>
+      fetchFotmobMatchesForDate(fotmobDateKey(nowMs, index - 1)),
     ),
   );
   const matchesById = new Map();
@@ -921,7 +926,12 @@ async function getCricfySportEntries(nowMs) {
       if (!event.visible) continue;
       if (isExcludedSportCategory(event.category)) continue;
 
-      const status = cricfyEventStatusAt(event, nowMs);
+      const eventTitle = `${event.teamAName || ''} vs ${event.teamBName || ''}`;
+      const status = cricfyEventStatusAt(
+        event,
+        nowMs,
+        eventDurationMinutes(event.category, eventTitle),
+      );
       if (status === 'ended') continue;
       const startsAt = cricfyParseEventDateTime(event.date, event.time);
       if (
@@ -981,9 +991,12 @@ function sameProviderEvent(first, second) {
 
 function providerEntryIsLive(entry, nowMs) {
   if (entry?.live !== true) return false;
-  const startsAt = Date.parse(entry.item?.schedule?.startsAt);
+  const schedule = entry.item?.schedule;
+  const startsAt = Date.parse(schedule?.startsAt);
+  const endsAt = Date.parse(schedule?.endsAt);
   // A provider may refresh its stream flag before refreshing the countdown.
   // Never expose a future item in Live when its start time is known.
+  if (Number.isFinite(endsAt) && nowMs >= endsAt) return false;
   return !Number.isFinite(startsAt) || startsAt <= nowMs;
 }
 
@@ -1077,6 +1090,7 @@ function buildPage(
   requireLiveProviderMatches = false,
   knownFotmobMatches = matches,
 ) {
+  const liveCategory = query.category === LIVE_CATEGORY;
   providerEntries = providerEntries.map((entry) =>
     normalizeProviderEntry(entry, nowMs));
   const selected = query.subCategory == null
@@ -1086,19 +1100,18 @@ function buildPage(
 
   if (selected === FOOTBALL.id) {
     const requireProviderMatch = requireLiveProviderMatches &&
-      (query.category === LIVE_CATEGORY || query.category === ALL_CATEGORY);
-    const footballProviderEntries = query.category === ALL_CATEGORY
-      ? providerEntries.filter((entry) => entry.live)
-      : providerEntries;
+      query.category === ALL_CATEGORY;
     return {
       sections: byDateItems(
         footballCatalogItems(
           matches,
-          footballProviderEntries,
+          providerEntries,
           nowMs,
           brandingByLeague,
           requireProviderMatch,
           knownFotmobMatches,
+        ).filter(
+          (item) => !liveCategory || item.schedule?.state !== 'ended',
         ),
         nowMs,
       ),
@@ -1109,6 +1122,8 @@ function buildPage(
   if (selected != null) {
     const entries = providerEntries.filter(
       (entry) => sportIdOf(entry.sportName || entry.sportId) === selected,
+    ).filter(
+      (entry) => !liveCategory || entry.item?.schedule?.state !== 'ended',
     );
     return {
       sections: entries.length === 0
@@ -1123,10 +1138,12 @@ function buildPage(
   }
 
   if (query.category === ALL_CATEGORY) {
-    const liveProviderEntries = providerEntries.filter((entry) => entry.live);
     const footballItems = footballCatalogItems(
       matches,
-      liveProviderEntries,
+      // FotMob owns event lifecycle. A provider's `live` flag can lag behind
+      // it, so use every matched football entry here and filter the resulting
+      // FotMob items by live state below.
+      providerEntries,
       nowMs,
       brandingByLeague,
       requireLiveProviderMatches,
@@ -1153,9 +1170,9 @@ function buildPage(
     providerEntries,
     nowMs,
     brandingByLeague,
-    requireLiveProviderMatches && query.category === LIVE_CATEGORY,
+    false,
     knownFotmobMatches,
-  );
+  ).filter((item) => !liveCategory || item.schedule?.state !== 'ended');
   if (footballItems.length > 0) {
     sections.push({ id: `sport:${FOOTBALL.id}`, title: FOOTBALL.name, items: footballItems });
   }
@@ -1163,7 +1180,9 @@ function buildPage(
     if (sport.id === FOOTBALL.id) continue;
     const items = providerEntries
       .filter(
-        (entry) => sportIdOf(entry.sportName || entry.sportId) === sport.id,
+        (entry) =>
+          sportIdOf(entry.sportName || entry.sportId) === sport.id &&
+          (!liveCategory || entry.item?.schedule?.state !== 'ended'),
       )
       .map((entry) => entry.item);
     if (items.length > 0) {
@@ -1176,7 +1195,6 @@ function buildPage(
 // --- the extension surface the host calls ---
 
 async function fixturesCatalog(query) {
-  const live = query.category === LIVE_CATEGORY;
   // One instant for the whole call, so a match right at the window boundary
   // and the other catalog entries are judged against the same "now".
   const nowMs = Date.now();
@@ -1199,10 +1217,6 @@ async function fixturesCatalog(query) {
   matches = filterPopularMatches(matches, popularLeagues);
   matches = prioritizeTopClubMatches(matches);
   const knownFotmobMatches = allFotmobMatches;
-  if (live) {
-    matches = matches.filter((match) => isMatchLive(match, nowMs));
-  }
-
   const brandingByLeague = await leagueBrandingFor(matches);
 
   let providerEntries = await getCricfySportEntries(nowMs);
@@ -1210,10 +1224,6 @@ async function fixturesCatalog(query) {
     ...providerEntries,
     ...roxieEntries,
   ], nowMs);
-  if (live) {
-    providerEntries = providerEntries.filter((entry) => entry.live);
-  }
-
   return buildPage(
     query,
     matches,
@@ -1233,7 +1243,10 @@ globalThis.__catalogProviders.push({
   catalogId: CATALOG_ID,
   catalog: fixturesCatalog,
 });
-
+globalThis.__catalogProviders.push({
+  catalogId: SCHEDULE_CATALOG_ID,
+  catalog: fixturesCatalog,
+});
 globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.catalog) {
   globalThis.__extension.catalog = async (query) => {
@@ -3195,11 +3208,19 @@ function cricfyParseEventDateTime(date, time) {
   return isNaN(ms) ? null : new Date(ms);
 }
 
-function cricfyEventStatusAt(event, nowMs) {
+function cricfyEventStatusAt(event, nowMs, fallbackDurationMinutes = null) {
   const now = nowMs != null ? nowMs : Date.now();
   const end = cricfyParseEventDateTime(event.endDate, event.endTime);
   if (end !== null && now >= end.getTime()) return 'ended';
   const start = cricfyParseEventDateTime(event.date, event.time);
+  if (
+    end === null &&
+    start !== null &&
+    Number.isFinite(fallbackDurationMinutes) &&
+    now >= start.getTime() + fallbackDurationMinutes * 60 * 1000
+  ) {
+    return 'ended';
+  }
   if (start !== null && now >= start.getTime()) return 'live';
   return 'upcoming';
 }

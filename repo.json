@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.46",
+      "version": "1.0.48",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Removed the global Schedule category, kept Live as a timeline, and filtered stale Cricfy events after their sport-specific expiry window.",
         "Removed FCTV33, kept finished FotMob matches in Schedule as ended, and prevented stale provider events from reappearing in Live Now.",
         "Fixed duplicate football matches caused by abbreviated provider team names, renamed the Home live shelf to Live Now, and renamed the Sport category to Schedule.",
         "Added RoxieStreams as a source-only sports provider: its countdown determines live/upcoming status, unmatched events can be added, and FotMob remains the Football SSOT.",
@@ -191,7 +192,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "6f794ce288a3637d301003b5e99ad3f9e213453ee1679d7d8e360557b068d69f"
+      "bundleSha256": "9cc73e9e995a70cd0b4651120b692dc9cc888676c8cbcebf4d97ac3b3b914ddd"
     }
   ]
 }
