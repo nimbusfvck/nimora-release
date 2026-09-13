@@ -543,7 +543,11 @@ function toMediaItem(match, nowMs, brandingByLeague) {
     }`,
     schedule: eventSchedule(
       kickoffMs(match),
-      isMatchLive(match, nowMs) ? 'live' : 'scheduled',
+      isFinishedMatch(match)
+        ? 'ended'
+        : isMatchLive(match, nowMs)
+          ? 'live'
+          : 'scheduled',
       FOOTBALL.name,
       `${home.name == null ? 'Unknown' : home.name} vs ${
         away.name == null ? 'Unknown' : away.name
@@ -941,15 +945,6 @@ async function getCricfySportEntries(nowMs) {
   }
 }
 
-async function getFctvSportEntries(nowMs) {
-  if (typeof globalThis.__fctvSportEntries !== 'function') return [];
-  try {
-    return await globalThis.__fctvSportEntries(nowMs);
-  } catch (_) {
-    return [];
-  }
-}
-
 async function getRoxieSportEntries(nowMs) {
   if (typeof globalThis.__roxieSportEntries !== 'function') return [];
   try {
@@ -1000,6 +995,11 @@ function normalizeProviderEntry(entry, nowMs) {
   const live = providerEntryIsLive(entry, nowMs);
   const schedule = entry.item?.schedule;
   if (schedule == null) return { ...entry, live };
+  const state = live
+    ? 'live'
+    : schedule.state === 'ended'
+      ? 'ended'
+      : 'scheduled';
   return {
     ...entry,
     live,
@@ -1007,7 +1007,7 @@ function normalizeProviderEntry(entry, nowMs) {
       ...entry.item,
       schedule: {
         ...schedule,
-        state: live ? 'live' : 'scheduled',
+        state,
       },
     },
   };
@@ -1035,11 +1035,17 @@ function dedupeProviderEntries(entries, nowMs = Date.now()) {
     const merged = preferEntry ? { ...entry } : { ...existing };
     merged.live = existing.live || entry.live;
     if (merged.item?.schedule != null) {
+      const mergedState = merged.live
+        ? 'live'
+        : (existing.item?.schedule?.state === 'ended' ||
+            entry.item?.schedule?.state === 'ended')
+          ? 'ended'
+          : 'scheduled';
       merged.item = {
         ...merged.item,
         schedule: {
           ...merged.item.schedule,
-          state: merged.live ? 'live' : 'scheduled',
+          state: mergedState,
         },
       };
     }
@@ -1179,16 +1185,19 @@ async function fixturesCatalog(query) {
     fetchPopularLeaguesMemo(),
     getRoxieSportEntries(nowMs),
   ]);
+  // Keep the complete FotMob feed as the identity authority for provider
+  // dedupe. Finished matches remain available to schedule, but a stale
+  // provider must not re-introduce one as live under a new ref.
+  const allFotmobMatches = matches;
   matches = matches
     .filter(
       (match) =>
-        !isFinishedMatch(match) &&
         !isWomenMatch(match) &&
         isRelevantMatch(match, nowMs),
     );
   matches = filterPopularMatches(matches, popularLeagues);
   matches = prioritizeTopClubMatches(matches);
-  const knownFotmobMatches = matches;
+  const knownFotmobMatches = allFotmobMatches;
   if (live) {
     matches = matches.filter((match) => isMatchLive(match, nowMs));
   }
@@ -1196,10 +1205,8 @@ async function fixturesCatalog(query) {
   const brandingByLeague = await leagueBrandingFor(matches);
 
   let providerEntries = await getCricfySportEntries(nowMs);
-  const fctvEntries = await getFctvSportEntries(nowMs);
   providerEntries = dedupeProviderEntries([
     ...providerEntries,
-    ...fctvEntries,
     ...roxieEntries,
   ], nowMs);
   if (live) {
@@ -16665,9 +16672,13 @@ const ROXIE_PROVIDER_KEY = 'roxie';
 const ROXIE_ORIGIN = 'https://roxiestreams.su';
 const ROXIE_HOME_PATH = '/';
 const ROXIE_INDEX_PATH = '/soccer';
-const ROXIE_DOMAINS_PATH = '/domainsz74.txt';
+const ROXIE_DOMAINS_FALLBACK_PATH = '/domainsz76.txt';
 const ROXIE_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const ROXIE_RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Roxie exposes kickoff only, without an end-time or completion status.
+// Keep a conservative live window so completed events remain available in
+// schedule history but are not advertised as Live Now.
+const ROXIE_LIVE_WINDOW_MS = 3 * 60 * 60 * 1000;
 // countdownfinal2.js reparses the displayed local time as Pacific daylight
 // time before comparing it with Date.now(). Keep the same fixed offset here;
 // the source page currently uses -07:00 for both its countdown and localized
@@ -16821,11 +16832,14 @@ function roxieParseGenericIndex(html) {
 }
 
 function roxieParseStreamPage(html) {
-  const match = /getRandomStream\s*\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*\)/i.exec(roxieText(html));
+  const body = roxieText(html);
+  const match = /getRandomStream\s*\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*\)/i.exec(body);
   if (!match) return null;
+  const domainsMatch = /fetch\s*\(\s*["']([^"']*domainsz\d+\.txt)["']\s*\)/i.exec(body);
   return {
     streamPath: match[1].trim(),
     subdomain: match[2].trim(),
+    domainsPath: roxieText(domainsMatch && domainsMatch[1]) || ROXIE_DOMAINS_FALLBACK_PATH,
   };
 }
 
@@ -16934,6 +16948,7 @@ function roxieEventIsRelevant(event, nowMs) {
 function roxieCountdownState(event, nowMs) {
   const startsAt = Date.parse(event.startsAt);
   if (!Number.isFinite(startsAt)) return 'scheduled';
+  if (nowMs - startsAt >= ROXIE_LIVE_WINDOW_MS) return 'ended';
   return startsAt <= nowMs ? 'live' : 'scheduled';
 }
 
@@ -17014,8 +17029,8 @@ async function roxieLoadStream(event) {
   return stream;
 }
 
-async function roxieLoadDomains(referer) {
-  const response = await roxieFetch(ROXIE_DOMAINS_PATH, {
+async function roxieLoadDomains(referer, domainsPath) {
+  const response = await roxieFetch(domainsPath || ROXIE_DOMAINS_FALLBACK_PATH, {
     headers: {
       Accept: 'text/plain,*/*;q=0.8',
       Referer: `${roxieOrigin().replace(/\/+$/, '')}${roxieText(referer) || ROXIE_INDEX_PATH}`,
@@ -17077,7 +17092,7 @@ async function roxieSources(args) {
 
   try {
     const stream = await roxieLoadStream(event);
-    const domains = await roxieLoadDomains(event.pagePath);
+    const domains = await roxieLoadDomains(event.pagePath, stream.domainsPath);
     return {
       sources: domains.map((domain) => ({
         id: roxieSourceId({
@@ -17110,7 +17125,7 @@ async function roxieResolve(sourceId) {
     throw new Error('RoxieStreams event stream changed; refresh sources');
   }
 
-  const domains = await roxieLoadDomains(payload.p);
+  const domains = await roxieLoadDomains(payload.p, stream.domainsPath);
   if (!domains.includes(payload.d)) {
     throw new Error('RoxieStreams stream domain is no longer available');
   }
