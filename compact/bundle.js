@@ -44,6 +44,7 @@ const PROVIDER_ID = 'nimora.matches';
 // sports catalog entries.
 const CATALOG_ID = 'fixtures';
 const SCHEDULE_CATALOG_ID = 'fixtures_schedule';
+const FEATURED_CATALOG_ID = 'fixtures_featured';
 const LIVE_CATEGORY = 'live';
 const ALL_CATEGORY = 'all';
 
@@ -445,6 +446,28 @@ function topClubEditorialRating(match) {
   return clubScore + fixtureBonus;
 }
 
+// Competition context makes the same club pairing slightly more important in
+// a major tournament or domestic top flight. Keep this as a small modifier so
+// club identity remains the primary signal and the result stays a generic
+// 0-10-ish media rating rather than pretending to be a fan-vote score.
+const HIGH_PROFILE_COMPETITIONS = [
+  { match: /champions league|uefa champions league|ucl/i, bonus: 0.5 },
+  { match: /premier league|la\s*liga|serie a|bundesliga|ligue 1/i, bonus: 0.25 },
+];
+
+function competitionEditorialBonus(match) {
+  const leagueName = `${match.leagueName || ''}`;
+  return HIGH_PROFILE_COMPETITIONS.find((entry) => entry.match.test(leagueName))
+    ?.bonus || 0;
+}
+
+function footballEditorialRating(match) {
+  const clubRating = topClubEditorialRating(match);
+  const competitionBonus = competitionEditorialBonus(match);
+  if (clubRating == null) return competitionBonus > 0 ? 5 + competitionBonus : null;
+  return clubRating + competitionBonus;
+}
+
 // Keep FotMob's response order as the default. A fixture involving two
 // configured top clubs comes first, followed by fixtures involving one; ties
 // retain their original response order. This gives the app a useful editorial
@@ -565,8 +588,8 @@ function toMediaItem(match, nowMs, brandingByLeague) {
     ),
   };
 
-  const topClubRating = topClubEditorialRating(match);
-  if (topClubRating != null) item.rating = topClubRating;
+  const editorialRating = footballEditorialRating(match);
+  if (editorialRating != null) item.rating = editorialRating;
 
   if (match.leagueName != null) item.subtitle = match.leagueName;
   const participants = fotmobParticipantsOf(match);
@@ -1124,6 +1147,32 @@ function buildPage(
     ? null
     : sportIdOf(query.subCategory);
   const subCategories = sportsOf(matches, providerEntries);
+
+  // Home's Featured Hero loads catalogs registered for the global `all`
+  // category. Keep this separate from the Live Now catalog: a scheduled
+  // big match should be eligible for the hero without being mislabeled live.
+  if (query.catalogId === FEATURED_CATALOG_ID && query.category === ALL_CATEGORY) {
+    const items = footballCatalogItems(
+      matches,
+      providerEntries,
+      nowMs,
+      brandingByLeague,
+      false,
+      knownFotmobMatches,
+    )
+      .filter((item) => item.schedule?.state !== 'ended')
+      .filter((item) => Number(item.rating) >= 8)
+      .sort((first, second) =>
+        Number(second.rating) - Number(first.rating) ||
+        Date.parse(first.schedule?.startsAt) - Date.parse(second.schedule?.startsAt),
+      );
+    return {
+      sections: items.length === 0
+        ? []
+        : [{ id: 'featured:sports', title: 'Featured Sports', items }],
+      subCategories,
+    };
+  }
 
   if (selected === FOOTBALL.id) {
     const requireProviderMatch = requireLiveProviderMatches &&
