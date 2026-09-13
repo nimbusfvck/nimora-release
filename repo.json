@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.54",
+      "version": "1.0.55",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed the Featured Sports catalog registration so Home's Featured Hero loads it without rendering an erroneous Home shelf.",
         "Added a Featured Sports catalog so highly rated upcoming football big matches can enter Home's Featured Hero before kickoff without being marked live.",
         "Renamed the Nimora matches catalog label from Live Now to Sports Matches to distinguish it from the Home live shelf.",
         "Removed Jikan completely, including its anime provider, anime shelves, alias lookups, and health probes.",
@@ -201,7 +202,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "8af04dc70868f834eb51166e8602be0012a01ce9c5e2e2a64fa2927b01ca224d"
+      "bundleSha256": "a97039bee01f1f906cb3ac7645e06fdeabf82966f915357d5d8dfb9c995bf9d6"
     }
   ]
 }

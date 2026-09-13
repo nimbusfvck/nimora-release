@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.42",
+      "version": "1.0.43",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed the Featured Sports catalog registration so Home's Featured Hero loads it without rendering an erroneous Home shelf.",
         "Added a Featured Sports catalog so highly rated upcoming football big matches can enter Home's Featured Hero before kickoff without being marked live.",
         "Renamed the Nimora matches catalog label from Live Now to Sports Matches to distinguish it from the Home live shelf.",
         "Removed Jikan completely, including its anime provider, anime shelves, alias lookups, and health probes.",
@@ -61,7 +62,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "e341b4d01c384f4b6034b0589f9c816466896e980bb0ccb379c2252ee4c4e976"
+      "bundleSha256": "0b9eaf1996cf2155d25eee80ee362d01a833c2ccd90bb3556d99f61d3b0792fd"
     }
   ]
 }

@@ -1335,6 +1335,10 @@ globalThis.__catalogProviders.push({
   catalogId: SCHEDULE_CATALOG_ID,
   catalog: fixturesCatalog,
 });
+globalThis.__catalogProviders.push({
+  catalogId: FEATURED_CATALOG_ID,
+  catalog: fixturesCatalog,
+});
 globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.catalog) {
   globalThis.__extension.catalog = async (query) => {
@@ -12701,7 +12705,7 @@ function leagueChannelsItem(definition, group) {
       providerId: LEAGUE_CHANNELS_PROVIDER_ID,
       id: `${LEAGUE_CHANNELS_PROVIDER_KEY}:${id}`,
     },
-    kind: 'video',
+    kind: 'channel',
     title: group.title,
     subtitle: definition.title,
   };
