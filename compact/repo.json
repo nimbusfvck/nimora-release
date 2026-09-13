@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.40",
+      "version": "1.0.41",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Renamed the Nimora matches catalog label from Live Now to Sports Matches to distinguish it from the Home live shelf.",
         "Removed Jikan completely, including its anime provider, anime shelves, alias lookups, and health probes.",
         "Switched Motorsport catalog data back to RoxieStreams so live and recently finished events remain available in the timeline; SPOTV is no longer used for catalog data.",
         "Removed the Live Now shelf from the All category; live events remain available through the Live timeline.",

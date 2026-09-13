@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.40",
+  "version": "1.0.41",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -18,7 +18,7 @@
   "providers": [
     {
       "id": "nimora.matches",
-      "name": "Live Now",
+      "name": "Sports Matches",
       "roles": ["catalog"],
       "catalogs": [
         {
