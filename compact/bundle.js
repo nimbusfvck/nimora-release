@@ -48,9 +48,12 @@ const LIVE_CATEGORY = 'live';
 const ALL_CATEGORY = 'all';
 
 // Unfinished fixtures remain relevant while live and up to a week before
-// kickoff. Finished fixtures are removed at catalog takeout below.
+// kickoff. Finished fixtures remain for two days so the timeline can show
+// yesterday's history.
 const UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Keep yesterday's completed events in the timeline so the previous date
+// remains visible after the live window rolls over.
+const RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
 const FIXTURES_TTL_MS = 15 * 60 * 1000;
 const LEAGUE_BRANDING_TTL_MS = 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -766,13 +769,18 @@ const FOOTBALL_NAME_ALIASES = new Map([
   ['barca', 'barcelona'],
   ['birmingham', 'birmingham city'],
   ['derby', 'derby county'],
+  ['hsv', 'hamburger sv'],
   ['inter', 'internazionale'],
   ['juve', 'juventus'],
+  ['leipzig', 'rb leipzig'],
   ['man city', 'manchester city'],
+  ['man united', 'manchester united'],
   ['man utd', 'manchester united'],
   ['nottm forest', 'nottingham forest'],
   ['psg', 'paris saint germain'],
   ['qpr', 'queens park rangers'],
+  ['sheff utd', 'sheffield united'],
+  ['sheffield utd', 'sheffield united'],
   ['spurs', 'tottenham hotspur'],
   ['west brom', 'west bromwich albion'],
   ['west bromwich', 'west bromwich albion'],
@@ -824,6 +832,17 @@ function sameFootballEvent(first, second) {
 
 function isFootballEntry(entry) {
   return sportIdOf(entry.sportName || entry.sportId) === FOOTBALL.id;
+}
+
+function isMotorsportCatalogEntry(entry) {
+  const identity = `${entry?.sportName || entry?.sportId || ''} ` +
+    `${entry?.item?.title || ''} ${entry?.item?.subtitle || ''}`;
+  return sportIdOf(entry?.sportName || entry?.sportId) === MOTORSPORT.id ||
+    /motogp|motorsport|formula|nascar|racing|mxgp|wrc/i.test(identity);
+}
+
+function isFotmobItem(item) {
+  return `${item?.ref?.id || ''}`.startsWith('fotmob:');
 }
 
 // FotMob remains the canonical metadata source. Provider-only football events
@@ -893,7 +912,11 @@ function cricfyEventItem(event, status) {
     subtitle: event.category || 'Other',
     schedule: eventSchedule(
       startsAt,
-      status === 'live' ? 'live' : 'scheduled',
+      status === 'live'
+        ? 'live'
+        : status === 'ended'
+          ? 'ended'
+          : 'scheduled',
       event.category || 'Other',
       title,
       event.endsAt || event.endTime,
@@ -932,8 +955,11 @@ async function getCricfySportEntries(nowMs) {
         nowMs,
         eventDurationMinutes(event.category, eventTitle),
       );
-      if (status === 'ended') continue;
       const startsAt = cricfyParseEventDateTime(event.date, event.time);
+      if (
+        status === 'ended' &&
+        (startsAt === null || nowMs - startsAt.getTime() > RECENT_WINDOW_MS)
+      ) continue;
       if (
         status !== 'live' &&
         startsAt !== null &&
@@ -973,6 +999,13 @@ function catalogTitleKey(value) {
     .replace(/\s+/g, ' ')
     .replace(/\bformula one\b|\bf1\b/g, 'formula 1')
     .replace(/\bmoto gp\b/g, 'motogp')
+    .replace(/^spotv race zone\s*[:|-]?\s*/, '')
+    .replace(/\bmotogp\b/g, 'grand prix')
+    .replace(/\bformula one\b|\bf1\b/g, 'formula 1')
+    .replace(/\bgp\b/g, 'grand prix')
+    .replace(/\b(live tracking|on board\d*|helicam|live timing|coverage|warmup|race zone|race)\b/g, '')
+    .replace(/\bgrand prix\s+grand prix\b/g, 'grand prix')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -1091,6 +1124,7 @@ function buildPage(
   knownFotmobMatches = matches,
 ) {
   const liveCategory = query.category === LIVE_CATEGORY;
+  const excludeEnded = liveCategory && query.catalogId !== SCHEDULE_CATALOG_ID;
   providerEntries = providerEntries.map((entry) =>
     normalizeProviderEntry(entry, nowMs));
   const selected = query.subCategory == null
@@ -1111,7 +1145,7 @@ function buildPage(
           requireProviderMatch,
           knownFotmobMatches,
         ).filter(
-          (item) => !liveCategory || item.schedule?.state !== 'ended',
+          (item) => !excludeEnded || item.schedule?.state !== 'ended',
         ),
         nowMs,
       ),
@@ -1123,7 +1157,7 @@ function buildPage(
     const entries = providerEntries.filter(
       (entry) => sportIdOf(entry.sportName || entry.sportId) === selected,
     ).filter(
-      (entry) => !liveCategory || entry.item?.schedule?.state !== 'ended',
+      (entry) => !excludeEnded || entry.item?.schedule?.state !== 'ended',
     );
     return {
       sections: entries.length === 0
@@ -1165,16 +1199,28 @@ function buildPage(
   }
 
   const sections = [];
-  const footballItems = footballCatalogItems(
+  const allFootballItems = footballCatalogItems(
     matches,
     providerEntries,
     nowMs,
     brandingByLeague,
     false,
     knownFotmobMatches,
-  ).filter((item) => !liveCategory || item.schedule?.state !== 'ended');
+  ).filter(
+    (item) => !excludeEnded || item.schedule?.state !== 'ended',
+  );
+  const footballItems = allFootballItems.filter(isFotmobItem);
+  const otherFootballItems = allFootballItems.filter(
+    (item) => !isFotmobItem(item),
+  ).map((item) => ({
+    ...item,
+    subtitle: 'Other',
+  }));
   if (footballItems.length > 0) {
     sections.push({ id: `sport:${FOOTBALL.id}`, title: FOOTBALL.name, items: footballItems });
+  }
+  if (otherFootballItems.length > 0) {
+    sections.push({ id: 'sport:other-football', title: 'Other', items: otherFootballItems });
   }
   for (const sport of subCategories) {
     if (sport.id === FOOTBALL.id) continue;
@@ -1182,7 +1228,7 @@ function buildPage(
       .filter(
         (entry) =>
           sportIdOf(entry.sportName || entry.sportId) === sport.id &&
-          (!liveCategory || entry.item?.schedule?.state !== 'ended'),
+          (!excludeEnded || entry.item?.schedule?.state !== 'ended'),
       )
       .map((entry) => entry.item);
     if (items.length > 0) {
@@ -1199,10 +1245,13 @@ async function fixturesCatalog(query) {
   // and the other catalog entries are judged against the same "now".
   const nowMs = Date.now();
 
-  let [matches, popularLeagues, roxieEntries] = await Promise.all([
+  let [matches, popularLeagues, roxieEntries, spotvEntries] = await Promise.all([
     fetchFixturesMemo(nowMs),
     fetchPopularLeaguesMemo(),
     getRoxieSportEntries(nowMs),
+    typeof globalThis.__spotvSportEntries === 'function'
+      ? globalThis.__spotvSportEntries(nowMs).catch(() => [])
+      : Promise.resolve([]),
   ]);
   // Keep the complete FotMob feed as the identity authority for provider
   // dedupe. Finished matches remain available to schedule, but a stale
@@ -1220,9 +1269,23 @@ async function fixturesCatalog(query) {
   const brandingByLeague = await leagueBrandingFor(matches);
 
   let providerEntries = await getCricfySportEntries(nowMs);
+  // SPOTV is the authoritative motorsport catalog. Roxie can retain older
+  // generic rows such as "Coverage (Warmup)" after SPOTV has moved on, so
+  // keep Roxie available for source resolution but do not let it create a
+  // competing Motorsport card in Live Now or the timeline.
+  // SPOTV owns the Motorsport catalog. Cricfy and Roxie remain stream
+  // resolvers for those cards, but their generic event rows must never create
+  // a competing title or schedule in the catalog.
+  const cricfyCatalogEntries = providerEntries.filter(
+    (entry) => !isMotorsportCatalogEntry(entry),
+  );
+  const roxieCatalogEntries = roxieEntries.filter(
+    (entry) => !isMotorsportCatalogEntry(entry),
+  );
   providerEntries = dedupeProviderEntries([
-    ...providerEntries,
-    ...roxieEntries,
+    ...cricfyCatalogEntries,
+    ...roxieCatalogEntries,
+    ...spotvEntries,
   ], nowMs);
   return buildPage(
     query,
@@ -1259,6 +1322,169 @@ if (!globalThis.__extension.catalog) {
     return provider.catalog(query);
   };
 }
+
+// SPOTV NOW sports schedule contributor.
+//
+// SPOTV is catalog-only here. Its protected playback metadata is deliberately
+// not placed in source ids; existing stream providers resolve the shared event
+// card independently.
+
+const SPOTV_API_ORIGIN =
+  globalThis.__spotvApiBaseUrl || 'https://api.vstv.videoready.tv';
+const SPOTV_IMAGE_ORIGIN =
+  globalThis.__spotvImageBaseUrl ||
+  'https://cnimg.vstv.videoready.tv/spotv-prod/image/fetch/';
+const SPOTV_RAIL_ID = '6870cebe6473fd31b0ad6919';
+const SPOTV_API_KEY = globalThis.__spotvApiKey || 'ed6becd6cd33';
+const SPOTV_WINDOW_BEFORE_MS = 24 * 60 * 60 * 1000;
+const SPOTV_WINDOW_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+const SPOTV_TTL_MS = 15 * 60 * 1000;
+
+let spotvMemo = null;
+
+function spotvNormalize(value) {
+  return `${value || ''}`
+    .toLowerCase()
+    .replace(/&amp;/g, '&')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function spotvCanonicalTitle(value) {
+  return spotvNormalize(value)
+    .replace(/^spotv race zone\s*[:|-]?\s*/, '')
+    .replace(/\s*\|\s*(live tracking|on board\d*|helicam|live timing)\s*$/i, '')
+    .replace(/\s+(live tracking|on board\d*|helicam|live timing)$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function spotvSportName(item) {
+  const game = spotvNormalize(item.gameTypeTitle || item.defaultGameTypeTitle);
+  const league = spotvNormalize(item.leagueTitle || item.defaultLeagueTitle);
+  if (game === 'motorsports' || league.includes('motogp') ||
+      league.includes('formula 1') || league.includes('nascar')) {
+    return 'Motorsport';
+  }
+  if (game === 'tennis' || league.includes('tennis')) return 'Tennis';
+  return null;
+}
+
+function spotvEventKey(item) {
+  return `${spotvSportName(item)}:${spotvCanonicalTitle(item.title)}:${item.startDate}`;
+}
+
+function spotvArtworkUrl(value) {
+  const text = `${value || ''}`.trim();
+  if (!text) return null;
+  if (/^https?:\/\//i.test(text)) return text;
+  return `${SPOTV_IMAGE_ORIGIN.replace(/\/+$/, '')}/${text.replace(/^\/+/, '')}`;
+}
+
+function spotvState(item, nowMs) {
+  const start = Number(item.startDate);
+  const end = Number(item.endDate);
+  if (!Number.isFinite(start)) return 'scheduled';
+  if (Number.isFinite(end) && nowMs >= end) return 'ended';
+  if (nowMs >= start) return 'live';
+  return 'scheduled';
+}
+
+function spotvParseRail(payload) {
+  const list = payload?.data?.results?.contentList;
+  if (!Array.isArray(list)) return [];
+  const selected = new Map();
+  for (const item of list) {
+    if (item == null || spotvSportName(item) == null) continue;
+    const key = spotvEventKey(item);
+    const previous = selected.get(key);
+    const title = spotvNormalize(item.title);
+    const isPrimary = !title.includes('|') && !title.startsWith('spotv race zone');
+    const previousTitle = spotvNormalize(previous?.title);
+    const previousIsPrimary = previous != null &&
+      !previousTitle.includes('|') && !previousTitle.startsWith('spotv race zone');
+    if (previous == null || (isPrimary && !previousIsPrimary)) selected.set(key, item);
+  }
+  return [...selected.values()];
+}
+
+function spotvCatalogEntries(items, nowMs) {
+  return items.map((item) => {
+    const sportName = spotvSportName(item);
+    const start = Number(item.startDate);
+    const end = Number(item.endDate);
+    const state = spotvState(item, nowMs);
+    const artwork = spotvArtworkUrl(
+      item.posterImage || item.coverImage || item.boxCoverImage,
+    );
+    return {
+      sportId: sportName,
+      sportName,
+      live: state === 'live',
+      item: {
+        ref: {
+          extensionId: globalThis.__nimoraExtensionId || 'nimora',
+          providerId: 'nimora.matches',
+          id: `spotv:${item.id}`,
+        },
+        kind: 'event',
+        title: item.title,
+        subtitle: item.leagueTitle || item.gameTypeTitle || sportName,
+        ...(artwork ? { artwork: { landscape: { url: artwork } } } : {}),
+        schedule: {
+          startsAt: new Date(start).toISOString(),
+          ...(Number.isFinite(end) ? { endsAt: new Date(end).toISOString() } : {}),
+          state,
+        },
+      },
+    };
+  });
+}
+
+async function spotvFetchEntries(nowMs = Date.now()) {
+  const startDate = nowMs - SPOTV_WINDOW_BEFORE_MS;
+  const endDate = nowMs + SPOTV_WINDOW_AFTER_MS;
+  const query = `offset=0&limit=100&gameTypeId=&endDate=${endDate}&startDate=${startDate}`;
+  const response = await fetch(
+    `${SPOTV_API_ORIGIN.replace(/\/+$/, '')}/homescreen-service/pub/v1/rail/${SPOTV_RAIL_ID}?${query}`,
+    {
+      headers: {
+        Accept: 'application/json, text/plain, */*',
+        Authorization: 'Bearer null',
+        'Accept-Language': 'en-US,en;q=0.8',
+        countrycode: 'id',
+        language: 'eng',
+        languagecode: 'eng',
+        local: 'IND',
+        Origin: 'https://www.spotvnow.com',
+        platform: 'WEB',
+        Referer: 'https://www.spotvnow.com/',
+        tenant_identifier: 'master',
+        timezone: 'Asia/Jakarta',
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 Version/18.5 Mobile/15E148 Safari/604.1',
+        'x-api-key': SPOTV_API_KEY,
+      },
+    },
+  );
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`SPOTV rail request failed: ${response.status}`);
+  }
+  const payload = JSON.parse(await response.text());
+  return spotvCatalogEntries(spotvParseRail(payload), nowMs);
+}
+
+async function spotvSportEntries(nowMs = Date.now()) {
+  const now = nowMs;
+  if (spotvMemo != null && now - spotvMemo.fetchedAt < SPOTV_TTL_MS) {
+    return spotvMemo.promise;
+  }
+  const promise = spotvFetchEntries(now).catch(() => []);
+  spotvMemo = { fetchedAt: now, promise };
+  return promise;
+}
+
+globalThis.__spotvSportEntries = spotvSportEntries;
 
 // Shared helpers for source labels.
 //
@@ -4062,6 +4288,31 @@ async function cricfySourcesForEvent(event) {
   return sources;
 }
 
+function cricfyIsMotorsportItem(item) {
+  return /motogp|motorsport|formula|nascar|racing|mxgp|wrc/i.test(
+    `${item?.title || ''} ${item?.subtitle || ''}`,
+  );
+}
+
+function cricfyFindMotorsportEvent(events, item) {
+  if (!cricfyIsMotorsportItem(item)) return null;
+  const kickoff = Date.parse(item.schedule?.startsAt);
+  if (!Number.isFinite(kickoff)) return null;
+  return events
+    .filter((event) => event.category === 'Motorsport')
+    .map((event) => ({
+      event,
+      kickoff: cricfyParseEventDateTime(event.date, event.time),
+    }))
+    .filter((candidate) => candidate.kickoff != null)
+    .map((candidate) => ({
+      ...candidate,
+      distance: Math.abs(candidate.kickoff.getTime() - kickoff),
+    }))
+    .filter((candidate) => candidate.distance <= 6 * 60 * 60 * 1000)
+    .sort((a, b) => a.distance - b.distance)[0]?.event || null;
+}
+
 function cricfyMapDrm(drm) {
   if (!drm) return null;
   if (drm.scheme === 'clearKey') return { scheme: 'clearKey', clearKeyJson: drm.clearKeyJson };
@@ -4134,6 +4385,18 @@ async function cricfySources(args) {
       } catch (_) {
         return { sources: [] };
       }
+    }
+  }
+
+  // SPOTV supplies the canonical motorsport title, while Cricfy may publish
+  // the same broadcast under a generic name such as "MotoGP". Match the
+  // provider event by category and nearest kickoff before requiring teams.
+  const motorsportEvent = cricfyFindMotorsportEvent(events, item);
+  if (motorsportEvent) {
+    try {
+      return { sources: await cricfySourcesForEvent(motorsportEvent) };
+    } catch (_) {
+      return { sources: [] };
     }
   }
 
@@ -11939,20 +12202,57 @@ async function playzSourcesForEvent(event) {
   }));
 }
 
+function playzIsMotorsportItem(item) {
+  return /motogp|motorsport|formula|nascar|racing|mxgp|wrc/i.test(
+    `${item?.title || ''} ${item?.subtitle || ''}`,
+  );
+}
+
+function playzFindMotorsportEvent(events, item) {
+  if (!playzIsMotorsportItem(item)) return null;
+  const kickoff = Date.parse(item.schedule?.startsAt);
+  if (!Number.isFinite(kickoff)) return null;
+  return events
+    .filter((event) => event.category === 'Motorsport')
+    .map((event) => ({
+      event,
+      kickoff: playzDate(event.date, event.time),
+    }))
+    .filter((candidate) => candidate.kickoff != null)
+    .map((candidate) => ({
+      ...candidate,
+      distance: Math.abs(candidate.kickoff.getTime() - kickoff),
+    }))
+    .filter((candidate) => candidate.distance <= 6 * 60 * 60 * 1000)
+    .sort((a, b) => a.distance - b.distance)[0]?.event || null;
+}
+
 async function playzSources(args) {
   if (args.enabledProviders != null && !args.enabledProviders.includes(PLAYZ_PROVIDER_ID)) {
     return { sources: [] };
   }
   const item = args.item || {};
   if (!item.ref || item.ref.providerId !== 'nimora.matches') return { sources: [] };
-  if (!Array.isArray(item.participants) || item.participants.length !== 2) {
-    return { sources: [] };
-  }
 
   let events;
   try {
     events = await playzLoadEvents();
   } catch (_) {
+    return { sources: [] };
+  }
+
+  // SPOTV supplies the canonical motorsport title, while PlayZ may publish
+  // the same broadcast under a generic name without participants.
+  const motorsportEvent = playzFindMotorsportEvent(events, item);
+  if (motorsportEvent) {
+    try {
+      return { sources: await playzSourcesForEvent(motorsportEvent) };
+    } catch (_) {
+      return { sources: [] };
+    }
+  }
+
+  if (!Array.isArray(item.participants) || item.participants.length !== 2) {
     return { sources: [] };
   }
   const now = Date.now();
@@ -12108,13 +12408,16 @@ const ROXIE_PROVIDER_KEY = 'roxie';
 const ROXIE_ORIGIN = 'https://roxiestreams.su';
 const ROXIE_HOME_PATH = '/';
 const ROXIE_INDEX_PATH = '/soccer';
+const ROXIE_GENERIC_EVENT_PATHS = ['/', '/fighting', '/motorsports'];
 const ROXIE_DOMAINS_FALLBACK_PATH = '/domainsz76.txt';
 const ROXIE_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const ROXIE_RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const ROXIE_RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
 // Roxie exposes kickoff only, without an end-time or completion status.
-// Keep a conservative live window so completed events remain available in
-// schedule history but are not advertised as Live Now.
+// Keep event-specific windows so completed events remain available in
+// schedule history but are not advertised as Live Now. This must stay in
+// sync with eventSchedule() in fixtures.js, which gives motorsport 210 min.
 const ROXIE_LIVE_WINDOW_MS = 3 * 60 * 60 * 1000;
+const ROXIE_MOTORSPORT_WINDOW_MS = 210 * 60 * 1000;
 // countdownfinal2.js reparses the displayed local time as Pacific daylight
 // time before comparing it with Date.now(). Keep the same fixed offset here;
 // the source page currently uses -07:00 for both its countdown and localized
@@ -12251,7 +12554,7 @@ function roxieParseIndex(html) {
 function roxieParseGenericIndex(html) {
   const body = roxieText(html);
   const events = [];
-  const linkPattern = /<a\b[^>]*href\s*=\s*["'](\/(?:ppv-streams-\d+|f1|nfl|ufc|tennis-\d+))["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const linkPattern = /<a\b[^>]*href\s*=\s*["'](\/(?:ppv-streams-\d+|f1|nfl|ufc|tennis-\d+|supercross|nascar|motogp|mxgp|formula-1|indycar|racing-\d+))["'][^>]*>([\s\S]*?)<\/a>/gi;
   let match;
   while ((match = linkPattern.exec(body)) != null) {
     const title = roxieStripHtml(match[2]);
@@ -12333,8 +12636,8 @@ async function roxieLoadEvents() {
   return roxieParseIndex(roxieResponseText(response));
 }
 
-async function roxieLoadGenericEvents() {
-  const response = await roxieFetch(ROXIE_HOME_PATH, {
+async function roxieLoadGenericEvents(path = ROXIE_HOME_PATH) {
+  const response = await roxieFetch(path, {
     headers: {
       Accept: 'text/html,*/*;q=0.8',
       Referer: `${roxieOrigin().replace(/\/+$/, '')}/`,
@@ -12346,7 +12649,7 @@ async function roxieLoadGenericEvents() {
 
 function roxieSportName(event) {
   if (event.teamA && event.teamB) return 'Football';
-  if (/\/f1(?:$|-)/i.test(event.pagePath)) return 'Motorsport';
+  if (/\/(?:f1|supercross|nascar|motogp|mxgp|formula-1|indycar|racing-\d+)(?:$|-)/i.test(event.pagePath)) return 'Motorsport';
   if (/\/tennis-/i.test(event.pagePath)) return 'Tennis';
   const identity = roxieNormalize(`${event.title} ${event.pagePath}`);
   if (
@@ -12381,10 +12684,16 @@ function roxieEventIsRelevant(event, nowMs) {
     nowMs - startsAt <= ROXIE_RECENT_WINDOW_MS;
 }
 
+function roxieEventLiveWindowMs(event) {
+  const sport = roxieSportName(event);
+  if (sport === 'Motorsport') return ROXIE_MOTORSPORT_WINDOW_MS;
+  return ROXIE_LIVE_WINDOW_MS;
+}
+
 function roxieCountdownState(event, nowMs) {
   const startsAt = Date.parse(event.startsAt);
   if (!Number.isFinite(startsAt)) return 'scheduled';
-  if (nowMs - startsAt >= ROXIE_LIVE_WINDOW_MS) return 'ended';
+  if (nowMs - startsAt >= roxieEventLiveWindowMs(event)) return 'ended';
   return startsAt <= nowMs ? 'live' : 'scheduled';
 }
 
@@ -12434,12 +12743,16 @@ function roxieCatalogEntry(event, nowMs = Date.now()) {
 }
 
 async function roxieSportEntries(nowMs) {
-  const [soccer, generic] = await Promise.all([
+  const [soccer, genericPages] = await Promise.all([
     roxieLoadEvents().catch(() => []),
-    roxieLoadGenericEvents().catch(() => []),
+    Promise.all(
+      ROXIE_GENERIC_EVENT_PATHS.map((path) =>
+        roxieLoadGenericEvents(path).catch(() => []),
+      ),
+    ),
   ]);
   const seen = new Set();
-  return [...soccer, ...generic]
+  return [...soccer, ...genericPages.flat()]
     .filter((event) => roxieEventIsRelevant(event, nowMs))
     .filter((event) => {
       const key = roxieEventDedupeKey(event);
@@ -12487,7 +12800,12 @@ async function roxieSources(args) {
     if (Array.isArray(item.participants) && item.participants.length === 2) {
       events = await roxieLoadEvents();
     } else if (roxieText(item.title)) {
-      events = await roxieLoadGenericEvents();
+      const pages = await Promise.all(
+        ROXIE_GENERIC_EVENT_PATHS.map((path) =>
+          roxieLoadGenericEvents(path).catch(() => []),
+        ),
+      );
+      events = pages.flat();
     } else {
       return { sources: [] };
     }

@@ -3,13 +3,16 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.48",
+      "version": "1.0.50",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Made SPOTV the authoritative Motorsport catalog source with current timestamps and artwork; Cricfy, PlayZTV, and RoxieStreams remain stream resolvers with kickoff-based matching.",
+        "Removed stale or duplicate generic Motorsport catalog rows so events such as MotoGP use SPOTV's schedule and live state.",
+        "Added Roxie Fighting and Motorsports page feeds so current UFC, boxing, MXGP, MotoGP, NASCAR, and related events appear in Nimora.",
         "Removed the global Schedule category, kept Live as a timeline, and filtered stale Cricfy events after their sport-specific expiry window.",
         "Removed FCTV33, kept finished FotMob matches in Schedule as ended, and prevented stale provider events from reappearing in Live Now.",
         "Fixed duplicate football matches caused by abbreviated provider team names, renamed the Home live shelf to Live Now, and renamed the Sport category to Schedule.",
@@ -192,7 +195,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "9cc73e9e995a70cd0b4651120b692dc9cc888676c8cbcebf4d97ac3b3b914ddd"
+      "bundleSha256": "d9b29507ddcd28211ca4e23768d3d85434f575b7e2886e7f8bd1d4d4ebea7fa6"
     }
   ]
 }
