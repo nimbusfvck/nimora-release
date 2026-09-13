@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.43",
+      "version": "1.0.44",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Removed Featured Sports from the all category; it remains available only to Home's Featured Hero.",
         "Fixed the Featured Sports catalog registration so Home's Featured Hero loads it without rendering an erroneous Home shelf.",
         "Added a Featured Sports catalog so highly rated upcoming football big matches can enter Home's Featured Hero before kickoff without being marked live.",
         "Renamed the Nimora matches catalog label from Live Now to Sports Matches to distinguish it from the Home live shelf.",
