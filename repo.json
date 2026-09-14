@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.62",
+      "version": "1.0.63",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added Trending Today rows to the Movie, TV Shows, and Anime categories; Movie and TV use TMDB daily trends, while Anime uses Sokuja's weekly ranking.",
         "Changed the Sokuja Anime category to show Most Popular, Most Rating, Most Recent, and genre shelves together as separate rows.",
         "Removed the Movie/TV grid catalog and improved Movie, TV, and Sokuja Anime sections with popularity, rating, recent, and genre browsing.",
         "Updated Movie and TV category sections to Most Popular, Most Rating, Most Recent, and TMDB genre rows.",
@@ -210,7 +211,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "ab83ae9ad62e3da397c4e7cbd03ef97af9134449b1140f6e61166220b87545c1"
+      "bundleSha256": "a26e27dbe557dfc5c1a09050295daaaca98439a33743543b8da6f04da2865a5f"
     }
   ]
 }

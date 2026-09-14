@@ -5675,10 +5675,12 @@ const HIGHLIGHT_GROUPS = [
 // country rankings stay on `all` until they have a category-specific fetch.
 const CATEGORY_HIGHLIGHT_IDS = {
   movie: [
+    'trending_movie',
     'popular_movie_all_time',
     'top_rated_movie',
   ],
   tv: [
+    'trending_tv',
     'popular_tv_all_time',
     'top_rated_tv',
   ],
@@ -5703,9 +5705,11 @@ async function highlightGroupsForCategory(category) {
   const genres = await genreGroups(category);
   return groups.map((group) => ({
     ...group,
-    name: group.id === `popular_${category === 'movie' ? 'movie' : 'tv'}_all_time`
-      ? 'Most Popular'
-      : 'Most Rating',
+    name: group.id.startsWith('trending_')
+      ? 'Trending Today'
+      : group.id === `popular_${category === 'movie' ? 'movie' : 'tv'}_all_time`
+        ? 'Most Popular'
+        : 'Most Rating',
   })).concat(recentGroup, genres);
 }
 
@@ -7117,6 +7121,7 @@ const SOKUJA_PROVIDER_ID = 'nimora.sokuja';
 const SOKUJA_CATALOG_ID = 'sokuja';
 const SOKUJA_ANIME_CATEGORY = 'anime';
 const SOKUJA_CATALOG_ORDERS = [
+  { id: 'trending', name: 'Trending Today', ranking: 'weekly' },
   { id: 'popular', name: 'Most Popular', order: 'popular' },
   { id: 'top', name: 'Most Rating', order: 'score' },
   { id: 'update', name: 'Most Recent', order: 'update' },
@@ -7805,6 +7810,13 @@ async function sokujaCatalog(query) {
   const page = Number.isInteger(requested) && requested > 0 ? requested : 1;
 
   async function loadSection(order) {
+    if (order.ranking != null) {
+      return {
+        order,
+        items: await sokujaAnimeRankingItems(order.ranking),
+        hasNext: false,
+      };
+    }
     await sokujaEnsureBase();
     const params = `order=${encodeURIComponent(order.order || 'popular')}` +
       (page > 1 ? `&page=${page}` : '');

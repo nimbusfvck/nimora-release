@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.50",
+      "version": "1.0.51",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added Trending Today rows to the Movie, TV Shows, and Anime categories; Movie and TV use TMDB daily trends, while Anime uses Sokuja's weekly ranking.",
         "Changed the Sokuja Anime category to show Most Popular, Most Rating, Most Recent, and genre shelves together as separate rows.",
         "Removed the Movie/TV grid catalog and improved Movie, TV, and Sokuja Anime sections with popularity, rating, recent, and genre browsing.",
         "Updated Movie and TV category sections to Most Popular, Most Rating, Most Recent, and TMDB genre rows.",
@@ -70,7 +71,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "ad0aa5a693553123fc6bcf57dd3b7848fae3666096081c38db98ec2cf1d47c21"
+      "bundleSha256": "e5e469d010eb2e1ddd0a2cb6a5f4b34226dca2ee836bd94273eb526cd1ffe406"
     }
   ]
 }
