@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.64",
+      "version": "1.0.65",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed See more pagination for Indonesian and Korean movie/series rows and limited country movie rows to TMDB digital releases without vote-count filtering.",
         "Added recent Indonesian and Korean movie rows plus recent Korean series, without vote-count filtering; removed Indonesian Series from the category layout.",
         "Added Trending Today rows to the Movie, TV Shows, and Anime categories; Movie and TV use TMDB daily trends, while Anime uses Sokuja's weekly ranking.",
         "Changed the Sokuja Anime category to show Most Popular, Most Rating, Most Recent, and genre shelves together as separate rows.",
@@ -212,7 +213,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "e41bb1085ae9d2d5a20fea633369e79fca7b61a33e770d62e6b83686bb0af2a1"
+      "bundleSha256": "5c8b749981c4595c34e8b50c37e65e78ad2cdcb6aaf31ad4d7a92b316ca52904"
     }
   ]
 }

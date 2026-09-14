@@ -7248,6 +7248,7 @@ const CATEGORY_COUNTRY_SHELVES = {
 };
 
 async function fetchRecentCountryPage(country, mediaType, page) {
+  const requestedPage = tmdbRequestedPage(page);
   const todayDate = new Date();
   const oldestDate = new Date(todayDate);
   oldestDate.setUTCDate(oldestDate.getUTCDate() - 180);
@@ -7259,15 +7260,22 @@ async function fetchRecentCountryPage(country, mediaType, page) {
   const oldestDateParam = mediaType === 'movie'
     ? 'primary_release_date.gte'
     : 'first_air_date.gte';
+  const releaseParams = mediaType === 'movie'
+    ? {
+        region: country.originCountry,
+        with_release_type: '4',
+      }
+    : {};
   const discover = await fetchDiscoverPage(mediaType, {
     sort_by: mediaType === 'movie'
       ? 'primary_release_date.desc'
       : 'first_air_date.desc',
     with_origin_country: country.originCountry,
     with_original_language: country.originalLanguage,
+    ...releaseParams,
     [oldestDateParam]: oldest,
     [dateParam]: today,
-  }, page);
+  }, requestedPage);
   return {
     items: discover.items,
     page: discover.page,
