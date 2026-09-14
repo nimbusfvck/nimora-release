@@ -5190,7 +5190,10 @@ async function fetchMostRecentPage(mediaType, page) {
     ? 'primary_release_date.gte'
     : 'first_air_date.gte';
   const discover = await fetchDiscoverPage(mediaType, {
-    sort_by: 'popularity.desc',
+    sort_by: mediaType === 'movie'
+      ? 'primary_release_date.desc'
+      : 'first_air_date.desc',
+    region: 'US',
     [oldestDateParam]: oldest,
     [dateParam]: today,
     'vote_count.gte': mediaType === 'movie' ? 25 : 10,
@@ -5204,6 +5207,59 @@ async function fetchMostRecentPage(mediaType, page) {
 async function fetchMostRecent(mediaType) {
   const page = await fetchMostRecentPage(mediaType, 1);
   return page.items;
+}
+
+const CATEGORY_COUNTRY_SHELVES = {
+  movie: [
+    { id: 'indonesian_movie', name: 'Indonesian Movies', originCountry: 'ID', originalLanguage: 'id' },
+    { id: 'korean_movie', name: 'Korean Movies', originCountry: 'KR', originalLanguage: 'ko' },
+  ],
+  tv: [
+    { id: 'korean_tv', name: 'Korean Series', originCountry: 'KR', originalLanguage: 'ko' },
+  ],
+};
+
+async function fetchRecentCountryPage(country, mediaType, page) {
+  const todayDate = new Date();
+  const oldestDate = new Date(todayDate);
+  oldestDate.setUTCDate(oldestDate.getUTCDate() - 180);
+  const today = todayDate.toISOString().slice(0, 10);
+  const oldest = oldestDate.toISOString().slice(0, 10);
+  const dateParam = mediaType === 'movie'
+    ? 'primary_release_date.lte'
+    : 'first_air_date.lte';
+  const oldestDateParam = mediaType === 'movie'
+    ? 'primary_release_date.gte'
+    : 'first_air_date.gte';
+  const discover = await fetchDiscoverPage(mediaType, {
+    sort_by: mediaType === 'movie'
+      ? 'primary_release_date.desc'
+      : 'first_air_date.desc',
+    with_origin_country: country.originCountry,
+    with_original_language: country.originalLanguage,
+    [oldestDateParam]: oldest,
+    [dateParam]: today,
+  }, page);
+  return {
+    items: discover.items,
+    page: discover.page,
+    totalPages: discover.totalPages,
+  };
+}
+
+function categoryCountryGroups(mediaType) {
+  return (CATEGORY_COUNTRY_SHELVES[mediaType] || []).map((country) => ({
+    id: `recent_${country.id}`,
+    name: country.name,
+    fetch: async () => (await fetchRecentCountryPage(country, mediaType, 1)).items,
+    fetchPage: async (page) => {
+      const result = await fetchRecentCountryPage(country, mediaType, page);
+      return {
+        items: result.items,
+        nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
+      };
+    },
+  }));
 }
 
 // TMDB does not expose a dedicated "popular by country" list. Keep the
@@ -5314,12 +5370,13 @@ async function fetchGenres(mediaType) {
 }
 
 async function fetchTopByGenrePage(mediaType, genre, page) {
+  const requestedPage = tmdbRequestedPage(page);
   return fetchDiscoverPage(mediaType, {
     with_genres: genre.tmdbId,
     sort_by: 'popularity.desc',
     'vote_count.gte': genre.minimumVotes,
     with_origin_country: 'US',
-  }, page);
+  }, requestedPage);
 }
 
 async function fetchTopByGenre(mediaType, genre) {
@@ -5710,7 +5767,7 @@ async function highlightGroupsForCategory(category) {
       : group.id === `popular_${category === 'movie' ? 'movie' : 'tv'}_all_time`
         ? 'Most Popular'
         : 'Most Rating',
-  })).concat(recentGroup, genres);
+  })).concat(recentGroup, categoryCountryGroups(category), genres);
 }
 
 // Highlights declare `subCategories` — one per group, id-matched to the name

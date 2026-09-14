@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.51",
+      "version": "1.0.52",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added recent Indonesian and Korean movie rows plus recent Korean series, without vote-count filtering; removed Indonesian Series from the category layout.",
         "Added Trending Today rows to the Movie, TV Shows, and Anime categories; Movie and TV use TMDB daily trends, while Anime uses Sokuja's weekly ranking.",
         "Changed the Sokuja Anime category to show Most Popular, Most Rating, Most Recent, and genre shelves together as separate rows.",
         "Removed the Movie/TV grid catalog and improved Movie, TV, and Sokuja Anime sections with popularity, rating, recent, and genre browsing.",
@@ -71,7 +72,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "e5e469d010eb2e1ddd0a2cb6a5f4b34226dca2ee836bd94273eb526cd1ffe406"
+      "bundleSha256": "a5f2b6fa27ee6ccb0325e01cb737b6c1f6c1f136c30f3bbddbded64c43637d8e"
     }
   ]
 }
