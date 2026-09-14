@@ -7803,24 +7803,39 @@ async function sokujaCatalog(query) {
   if (selected == null) return { sections: [], subCategories };
   const requested = Number(query.page);
   const page = Number.isInteger(requested) && requested > 0 ? requested : 1;
-  await sokujaEnsureBase();
-  const params = `order=${encodeURIComponent(selected.order || 'popular')}` +
-    (page > 1 ? `&page=${page}` : '');
-  const url = selected.path != null
-    ? `${sokujaUrl(selected.path)}?${params}`
-    : `${sokujaActiveBase}/anime/?${params}`;
-  const response = await sokujaGet(url, { headers: sokujaHeaders(url) });
-  if (response == null) return { sections: [], subCategories };
-  const items = sokujaSearchResults(response.body)
-    .slice(0, SOKUJA_CATALOG_PER_PAGE)
-    .map(sokujaCatalogItem);
+
+  async function loadSection(order) {
+    await sokujaEnsureBase();
+    const params = `order=${encodeURIComponent(order.order || 'popular')}` +
+      (page > 1 ? `&page=${page}` : '');
+    const url = order.path != null
+      ? `${sokujaUrl(order.path)}?${params}`
+      : `${sokujaActiveBase}/anime/?${params}`;
+    const response = await sokujaGet(url, { headers: sokujaHeaders(url) });
+    if (response == null) return { order, items: [], hasNext: false };
+    return {
+      order,
+      items: sokujaSearchResults(response.body)
+        .slice(0, SOKUJA_CATALOG_PER_PAGE)
+        .map(sokujaCatalogItem),
+      hasNext: sokujaHasNextPage(response.body, order.order || 'popular', page),
+    };
+  }
+
+  const loaded = query.subCategory == null
+    ? await Promise.all(orders.map(loadSection))
+    : [await loadSection(selected)];
   const result = {
-    sections: [{ id: selected.id, items }],
+    sections: loaded
+      .filter((section) => section.items.length > 0)
+      .map((section) => ({
+        id: section.order.id,
+        title: section.order.name,
+        items: section.items,
+      })),
     subCategories,
   };
-  if (sokujaHasNextPage(response.body, selected.order, page)) {
-    result.nextPage = String(page + 1);
-  }
+  if (loaded.some((section) => section.hasNext)) result.nextPage = String(page + 1);
   return result;
 }
 
