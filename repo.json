@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.57",
+      "version": "1.0.58",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Changed Hydrax Auto startup to the highest validated rendition up to 720p while keeping higher qualities available for manual selection.",
         "Added Idlix movie and TV episode streams using Nimora's existing titles, with fresh gate/session resolution and subtitles.",
         "Added CDNLiveTV event discovery and fresh HLS channel resolution.",
         "Removed Featured Sports from the all category; it remains available only to Home's Featured Hero.",
@@ -205,7 +206,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "f6414103624d52a3385c1ac51c32f3e42a77218d14244c2422cee201d8752aee"
+      "bundleSha256": "cff1973b2bf38487453bc66710a82e751b64a8ff77baf5e95774230629a135bc"
     }
   ]
 }

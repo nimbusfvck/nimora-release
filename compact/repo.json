@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.45",
+      "version": "1.0.46",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Changed Hydrax Auto startup to the highest validated rendition up to 720p while keeping higher qualities available for manual selection.",
         "Added Idlix movie and TV episode streams using Nimora's existing titles, with fresh gate/session resolution and subtitles.",
         "Added CDNLiveTV event discovery and fresh HLS channel resolution.",
         "Removed Featured Sports from the all category; it remains available only to Home's Featured Hero.",
@@ -65,7 +66,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "0966c29e45c3d32d171730c1b76e3475ca97b50d7efcd2344b347ff6b118d15d"
+      "bundleSha256": "1769218b2d2be186d7103e4d1d5bcf733e44c55b70322d37ab929db7b7a13f6d"
     }
   ]
 }

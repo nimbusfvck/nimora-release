@@ -14614,10 +14614,11 @@ async function layarkacaValidateAbyssEntries(entries, headers, fallbackLabel) {
     });
   }
   // Keep the quality picker in descending order, but make the provider's
-  // default URL the lowest validated rendition. The app opens stream.url when
-  // Auto has no explicit preference; this avoids starting Hydrax on 1080p
-  // before the player has a chance to apply a saved quality choice.
-  const primary = valid[valid.length - 1];
+  // default URL the highest validated rendition at or below 720p. The app
+  // opens stream.url when Auto has no explicit preference, so this keeps
+  // Hydrax Auto at 720p while leaving 1080p available for manual selection.
+  const primary = valid.find((entry) => entry.height > 0 && entry.height <= 720) ||
+    valid[valid.length - 1];
   return {
     url: primary.url,
     format: primary.format,
