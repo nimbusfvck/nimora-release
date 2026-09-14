@@ -3,13 +3,15 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.44",
+      "version": "1.0.45",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added Idlix movie and TV episode streams using Nimora's existing titles, with fresh gate/session resolution and subtitles.",
+        "Added CDNLiveTV event discovery and fresh HLS channel resolution.",
         "Removed Featured Sports from the all category; it remains available only to Home's Featured Hero.",
         "Fixed the Featured Sports catalog registration so Home's Featured Hero loads it without rendering an erroneous Home shelf.",
         "Added a Featured Sports catalog so highly rated upcoming football big matches can enter Home's Featured Hero before kickoff without being marked live.",
@@ -63,7 +65,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "0b9eaf1996cf2155d25eee80ee362d01a833c2ccd90bb3556d99f61d3b0792fd"
+      "bundleSha256": "0966c29e45c3d32d171730c1b76e3475ca97b50d7efcd2344b347ff6b118d15d"
     }
   ]
 }

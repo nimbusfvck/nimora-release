@@ -3,13 +3,15 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.56",
+      "version": "1.0.57",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added Idlix movie and TV episode streams using Nimora's existing titles, with fresh gate/session resolution and subtitles.",
+        "Added CDNLiveTV event discovery and fresh HLS channel resolution.",
         "Removed Featured Sports from the all category; it remains available only to Home's Featured Hero.",
         "Fixed the Featured Sports catalog registration so Home's Featured Hero loads it without rendering an erroneous Home shelf.",
         "Added a Featured Sports catalog so highly rated upcoming football big matches can enter Home's Featured Hero before kickoff without being marked live.",
@@ -203,7 +205,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "a97039bee01f1f906cb3ac7645e06fdeabf82966f915357d5d8dfb9c995bf9d6"
+      "bundleSha256": "f6414103624d52a3385c1ac51c32f3e42a77218d14244c2422cee201d8752aee"
     }
   ]
 }

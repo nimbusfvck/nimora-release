@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.56",
+  "version": "1.0.57",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -53,6 +53,17 @@
       "roles": [
         "stream"
       ]
+    },
+    {
+      "id": "nimora.idlix",
+      "name": "Idlix",
+      "roles": [
+        "stream"
+      ],
+      "locales": {
+        "countries": ["ID"],
+        "languages": ["id"]
+      }
     },
     {
       "id": "nimora.kora",
@@ -157,6 +168,13 @@
     {
       "id": "nimora.roxie",
       "name": "RoxieStreams",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.cdnlivetv",
+      "name": "CDNLiveTV",
       "roles": [
         "stream"
       ]

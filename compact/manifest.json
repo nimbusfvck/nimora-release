@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.44",
+  "version": "1.0.45",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -49,6 +49,11 @@
       "roles": ["stream"]
     },
     {
+      "id": "nimora.cdnlivetv",
+      "name": "CDNLiveTV",
+      "roles": ["stream"]
+    },
+    {
       "id": "nimora.cricfy",
       "name": "Cricfy",
       "roles": ["stream"]
@@ -71,6 +76,12 @@
       "id": "nimora.moviebox",
       "name": "MovieBox",
       "roles": ["stream"]
+    },
+    {
+      "id": "nimora.idlix",
+      "name": "Idlix",
+      "roles": ["stream"],
+      "locales": {"countries": ["ID"], "languages": ["id"]}
     },
     {
       "id": "nimora.layarkaca.catalog",
