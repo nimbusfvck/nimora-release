@@ -12843,6 +12843,32 @@ function savefilmBase64Binary(value) {
   return result;
 }
 
+function savefilmAbyssQualityHeight(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const value = entry.height || entry.quality || entry.type ||
+    entry.label || entry.name || '';
+  const match = /(?:^|[^0-9])(2160|1440|1080|720|480|360)\s*p?(?:[^0-9]|$)/i
+    .exec(String(value));
+  return match == null ? null : Number(match[1]);
+}
+
+function savefilmAbyssGeneratedUrl(entry, payload, media) {
+  if (!entry || !payload || payload.md5_id == null || payload.slug == null ||
+      entry.res_id == null || entry.size == null || typeof entry.sub !== 'string') {
+    return null;
+  }
+  const domains = media && media.mp4 && media.mp4.domains;
+  if (!Array.isArray(domains)) return null;
+  const domain = domains.find((value) => String(value || '').includes(entry.sub));
+  if (!domain) return null;
+  const path = `/mp4/${payload.md5_id}/${entry.res_id}/${entry.size}?v=${payload.slug}`;
+  const token = savefilmAbyssPathToken(path, entry.size);
+  const host = String(domain).replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  return /^[-a-z0-9.]+(?::\d+)?$/i.test(host)
+    ? `https://${host}/sora/${entry.size}/${token}`
+    : null;
+}
+
 function savefilmAbyssMediaUrls(html) {
   const match = /\b(?:const|let|var)\s+datas\s*=\s*["']([^"']+)["']/i.exec(html || '');
   if (!match) return [];
@@ -12854,6 +12880,34 @@ function savefilmAbyssMediaUrls(html) {
       `${payload.user_id}:${payload.slug}:${payload.md5_id}`,
     ));
     const values = [];
+    const generated = (Array.isArray(media.mp4?.sources)
+      ? media.mp4.sources : [])
+      .map((entry) => {
+        if (String(entry && entry.codec || '').toLowerCase() === 'av1') return null;
+        const url = savefilmAbyssGeneratedUrl(entry, payload, media);
+        if (!url) return null;
+        const height = savefilmAbyssQualityHeight(entry);
+        return {
+          id: height == null ? `mirror-${entry.res_id}` : `quality-${height}p`,
+          url,
+          format: 'mp4',
+          label: String(entry.label || entry.quality ||
+            (height == null ? `Mirror ${entry.res_id}` : `${height}p`)),
+          ...(height == null ? {} : { height }),
+        };
+      })
+      .filter((entry) => entry != null)
+      .sort((left, right) => (left.height || Number.MAX_SAFE_INTEGER) -
+        (right.height || Number.MAX_SAFE_INTEGER));
+    if (generated.length > 0) {
+      values.push({
+        url: generated[0].url,
+        format: 'mp4',
+        label: 'Abyss',
+        resolver: 'abyss',
+        variants: generated,
+      });
+    }
     const add = (entry, format) => {
       const url = entry && typeof entry.url === 'string' ? entry.url.trim() : '';
       // Abyss `.fd` URLs are only the first chunk for its browser service
@@ -12975,7 +13029,13 @@ async function savefilmPlayerStreams(detailUrl) {
       }
       for (const entry of media) {
         if (streams.some((stream) => stream.url === entry.url)) continue;
-        streams.push({ ...entry, referer: iframeUrl });
+        streams.push({
+          ...entry,
+          referer: iframeUrl,
+          ...(entry.resolver === 'abyss'
+            ? { resolverUrl: iframeUrl, resolverReferer: pageUrl }
+            : {}),
+        });
       }
     }
   }
@@ -13014,11 +13074,39 @@ async function savefilmSources(args) {
   const streams = await savefilmPlayerStreams(watchUrl);
   return {
     sources: streams.map((stream, index) => ({
-      id: `${SAVEFILM_PROVIDER_KEY}:${savefilmEncode({ u: stream.url, r: stream.referer })}`,
-      label: `Savefilm · ${stream.format === 'hls' ? 'HLS' : 'MP4'} ${index + 1}`,
+      id: `${SAVEFILM_PROVIDER_KEY}:${savefilmEncode(stream.resolverUrl
+        ? { a: stream.resolverUrl, r: stream.resolverReferer }
+        : { u: stream.url, r: stream.referer })}`,
+      label: stream.label
+        ? `Savefilm · ${stream.label}`
+        : `Savefilm · ${stream.format === 'hls' ? 'HLS' : 'MP4'} ${index + 1}`,
       provider: 'Nimora',
       providerId: SAVEFILM_PROVIDER_ID,
     })),
+  };
+}
+
+function savefilmResolvedStream(stream, referer) {
+  const headers = {
+    Referer: referer || `${savefilmBase || SAVEFILM_DEFAULT_BASE}/`,
+    'User-Agent': SAVEFILM_UA,
+  };
+  const variants = (Array.isArray(stream.variants) ? stream.variants : [])
+    .map((variant, index) => ({
+      id: variant.id || `mirror-${index + 1}`,
+      url: variant.url,
+      format: variant.format === 'hls' ? 'hls' : 'other',
+      headers,
+      label: variant.label || `Mirror ${index + 1}`,
+      ...(Number.isInteger(variant.height) ? { height: variant.height } : {}),
+    }));
+  return {
+    url: stream.url,
+    // The shared stream protocol has hls/dash/other, not mp4. Native
+    // players still recognize a genuine MP4 by its response MIME type.
+    format: stream.format === 'hls' ? 'hls' : 'other',
+    headers,
+    ...(variants.length === 0 ? {} : { variants }),
   };
 }
 
@@ -13026,6 +13114,17 @@ async function savefilmResolveSource(sourceId) {
   const prefix = `${SAVEFILM_PROVIDER_KEY}:`;
   if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) throw new Error('Invalid Savefilm source id');
   const payload = savefilmDecode(sourceId.slice(prefix.length));
+  const isAbyss = typeof payload?.a === 'string' &&
+    /^https?:\/\/[^\s]+$/i.test(payload.a);
+  if (isAbyss) {
+    const iframe = await savefilmPlayerResponse(payload.a, payload.r);
+    const stream = iframe == null
+      ? null
+      : savefilmAbyssMediaUrls(iframe.response.body)
+        .find((entry) => entry.resolver === 'abyss');
+    if (stream == null) throw new Error('Savefilm Abyss player has no playable media');
+    return savefilmResolvedStream(stream, iframe.url);
+  }
   const isFile = typeof payload?.u === 'string' &&
     /^https?:\/\/[^\s]+\.(?:m3u8|mp4)(?:[?#].*)?$/i.test(payload.u);
   const isAcefile = typeof payload?.u === 'string' &&
@@ -13033,16 +13132,10 @@ async function savefilmResolveSource(sourceId) {
   if (!payload || typeof payload.u !== 'string' || (!isFile && !isAcefile)) {
     throw new Error('Malformed Savefilm source id');
   }
-  return {
+  return savefilmResolvedStream({
     url: payload.u,
-    // The shared stream protocol has hls/dash/other, not mp4. Native
-    // players still recognize a genuine MP4 by its URL/MIME type.
-    format: /\.m3u8(?:[?#]|$)/i.test(payload.u) ? 'hls' : 'other',
-    headers: {
-      Referer: payload.r || `${savefilmBase || SAVEFILM_DEFAULT_BASE}/`,
-      'User-Agent': SAVEFILM_UA,
-    },
-  };
+    format: /\.m3u8(?:[?#]|$)/i.test(payload.u) ? 'hls' : 'mp4',
+  }, payload.r);
 }
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
