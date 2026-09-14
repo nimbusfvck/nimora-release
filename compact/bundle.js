@@ -4627,7 +4627,6 @@ const SHEGU_TRAILER_BASE = globalThis.__sheguTrailerBaseUrl || 'https://trailer.
 const TMDB_API_KEY = '8476a7ab80ad76f0936744df0430e67c';
 
 const TMDB_PROVIDER_ID = 'nimora.tmdb';
-const TMDB_CATALOG_ID = 'discover';
 const TMDB_MOVIE_CATEGORY = 'movie';
 const TMDB_TV_CATEGORY = 'tv';
 const TMDB_WATCH_REGION = globalThis.__tmdbWatchRegion || 'US';
@@ -5159,9 +5158,11 @@ async function fetchTopRated(mediaType) {
 
 async function fetchPopularPage(mediaType, page) {
   const requestedPage = tmdbRequestedPage(page);
-  const data = await tmdbGetJson(`/${mediaType}/popular`, {
+  const data = await tmdbGetJson(`/discover/${mediaType}`, {
     page: requestedPage,
     include_adult: 'false',
+    sort_by: 'popularity.desc',
+    with_origin_country: 'US',
   });
   const results = Array.isArray(data.results) ? data.results : [];
   return {
@@ -5177,13 +5178,22 @@ async function fetchPopular(mediaType) {
 }
 
 async function fetchMostRecentPage(mediaType, page) {
-  const today = new Date().toISOString().slice(0, 10);
+  const todayDate = new Date();
+  const oldestDate = new Date(todayDate);
+  oldestDate.setUTCDate(oldestDate.getUTCDate() - 180);
+  const today = todayDate.toISOString().slice(0, 10);
+  const oldest = oldestDate.toISOString().slice(0, 10);
   const dateParam = mediaType === 'movie'
     ? 'primary_release_date.lte'
     : 'first_air_date.lte';
+  const oldestDateParam = mediaType === 'movie'
+    ? 'primary_release_date.gte'
+    : 'first_air_date.gte';
   const discover = await fetchDiscoverPage(mediaType, {
-    sort_by: mediaType === 'movie' ? 'primary_release_date.desc' : 'first_air_date.desc',
+    sort_by: 'popularity.desc',
+    [oldestDateParam]: oldest,
     [dateParam]: today,
+    'vote_count.gte': mediaType === 'movie' ? 25 : 10,
   }, page);
   return {
     items: discover.items,
@@ -5306,8 +5316,9 @@ async function fetchGenres(mediaType) {
 async function fetchTopByGenrePage(mediaType, genre, page) {
   return fetchDiscoverPage(mediaType, {
     with_genres: genre.tmdbId,
-    sort_by: 'vote_average.desc',
+    sort_by: 'popularity.desc',
     'vote_count.gte': genre.minimumVotes,
+    with_origin_country: 'US',
   }, page);
 }
 
@@ -5749,27 +5760,6 @@ async function tmdbHighlightsCatalog(query) {
     })).filter((section) => section.items.length > 0),
     subCategories,
   };
-}
-
-// --- catalog: no sections, no subCategories — just the popularity-sorted
-// discover feed, straight from the API, paginated for infinite scroll. Named
-// curated lists live on the row-based `highlights` catalog above; this
-// `movie`/`tv` catalog remains a single flat, ungrouped list for the grid.
-
-async function tmdbCatalog(query) {
-  const mediaType =
-    query.category === TMDB_MOVIE_CATEGORY
-      ? 'movie'
-      : query.category === TMDB_TV_CATEGORY
-        ? 'tv'
-        : null;
-  if (mediaType == null) return { sections: [] };
-
-  const page = query.page ? Number(query.page) : 1;
-  const discover = await fetchDiscover(mediaType, page);
-  const result = { sections: [{ id: 'discover', items: discover.items }] };
-  if (discover.page < discover.totalPages) result.nextPage = String(discover.page + 1);
-  return result;
 }
 
 // --- "previews" catalog: the Shorts feed producer — Coming Soon interleaved
@@ -6270,10 +6260,6 @@ async function tmdbSearch(args) {
 // --- provider registry ---
 
 globalThis.__catalogProviders = globalThis.__catalogProviders || [];
-globalThis.__catalogProviders.push({
-  catalogId: TMDB_CATALOG_ID,
-  catalog: tmdbCatalog,
-});
 globalThis.__catalogProviders.push({
   catalogId: HIGHLIGHTS_CATALOG_ID,
   catalog: tmdbHighlightsCatalog,
@@ -7131,12 +7117,13 @@ const SOKUJA_PROVIDER_ID = 'nimora.sokuja';
 const SOKUJA_CATALOG_ID = 'sokuja';
 const SOKUJA_ANIME_CATEGORY = 'anime';
 const SOKUJA_CATALOG_ORDERS = [
-  { id: 'update', name: 'Latest Updates', order: 'update' },
-  { id: 'top', name: 'Top Rated', order: 'score' },
   { id: 'popular', name: 'Most Popular', order: 'popular' },
+  { id: 'top', name: 'Most Rating', order: 'score' },
+  { id: 'update', name: 'Most Recent', order: 'update' },
 ];
 const SOKUJA_CATALOG_PER_PAGE = 24;
 const SOKUJA_RANKING_PATH = '/anime/?order=popular';
+let sokujaGenreOrdersMemo = null;
 let sokujaRankingPending = null;
 const SOKUJA_USER_AGENT =
   'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 ' +
@@ -7768,9 +7755,28 @@ function sokujaCatalogItem(result) {
   return item;
 }
 
-function sokujaCatalogOrder(subCategory) {
-  if (subCategory == null) return SOKUJA_CATALOG_ORDERS[0];
-  return SOKUJA_CATALOG_ORDERS.find((entry) => entry.id === subCategory) || null;
+async function sokujaCatalogOrders() {
+  if (sokujaGenreOrdersMemo != null) return sokujaGenreOrdersMemo;
+  await sokujaEnsureBase();
+  const url = sokujaUrl('/genre/');
+  const response = await sokujaGet(url, { headers: sokujaHeaders(url) });
+  if (response == null) return SOKUJA_CATALOG_ORDERS;
+  const genres = [];
+  const pattern = /href=["']\/genre\/([^"'/?#]+)\/[^>]*>([^<]+)</gi;
+  let match;
+  while ((match = pattern.exec(response.body || '')) != null) {
+    const slug = sokujaDecodeHtml(match[1]).trim();
+    const name = sokujaDecodeHtml(match[2]).trim();
+    if (slug && name && !genres.some((genre) => genre.slug === slug)) {
+      genres.push({ slug, name });
+    }
+  }
+  sokujaGenreOrdersMemo = SOKUJA_CATALOG_ORDERS.concat(genres.map((genre) => ({
+    id: `genre_${genre.slug}`,
+    name: genre.name,
+    path: `/genre/${genre.slug}/`,
+  })));
+  return sokujaGenreOrdersMemo;
 }
 
 function sokujaHasNextPage(html, order, page) {
@@ -7786,18 +7792,23 @@ function sokujaHasNextPage(html, order, page) {
 
 async function sokujaCatalog(query) {
   if (query.category !== SOKUJA_ANIME_CATEGORY) return { sections: [] };
-  const subCategories = SOKUJA_CATALOG_ORDERS.map((entry) => ({
+  const orders = await sokujaCatalogOrders();
+  const subCategories = orders.map((entry) => ({
     id: entry.id,
     name: entry.name,
   }));
-  const selected = sokujaCatalogOrder(query.subCategory);
+  const selected = query.subCategory == null
+    ? orders[0]
+    : orders.find((entry) => entry.id === query.subCategory) || null;
   if (selected == null) return { sections: [], subCategories };
   const requested = Number(query.page);
   const page = Number.isInteger(requested) && requested > 0 ? requested : 1;
   await sokujaEnsureBase();
-  const params = `order=${encodeURIComponent(selected.order)}` +
+  const params = `order=${encodeURIComponent(selected.order || 'popular')}` +
     (page > 1 ? `&page=${page}` : '');
-  const url = `${sokujaActiveBase}/anime/?${params}`;
+  const url = selected.path != null
+    ? `${sokujaUrl(selected.path)}?${params}`
+    : `${sokujaActiveBase}/anime/?${params}`;
   const response = await sokujaGet(url, { headers: sokujaHeaders(url) });
   if (response == null) return { sections: [], subCategories };
   const items = sokujaSearchResults(response.body)
