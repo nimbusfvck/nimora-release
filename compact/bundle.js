@@ -5176,6 +5176,26 @@ async function fetchPopular(mediaType) {
   return page.items;
 }
 
+async function fetchMostRecentPage(mediaType, page) {
+  const today = new Date().toISOString().slice(0, 10);
+  const dateParam = mediaType === 'movie'
+    ? 'primary_release_date.lte'
+    : 'first_air_date.lte';
+  const discover = await fetchDiscoverPage(mediaType, {
+    sort_by: mediaType === 'movie' ? 'primary_release_date.desc' : 'first_air_date.desc',
+    [dateParam]: today,
+  }, page);
+  return {
+    items: discover.items,
+    nextPage: discover.page < discover.totalPages ? String(discover.page + 1) : null,
+  };
+}
+
+async function fetchMostRecent(mediaType) {
+  const page = await fetchMostRecentPage(mediaType, 1);
+  return page.items;
+}
+
 // TMDB does not expose a dedicated "popular by country" list. Keep the
 // country-specific values in data so adding another country only needs one
 // entry here. Shelf titles intentionally follow `Popular <Country> Series &
@@ -5269,24 +5289,19 @@ async function fetchDiscover(mediaType, page) {
   return fetchDiscoverPage(mediaType, {}, page);
 }
 
-// Keep the genre set deliberately small. Each entry becomes one horizontal
-// row, and a category page should not fan out to every genre TMDB exposes.
-const TOP_BY_GENRE = {
-  movie: [
-    { id: 'action', name: 'Action', tmdbId: 28, minimumVotes: 200 },
-    { id: 'comedy', name: 'Comedy', tmdbId: 35, minimumVotes: 200 },
-    { id: 'drama', name: 'Drama', tmdbId: 18, minimumVotes: 200 },
-    { id: 'horror', name: 'Horror', tmdbId: 27, minimumVotes: 200 },
-    { id: 'science_fiction', name: 'Sci-Fi', tmdbId: 878, minimumVotes: 200 },
-  ],
-  tv: [
-    { id: 'action_adventure', name: 'Action & Adventure', tmdbId: 10759, minimumVotes: 100 },
-    { id: 'comedy', name: 'Comedy', tmdbId: 35, minimumVotes: 100 },
-    { id: 'crime', name: 'Crime', tmdbId: 80, minimumVotes: 100 },
-    { id: 'drama', name: 'Drama', tmdbId: 18, minimumVotes: 100 },
-    { id: 'science_fiction_fantasy', name: 'Sci-Fi & Fantasy', tmdbId: 10765, minimumVotes: 100 },
-  ],
-};
+let tmdbGenresMemo = new Map();
+
+async function fetchGenres(mediaType) {
+  const existing = tmdbGenresMemo.get(mediaType);
+  if (existing != null) return existing;
+  const request = tmdbGetJson(`/genre/${mediaType}/list`, { language: 'en-US' })
+    .then((data) => Array.isArray(data.genres)
+      ? data.genres.filter((genre) => Number.isInteger(genre.id) && typeof genre.name === 'string')
+      : [])
+    .catch(() => []);
+  tmdbGenresMemo.set(mediaType, request);
+  return request;
+}
 
 async function fetchTopByGenrePage(mediaType, genre, page) {
   return fetchDiscoverPage(mediaType, {
@@ -5301,14 +5316,22 @@ async function fetchTopByGenre(mediaType, genre) {
   return page.items;
 }
 
-function topByGenreGroups(mediaType) {
-  const genres = TOP_BY_GENRE[mediaType] || [];
+async function genreGroups(mediaType) {
+  const genres = await fetchGenres(mediaType);
   return genres.map((genre) => ({
-    id: `top_by_genre_${mediaType}_${genre.id}`,
-    name: `Top By Genre · ${genre.name}`,
-    fetch: () => fetchTopByGenre(mediaType, genre),
+    id: `genre_${mediaType}_${genre.id}`,
+    name: genre.name,
+    fetch: () => fetchTopByGenre(mediaType, {
+      ...genre,
+      tmdbId: genre.id,
+      minimumVotes: mediaType === 'movie' ? 200 : 100,
+    }),
     fetchPage: async (page) => {
-      const result = await fetchTopByGenrePage(mediaType, genre, page);
+      const result = await fetchTopByGenrePage(mediaType, {
+        ...genre,
+        tmdbId: genre.id,
+        minimumVotes: mediaType === 'movie' ? 200 : 100,
+      }, page);
       return {
         items: result.items,
         nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
@@ -5641,50 +5664,38 @@ const HIGHLIGHT_GROUPS = [
 // country rankings stay on `all` until they have a category-specific fetch.
 const CATEGORY_HIGHLIGHT_IDS = {
   movie: [
-    'trending_movie',
-    'top_rated_movie',
     'popular_movie_all_time',
-    'netflix_movies',
-    'hulu_movies',
-    'disney_movies',
-    'prime_movies',
-    'hbo_movies',
-    'appletv_movies',
-    'layarkaca_movies',
-    'rotten_tomatoes_best',
-    'based_on_true_story',
-    'oscar_nominees',
-    'cannes',
-    'top_by_genre',
+    'top_rated_movie',
   ],
   tv: [
-    'trending_tv',
-    'top_rated_tv',
     'popular_tv_all_time',
-    'netflix_tv',
-    'disney_tv',
-    'appletv_tv',
-    'prime_tv',
-    'hbo_tv',
-    'layarkaca_tv',
-    'top_by_genre',
+    'top_rated_tv',
   ],
 };
 
-function highlightGroupsForCategory(category) {
+async function highlightGroupsForCategory(category) {
   if (category === TMDB_ALL_CATEGORY) return HIGHLIGHT_GROUPS;
   const ids = CATEGORY_HIGHLIGHT_IDS[category];
   if (!Array.isArray(ids)) return [];
   const groups = [];
   for (const id of ids) {
-    if (id === 'top_by_genre') {
-      groups.push(...topByGenreGroups(category));
-      continue;
-    }
     const group = HIGHLIGHT_GROUPS.find((entry) => entry.id === id);
     if (group != null) groups.push(group);
   }
-  return groups;
+  if (category !== 'movie' && category !== 'tv') return groups;
+  const recentGroup = {
+    id: `recent_${category}`,
+    name: 'Most Recent',
+    fetch: () => fetchMostRecent(category),
+    fetchPage: (page) => fetchMostRecentPage(category, page),
+  };
+  const genres = await genreGroups(category);
+  return groups.map((group) => ({
+    ...group,
+    name: group.id === `popular_${category === 'movie' ? 'movie' : 'tv'}_all_time`
+      ? 'Most Popular'
+      : 'Most Rating',
+  })).concat(recentGroup, genres);
 }
 
 // Highlights declare `subCategories` — one per group, id-matched to the name
@@ -5698,7 +5709,7 @@ function highlightGroupsForCategory(category) {
 // section heading it came from; with none declared, every "See more" here
 // used to reopen everything, unfiltered, under a mismatched title).
 async function tmdbHighlightsCatalog(query) {
-  const groups = highlightGroupsForCategory(query.category);
+  const groups = await highlightGroupsForCategory(query.category);
   if (groups.length === 0) return { sections: [] };
   const subCategories = groups.map((g) => ({ id: g.id, name: g.name }));
 
