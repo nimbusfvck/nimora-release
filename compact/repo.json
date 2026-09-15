@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.73",
+      "version": "1.0.74",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Removed TMDB from the AniList anime detail path; episode titles, thumbnails, trailers, and related anime collections now come directly from AniList.",
         "Fixed Febbox source discovery by using the file fid and prioritizing signed quality-list HLS URLs before legacy playback fallbacks.",
         "Fixed Febbox quality resolution by sending the share key and accepting the top-level quality HTML returned by Febbox.",
         "Fixed AniSkip markers for AniList episodes mapped through TMDB seasons by querying the absolute anime episode number.",
@@ -90,7 +91,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "c24d5267a56dc0dbf0ba59334dc3954f4191459788eee90a316464ef55a2df3f"
+      "bundleSha256": "b3aa9a2eda27680547ee8ba01601569d2aded76be39e954245c961a7fa4f4935"
     }
   ]
 }

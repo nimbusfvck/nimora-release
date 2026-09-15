@@ -13944,7 +13944,6 @@ const ANILIST_MAX_REQUESTS_PER_WINDOW = 75;
 // carry no date, and are matched by number instead.
 const ANILIST_SCHEDULE_PER_PAGE = 100;
 const ANILIST_RANKING_LIMIT = 25;
-const ANILIST_LAZY_SEASON_THRESHOLD = 24;
 
 const ANILIST_MEDIA_FIELDS = `
   id
@@ -13976,6 +13975,14 @@ const ANILIST_MEDIA_QUERY = `
       ${ANILIST_MEDIA_FIELDS}
       genres
       description(asHtml: false)
+      streamingEpisodes { title thumbnail }
+      trailer { id site }
+      relations {
+        edges {
+          relationType(version: 3)
+          node { ${ANILIST_MEDIA_FIELDS} }
+        }
+      }
       nextAiringEpisode { episode }
       airingSchedule(notYetAired: false, page: 1, perPage: $schedulePerPage) {
         nodes { episode airingAt }
@@ -14247,6 +14254,30 @@ function anilistItemsOf(data) {
   return media.filter((entry) => entry != null).map(anilistToMediaItem);
 }
 
+function anilistRelationCollection(media) {
+  const edges = media && media.relations && Array.isArray(media.relations.edges)
+    ? media.relations.edges
+    : [];
+  if (edges.length === 0) return null;
+  const items = [];
+  const seen = new Set();
+  const add = (entry) => {
+    const id = Number(entry && entry.id);
+    if (!Number.isInteger(id) || id < 1 || seen.has(id)) return;
+    seen.add(id);
+    items.push(anilistToMediaItem(entry));
+  };
+  add(media);
+  for (const edge of edges) add(edge && edge.node);
+  return items.length > 1
+    ? {
+      id: `anilist:collection:${media.id}`,
+      name: `${anilistTitle(media)} Collection`,
+      items,
+    }
+    : null;
+}
+
 function anilistShelf(subCategory) {
   if (subCategory == null) return ANILIST_SHELVES[0];
   return ANILIST_SHELVES.find((shelf) => shelf.id === subCategory) || null;
@@ -14416,8 +14447,8 @@ function anilistSchedule(media) {
 // The detail page must remain useful when TMDB is unavailable (for example,
 // when the host has not configured its private TMDB proxy yet). AniList's
 // cover/banner are not episode-specific, but they are a better tile fallback
-// than an empty image. tmdbAnimeEpisodeArtwork replaces these with stills when
-// the TMDB mapping succeeds.
+// than an empty image. AniList's streamingEpisodes data replaces these with
+// episode-specific title/artwork when the external stream exposes it.
 function anilistEpisodeArtwork(media) {
   const artwork = {};
   const cover = media && media.coverImage ? media.coverImage : {};
@@ -14427,6 +14458,80 @@ function anilistEpisodeArtwork(media) {
     artwork.landscape = { url: media.bannerImage };
   }
   return Object.keys(artwork).length > 0 ? artwork : null;
+}
+
+function anilistTrailer(media) {
+  const trailer = media && media.trailer ? media.trailer : null;
+  const id = trailer && typeof trailer.id === 'string' ? trailer.id.trim() : '';
+  const site = trailer && typeof trailer.site === 'string'
+    ? trailer.site.trim()
+    : '';
+  if (id === '' || site === '') return null;
+  const normalizedSite = site.toLowerCase();
+  let url = null;
+  let displaySite = site;
+  let thumbnail = null;
+  if (normalizedSite === 'youtube') {
+    url = `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`;
+    displaySite = 'YouTube';
+    thumbnail = `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+  } else if (normalizedSite === 'vimeo') {
+    url = `https://vimeo.com/${encodeURIComponent(id)}`;
+    displaySite = 'Vimeo';
+  } else if (normalizedSite === 'dailymotion') {
+    url = `https://www.dailymotion.com/video/${encodeURIComponent(id)}`;
+    displaySite = 'Dailymotion';
+  }
+  if (url == null) return null;
+  return {
+    title: 'Trailer',
+    url,
+    site: displaySite,
+    ...(thumbnail != null ? {thumbnail: {url: thumbnail}} : {}),
+  };
+}
+
+function anilistStreamingEpisodeNumber(title) {
+  if (typeof title !== 'string') return null;
+  const value = title.trim();
+  const patterns = [
+    /\b(?:episode|ep)\s*\.?\s*[-:#]?\s*(\d{1,4})\b/i,
+    /\bE\s*(\d{1,4})\b/i,
+    /^\s*#?\s*(\d{1,4})\s*(?:[-:.]|$)/,
+  ];
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    const episode = match == null ? NaN : Number(match[1]);
+    if (Number.isInteger(episode) && episode > 0) return episode;
+  }
+  return null;
+}
+
+// AniList's streaming episode thumbnail is tied to an external legal
+// streaming page, not to the series artwork. It is useful as a precise
+// fallback when TMDB has no still, but titles without an episode number (or
+// without a thumbnail) cannot be mapped safely.
+function anilistStreamingEpisodeEntry(media, episodeNumber) {
+  const streamingEpisodes = media && Array.isArray(media.streamingEpisodes)
+    ? media.streamingEpisodes
+    : [];
+  for (const entry of streamingEpisodes) {
+    const number = anilistStreamingEpisodeNumber(entry && entry.title);
+    const title = entry && typeof entry.title === 'string'
+      ? entry.title.trim()
+      : '';
+    const thumbnail = entry && typeof entry.thumbnail === 'string'
+      ? entry.thumbnail.trim()
+      : '';
+    if (number !== episodeNumber || (title === '' && thumbnail === '')) continue;
+    return {
+      title: title || null,
+      artwork: /^https?:\/\//i.test(thumbnail)
+        ? { landscape: { url: thumbnail } }
+        : null,
+    };
+  }
+  return null;
 }
 
 // One group, always: an AniList entry *is* one cour, numbered from 1, so a
@@ -14446,71 +14551,20 @@ function anilistEpisodeGuide(media, schedule, total) {
       title: `Episode ${position}`,
       position,
     };
-    if (fallbackArtwork != null) episode.artwork = fallbackArtwork;
+    const streamingEntry = anilistStreamingEpisodeEntry(media, position);
+    if (streamingEntry != null && streamingEntry.title != null) {
+      episode.title = streamingEntry.title;
+    }
+    if (streamingEntry != null && streamingEntry.artwork != null) {
+      episode.artwork = streamingEntry.artwork;
+    } else if (fallbackArtwork != null) {
+      episode.artwork = fallbackArtwork;
+    }
     const availableAt = schedule.get(position);
     if (availableAt != null) episode.availableAt = availableAt;
     episodes.push(episode);
   }
   return { groups: [{ id: 'season:1', title: 'Episodes', episodes }] };
-}
-
-function anilistLazyEpisodeGuide(groups) {
-  if (!Array.isArray(groups) || groups.length === 0) return null;
-  return {
-    groups: groups.map((group) => ({
-      id: group.id,
-      title: group.title,
-      episodes: [],
-      loaded: false,
-    })),
-  };
-}
-
-function anilistEpisodeGuideForTmdbSeason(media, schedule, season) {
-  if (season == null || !Array.isArray(season.episodes)) return null;
-  const episodes = season.episodes
-    .map((entry) => {
-      const position = Number(entry && entry.position);
-      const absoluteEpisode = Number(entry && entry.absoluteEpisode);
-      if (!Number.isInteger(position) || position < 1 ||
-          !Number.isInteger(absoluteEpisode) || absoluteEpisode < 1) {
-        return null;
-      }
-      const episode = {
-        ref: {
-          extensionId: EXTENSION_ID,
-          providerId: ANILIST_PROVIDER_ID,
-          // Keep the stable ref keyed by the continuous AniList episode.
-          id: anilistEpisodeRefId(media.id, absoluteEpisode),
-        },
-        title: entry.title || `Episode ${position}`,
-        position,
-        absoluteEpisode,
-      };
-      // AniList has the precise airing timestamp when available. TMDB's
-      // season endpoint still provides the release date for episodes that
-      // are not present in AniList's schedule yet.
-      const availableAt = schedule.get(absoluteEpisode) ?? entry.availableAt;
-      if (availableAt != null) episode.availableAt = availableAt;
-      if (entry.stillPath) {
-        episode.artwork = {
-          landscape: {url: `${TMDB_IMAGE_BASE}/w780${entry.stillPath}`},
-        };
-      } else {
-        const fallbackArtwork = anilistEpisodeArtwork(media);
-        if (fallbackArtwork != null) episode.artwork = fallbackArtwork;
-      }
-      return episode;
-    })
-    .filter((episode) => episode != null);
-  return {
-    groups: [{
-      id: season.id,
-      title: season.title,
-      episodes,
-      loaded: true,
-    }],
-  };
 }
 
 async function anilistMeta(args) {
@@ -14526,71 +14580,22 @@ async function anilistMeta(args) {
   if (media == null) throw new Error(`AniList has no media ${mediaId}`);
 
   const anilistItem = anilistToMediaItem(media);
-  let detail = { item: anilistItem };
-  if (typeof globalThis.__tmdbAnimeDetail === 'function') {
-    const tmdbDetail = await globalThis.__tmdbAnimeDetail(media);
-    if (tmdbDetail != null && tmdbDetail.item != null) {
-      detail = {
-        ...tmdbDetail,
-        item: {
-          ...tmdbDetail.item,
-          // Keep the AniList ref/title so Sokuja and Indomax matching keeps
-          // seeing the same stable identity as the catalog item.
-          ref: anilistItem.ref,
-          title: anilistItem.title,
-          artwork: tmdbDetail.item.artwork || anilistItem.artwork,
-        },
-      };
-    }
-  }
+  const detail = { item: anilistItem };
+  const collection = anilistRelationCollection(media);
+  if (collection != null) detail.collection = collection;
   const description = anilistDescription(media.description);
   if (description && detail.description == null) detail.description = description;
   if (Array.isArray(media.genres) && media.genres.length > 0 && detail.tags == null) {
     detail.tags = media.genres.filter((genre) => typeof genre === 'string');
   }
+  const trailer = anilistTrailer(media);
+  if (trailer != null) detail.trailers = [trailer];
   if (media.format === 'MOVIE') return detail;
 
   const schedule = anilistSchedule(media);
   const total = anilistEpisodeCount(media, schedule);
-  const requestedGroupId = typeof args.groupId === 'string' && args.groupId
-    ? args.groupId
-    : null;
-  let guide = requestedGroupId == null &&
-      total <= ANILIST_LAZY_SEASON_THRESHOLD
-    ? anilistEpisodeGuide(media, schedule, total)
-    : null;
-  if (guide == null) {
-    let lazyGuide = null;
-    if (
-      requestedGroupId != null &&
-      typeof globalThis.__tmdbAnimeSeasonEpisodes === 'function'
-    ) {
-      const season = await globalThis.__tmdbAnimeSeasonEpisodes(
-        media,
-        requestedGroupId,
-        total,
-      );
-      lazyGuide = anilistEpisodeGuideForTmdbSeason(media, schedule, season);
-    } else if (
-      requestedGroupId == null &&
-      total > ANILIST_LAZY_SEASON_THRESHOLD &&
-      typeof globalThis.__tmdbAnimeSeasonGroups === 'function'
-    ) {
-      const groups = await globalThis.__tmdbAnimeSeasonGroups(media, total);
-      lazyGuide = anilistLazyEpisodeGuide(groups);
-    }
-    guide = lazyGuide || anilistEpisodeGuide(media, schedule, total);
-  }
+  const guide = anilistEpisodeGuide(media, schedule, total);
   if (guide != null) {
-    if (
-      requestedGroupId == null &&
-      total <= ANILIST_LAZY_SEASON_THRESHOLD &&
-      typeof globalThis.__tmdbAnimeEpisodeArtwork === 'function'
-    ) {
-      // TMDB is metadata-only here. The AniList episode refs remain the source
-      // identity used by Sokuja/Indomax; TMDB only contributes still artwork.
-      guide = await globalThis.__tmdbAnimeEpisodeArtwork(media, guide);
-    }
     detail.episodeGuide = guide;
     const lastAired = Math.min(anilistLastAired(media, schedule), total);
     if (lastAired >= 1) {
