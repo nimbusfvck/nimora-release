@@ -4064,7 +4064,7 @@ function showboxHlsUrl(value, baseUrl) {
 async function showboxVideoQualityLinks(shareId, fileId) {
   if (!shareId || !fileId) return [];
   const url = FEBBOX_DOMAIN + '/console/video_quality_list?fid=' +
-    encodeURIComponent(fileId);
+    encodeURIComponent(fileId) + '&share_key=' + encodeURIComponent(shareId);
   const body = await showboxFetch(
     url,
     FEBBOX_DOMAIN + '/share/' + encodeURIComponent(shareId),
@@ -4075,7 +4075,16 @@ async function showboxVideoQualityLinks(shareId, fileId) {
   if (body == null) return [];
   try {
     const payload = JSON.parse(body);
-    const html = payload && payload.data && payload.data.html;
+    // Febbox returns the quality fragment as top-level `html` (the reference
+    // client reads response.data.html from Axios), while older responses used
+    // a nested `data.html` shape. Accept both without weakening URL checks.
+    const html = payload && typeof payload.html === 'string'
+      ? payload.html
+      : payload && payload.data && typeof payload.data.html === 'string'
+        ? payload.data.html
+        : payload && typeof payload.data === 'string'
+          ? payload.data
+          : '';
     const directValues = [
       payload && payload.embed_url,
       payload && payload.embedUrl,
@@ -17989,10 +17998,17 @@ function skipIntroEpisodeContext(item) {
   const parentRef = episode && episode.parentRef;
   const seasonMatch = /^season:(\d+)$/.exec(String(episode && episode.groupId || ''));
   const season = seasonMatch == null ? 1 : Number(seasonMatch[1]);
-  const episodeNumber = skipIntroPositiveInteger(episode && episode.position);
+  const providerId = ref && ref.providerId;
+  // AniList episodes backed by a real TMDB season carry both numbers:
+  // `position` is season-relative while AniSkip expects the continuous MAL
+  // episode number. TMDB itself still needs its season-relative position.
+  const episodeNumber = providerId === 'nimora.anilist'
+    ? skipIntroPositiveInteger(episode && episode.absoluteEpisode) ??
+      skipIntroPositiveInteger(episode && episode.position)
+    : skipIntroPositiveInteger(episode && episode.position);
   if (
     ref == null ||
-    typeof ref.providerId !== 'string' ||
+    typeof providerId !== 'string' ||
     parentRef == null ||
     typeof parentRef.id !== 'string' ||
     episodeNumber == null ||

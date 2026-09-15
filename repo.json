@@ -3,13 +3,15 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.83",
+      "version": "1.0.84",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Febbox quality resolution by sending the share key and accepting the top-level quality HTML returned by Febbox.",
+        "Fixed AniSkip markers for AniList episodes mapped through TMDB seasons by querying the absolute anime episode number.",
         "Fixed Febbox playback by resolving the signed HLS URL through the player endpoint, forwarding the personal ui cookie only to Febbox, and rejecting invalid HLS responses.",
         "Made long-running anime details load TMDB seasons lazily, while preserving absolute episode mapping for playback and subtitles across multi-season anime such as One Piece.",
         "Added the Febbox provider with direct ShowBox-to-Febbox HLS resolution, optional personal ui cookie forwarding only to Febbox, fresh signed URLs, and 4K rendition discovery.",
@@ -227,7 +229,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "975558067ca7f82b027227ff1d7fefd758e36ce4a8661abec31fe279bb0a3b6b"
+      "bundleSha256": "895cff2051e0f3125e31e4749353409b90df3aa858e345409095f05c7dec787c"
     }
   ]
 }
