@@ -4274,29 +4274,12 @@ async function showboxEntries(parsed, item) {
     if (videoError === true || videoError === 1 ||
         showboxText(videoError) === '1' ||
         /^true$/i.test(showboxText(videoError))) continue;
-    const fileId = showboxId(file && (file.oss_fid || file.fid || file.id));
+    // `/console/video_quality_list` expects the file-list `fid`.  `oss_fid`
+    // is a legacy playback identifier and can point at a different object.
+    const fileId = showboxId(file && (file.fid || file.oss_fid || file.id));
     if (!fileId) continue;
     const fileName = showboxText(file && file.file_name);
     const shareId = showboxText(file && file._showboxShareId);
-    const playerBody = await showboxFetchPlayer(shareId, fileId);
-    const playerUrls = showboxEmbeddedHlsUrls(playerBody, FEBBOX_DOMAIN + '/');
-    if (playerUrls.length) {
-      for (const url of playerUrls) {
-        entries.push({
-          fileId,
-          shareId,
-          url,
-          versionName: fileName || 'Original',
-          linkName: 'Auto',
-          quality: showboxQuality(fileName, url),
-          size: showboxText(file && (file.file_size || file.size)),
-          codecs: showboxCodecs(fileName),
-          format: showboxFormat(url),
-          index: entries.length,
-        });
-      }
-      continue;
-    }
     const qualityLinks = await showboxVideoQualityLinks(
       shareId,
       fileId,
@@ -4313,6 +4296,27 @@ async function showboxEntries(parsed, item) {
           size: showboxText(file && (file.file_size || file.size)),
           codecs: showboxCodecs(fileName),
           format: showboxFormat(qualityLink.url),
+          index: entries.length,
+        });
+      }
+      continue;
+    }
+    // Keep the older player endpoint as a compatibility fallback, but do not
+    // let it take precedence over the quality-list flow used by Febbox.
+    const playerBody = await showboxFetchPlayer(shareId, fileId);
+    const playerUrls = showboxEmbeddedHlsUrls(playerBody, FEBBOX_DOMAIN + '/');
+    if (playerUrls.length) {
+      for (const url of playerUrls) {
+        entries.push({
+          fileId,
+          shareId,
+          url,
+          versionName: fileName || 'Original',
+          linkName: 'Auto',
+          quality: showboxQuality(fileName, url),
+          size: showboxText(file && (file.file_size || file.size)),
+          codecs: showboxCodecs(fileName),
+          format: showboxFormat(url),
           index: entries.length,
         });
       }

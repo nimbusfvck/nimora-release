@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.72",
+      "version": "1.0.73",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Febbox source discovery by using the file fid and prioritizing signed quality-list HLS URLs before legacy playback fallbacks.",
         "Fixed Febbox quality resolution by sending the share key and accepting the top-level quality HTML returned by Febbox.",
         "Fixed AniSkip markers for AniList episodes mapped through TMDB seasons by querying the absolute anime episode number.",
         "Fixed Febbox playback by resolving the signed HLS URL through the player endpoint, forwarding the personal ui cookie only to Febbox, and rejecting invalid HLS responses.",
@@ -89,7 +90,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "3d78a94ae3a5900c0eb6f5701cf2b45fe35d0aab63669900262f3c955dc2c87b"
+      "bundleSha256": "c24d5267a56dc0dbf0ba59334dc3954f4191459788eee90a316464ef55a2df3f"
     }
   ]
 }
