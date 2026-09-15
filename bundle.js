@@ -3864,20 +3864,50 @@ function showboxRuntimeCookie() {
   return value || null;
 }
 
-function showboxHeaders(referer, includeCookie) {
+function showboxHeaders(referer, includeCookie, ajax) {
   const cookie = showboxRuntimeCookie();
   const headers = {};
   headers.Accept = 'text/html,application/json,*/*';
   headers.Referer = referer || SHOWBOX_DOMAIN + '/';
   headers['User-Agent'] = SHOWBOX_UA;
+  if (ajax) headers['X-Requested-With'] = 'XMLHttpRequest';
   if (includeCookie && cookie) headers.Cookie = 'ui=' + cookie;
   return headers;
 }
 
-async function showboxFetch(url, referer, includeCookie) {
+async function showboxFetch(url, referer, includeCookie, accept, ajax) {
   try {
+    const headers = showboxHeaders(referer, includeCookie, ajax);
+    if (accept) headers.Accept = accept;
     const response = await fetch(url, {
-      headers: showboxHeaders(referer, includeCookie),
+      headers,
+      timeoutMs: 20000,
+    });
+    if (response == null || response.status < 200 || response.status >= 300) {
+      return null;
+    }
+    return response.body || '';
+  } catch (_) {
+    return null;
+  }
+}
+
+async function showboxFetchPlayer(shareId, fileId) {
+  if (!shareId || !fileId) return null;
+  try {
+    const headers = showboxHeaders(
+      FEBBOX_DOMAIN + '/share/' + encodeURIComponent(shareId),
+      true,
+      true,
+    );
+    headers.Accept = 'text/plain, */*; q=0.01';
+    headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+    headers.Origin = FEBBOX_DOMAIN;
+    const response = await fetch(FEBBOX_DOMAIN + '/file/player', {
+      method: 'POST',
+      headers,
+      body: 'fid=' + encodeURIComponent(fileId) +
+        '&share_key=' + encodeURIComponent(shareId),
       timeoutMs: 20000,
     });
     if (response == null || response.status < 200 || response.status >= 300) {
@@ -4009,6 +4039,65 @@ async function showboxFileList(shareId, parentId, page) {
   }
 }
 
+function showboxVideoQualityTags(html) {
+  const tags = [];
+  const pattern = /<[^>]*class=["'][^"']*\bfile_quality\b[^"']*["'][^>]*>/gi;
+  let match;
+  while ((match = pattern.exec(String(html || ''))) != null) {
+    const tag = match[0];
+    const urlMatch = tag.match(/\bdata-url\s*=\s*["']([^"']+)["']/i);
+    if (urlMatch == null) continue;
+    const qualityMatch = tag.match(/\bdata-quality\s*=\s*["']([^"']+)["']/i);
+    tags.push({
+      url: urlMatch[1],
+      quality: qualityMatch == null ? '' : qualityMatch[1],
+    });
+  }
+  return tags;
+}
+
+function showboxHlsUrl(value, baseUrl) {
+  const url = showboxPlaylistUrl(value, baseUrl);
+  return /\.m3u8(?:$|[?#])/i.test(url) ? url : '';
+}
+
+async function showboxVideoQualityLinks(shareId, fileId) {
+  if (!shareId || !fileId) return [];
+  const url = FEBBOX_DOMAIN + '/console/video_quality_list?fid=' +
+    encodeURIComponent(fileId);
+  const body = await showboxFetch(
+    url,
+    FEBBOX_DOMAIN + '/share/' + encodeURIComponent(shareId),
+    true,
+    'application/json, text/plain, */*',
+    true,
+  );
+  if (body == null) return [];
+  try {
+    const payload = JSON.parse(body);
+    const html = payload && payload.data && payload.data.html;
+    const directValues = [
+      payload && payload.embed_url,
+      payload && payload.embedUrl,
+      payload && payload.url,
+      payload && payload.data && payload.data.embed_url,
+      payload && payload.data && payload.data.embedUrl,
+      payload && payload.data && payload.data.url,
+    ];
+    const directLinks = directValues.map((value) => ({
+      url: showboxHlsUrl(value, FEBBOX_DOMAIN + '/'),
+      quality: '',
+    })).filter((entry) => entry.url);
+    const tagLinks = showboxVideoQualityTags(html).map((entry) => ({
+      url: showboxHlsUrl(entry.url, FEBBOX_DOMAIN + '/'),
+      quality: showboxText(entry.quality),
+    })).filter((entry) => entry.url);
+    return directLinks.concat(tagLinks);
+  } catch (_) {
+    return [];
+  }
+}
+
 function showboxSeasonNumber(value) {
   const match = showboxText(value).match(/season\s*([0-9]+)/i);
   return match ? match[1] : '';
@@ -4053,17 +4142,74 @@ function showboxAbsoluteUrl(value, baseUrl) {
     .replace(/[),]+$/, '');
   if (!raw) return '';
   if (/^https?:\/\//i.test(raw)) return raw;
-  if (raw.startsWith('/')) return baseUrl + raw;
+  if (raw.startsWith('/')) {
+    const origin = String(baseUrl || '').match(/^(https?:\/\/[^/]+)/i);
+    return origin ? origin[1] + raw : '';
+  }
   return '';
 }
 
-function showboxPlaylistUrls(body) {
+function showboxPlaylistUrl(value, baseUrl) {
+  const raw = showboxText(value);
+  const absolute = showboxAbsoluteUrl(raw, baseUrl);
+  if (absolute) return absolute;
+  if (!raw || !baseUrl) return '';
+  const originMatch = String(baseUrl).match(/^(https?:\/\/[^/]+)/i);
+  if (!originMatch) return '';
+  const origin = originMatch[1];
+  const suffixMatch = raw.match(/[?#].*$/);
+  const suffix = suffixMatch ? suffixMatch[0] : '';
+  const relativePath = suffix ? raw.slice(0, -suffix.length) : raw;
+  const basePath = String(baseUrl).slice(origin.length).split(/[?#]/, 1)[0] || '/';
+  const path = relativePath.startsWith('/')
+    ? relativePath
+    : basePath.slice(0, basePath.lastIndexOf('/') + 1) + relativePath;
+  const segments = [];
+  for (const segment of path.split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (segments.length) segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return origin + '/' + segments.join('/') + suffix;
+}
+
+function showboxPlaylistUrls(body, baseUrl) {
   const urls = [];
   const seen = {};
   const lines = String(body || '').split(/\r?\n/);
-  for (const line of lines) {
+  let expectsVariantUrl = false;
+  for (const rawLine of lines) {
+    const line = showboxText(rawLine);
+    if (!line || line.startsWith('#')) {
+      if (/^#EXT-X-STREAM-INF\b/i.test(line)) expectsVariantUrl = true;
+      continue;
+    }
+    if (!expectsVariantUrl) continue;
     const match = line.match(/https?:\/\/[^\s"'<>]+/i);
-    const url = showboxAbsoluteUrl(match ? match[0] : line, FEBBOX_DOMAIN);
+    const url = showboxPlaylistUrl(match ? match[0] : line, baseUrl);
+    if (!/^https?:\/\//i.test(url) || seen[url]) continue;
+    seen[url] = true;
+    urls.push(url);
+    expectsVariantUrl = false;
+  }
+  return urls;
+}
+
+function showboxIsPlaylist(body) {
+  return /^\s*#EXTM3U(?:\s|$)/i.test(String(body || ''));
+}
+
+function showboxEmbeddedHlsUrls(body, baseUrl) {
+  const urls = [];
+  const seen = {};
+  const text = String(body || '').replace(/\\\//g, '/');
+  const pattern = /https?:\/\/[^\s"'<>\\]+\.m3u8(?:\?[^\s"'<>\\]*)?/gi;
+  let match;
+  while ((match = pattern.exec(text)) != null) {
+    const url = showboxPlaylistUrl(match[0], baseUrl);
     if (!/^https?:\/\//i.test(url) || seen[url]) continue;
     seen[url] = true;
     urls.push(url);
@@ -4115,17 +4261,71 @@ async function showboxEntries(parsed, item) {
   const files = await showboxFiles(parsed, item);
   const entries = [];
   for (const file of files) {
+    const videoError = file && file.error_video;
+    if (videoError === true || videoError === 1 ||
+        showboxText(videoError) === '1' ||
+        /^true$/i.test(showboxText(videoError))) continue;
     const fileId = showboxId(file && (file.oss_fid || file.fid || file.id));
     if (!fileId) continue;
+    const fileName = showboxText(file && file.file_name);
+    const shareId = showboxText(file && file._showboxShareId);
+    const playerBody = await showboxFetchPlayer(shareId, fileId);
+    const playerUrls = showboxEmbeddedHlsUrls(playerBody, FEBBOX_DOMAIN + '/');
+    if (playerUrls.length) {
+      for (const url of playerUrls) {
+        entries.push({
+          fileId,
+          shareId,
+          url,
+          versionName: fileName || 'Original',
+          linkName: 'Auto',
+          quality: showboxQuality(fileName, url),
+          size: showboxText(file && (file.file_size || file.size)),
+          codecs: showboxCodecs(fileName),
+          format: showboxFormat(url),
+          index: entries.length,
+        });
+      }
+      continue;
+    }
+    const qualityLinks = await showboxVideoQualityLinks(
+      shareId,
+      fileId,
+    );
+    if (qualityLinks.length) {
+      for (const qualityLink of qualityLinks) {
+        entries.push({
+          fileId,
+          shareId,
+          url: qualityLink.url,
+          versionName: fileName || 'Original',
+          linkName: qualityLink.quality || 'Auto',
+          quality: showboxQuality(qualityLink.quality, fileName, qualityLink.url),
+          size: showboxText(file && (file.file_size || file.size)),
+          codecs: showboxCodecs(fileName),
+          format: showboxFormat(qualityLink.url),
+          index: entries.length,
+        });
+      }
+      continue;
+    }
     const masterUrl = FEBBOX_DOMAIN + '/hls/main/' + encodeURIComponent(fileId) + '.m3u8';
-    const body = await showboxFetch(masterUrl, FEBBOX_DOMAIN + '/', true);
-    const urls = showboxPlaylistUrls(body);
+    const body = await showboxFetch(
+      masterUrl,
+      FEBBOX_DOMAIN + '/',
+      true,
+      'application/vnd.apple.mpegurl, application/x-mpegURL, */*',
+    );
+    const embeddedUrls = showboxEmbeddedHlsUrls(body, masterUrl);
+    if (!showboxIsPlaylist(body) && embeddedUrls.length === 0) continue;
+    const urls = embeddedUrls.length
+      ? embeddedUrls
+      : showboxPlaylistUrls(body, masterUrl);
     const candidates = urls.length ? urls : [masterUrl];
     for (const url of candidates) {
-      const fileName = showboxText(file && file.file_name);
       entries.push({
         fileId,
-        shareId: showboxText(file && file._showboxShareId),
+        shareId,
         url,
         versionName: fileName || 'Original',
         linkName: 'Auto',
@@ -4237,7 +4437,7 @@ async function showboxListSources(args) {
       const suffix = entry.size ? ' · ' + entry.size : '';
       return {
         id,
-        label: 'ShowBox' + (hasCookie ? ' ⚡' : '') + ' · ' + entry.quality + suffix,
+        label: 'Febbox' + (hasCookie ? ' ⚡' : '') + ' · ' + entry.quality + suffix,
         provider: 'Nimora',
         providerId: SHOWBOX_PROVIDER_ID,
       };
@@ -8986,18 +9186,31 @@ async function tmdbAnimeSeasonEpisodes(media, groupId, episodeCount) {
       id: `season:${seasonNumber}`,
       title: seasons[seasonIndex].name || `Season ${seasonNumber}`,
       loaded: true,
-      episodes: episodes.map((episode) => ({
-        position: Number(episode.episode_number),
-        absoluteEpisode: offset + Number(episode.episode_number),
-        title: episode.name || `Episode ${episode.episode_number}`,
-        ...(episode.still_path
-          ? {stillPath: episode.still_path}
-          : {}),
-      })),
+      episodes: episodes.map((episode) => {
+        const availableAt = tmdbEpisodeAvailableAt(episode);
+        return {
+          position: Number(episode.episode_number),
+          absoluteEpisode: offset + Number(episode.episode_number),
+          title: episode.name || `Episode ${episode.episode_number}`,
+          ...(episode.still_path
+            ? {stillPath: episode.still_path}
+            : {}),
+          ...(availableAt != null ? {availableAt} : {}),
+        };
+      }),
     };
   } catch (_) {}
   tmdbAnimeArtworkMemo.set(cacheKey, { fetchedAt: now, value });
   return value;
+}
+
+function tmdbEpisodeAvailableAt(episode) {
+  const airDate = episode && typeof episode.air_date === 'string'
+    ? episode.air_date.trim()
+    : '';
+  // TMDB returns a bare YYYY-MM-DD date. Keep it at UTC midnight so the app
+  // does not shift the release day based on the device timezone.
+  return airDate ? `${airDate}T00:00:00Z` : null;
 }
 
 async function tmdbAnimeEpisodeArtwork(media, guide) {
@@ -9120,10 +9333,8 @@ function tmdbEpisodeOf(tvId, seasonNumber, episode) {
   if (typeof episode.runtime === 'number' && episode.runtime > 0) {
     mapped.durationSeconds = episode.runtime * 60;
   }
-  // `air_date` is a bare `"YYYY-MM-DD"` — pinned to UTC midnight explicitly
-  // rather than left for the app's date parser to assume a timezone, which
-  // could roll it into the wrong day depending on the device's own.
-  if (episode.air_date) mapped.availableAt = `${episode.air_date}T00:00:00Z`;
+  const availableAt = tmdbEpisodeAvailableAt(episode);
+  if (availableAt != null) mapped.availableAt = availableAt;
   return mapped;
 }
 
@@ -11605,10 +11816,18 @@ function kickassItemQuery(item) {
     : groupSeason == null ? 1 : Number(groupSeason[1]);
   const position = Number.isInteger(extra.episode)
     ? extra.episode
+    : episode && Number.isInteger(episode.position) ? episode.position : 1;
+  const absoluteEpisode = Number.isInteger(extra.absoluteEpisode)
+    ? extra.absoluteEpisode
     : episode && Number.isInteger(episode.absoluteEpisode)
       ? episode.absoluteEpisode
-      : episode && Number.isInteger(episode.position) ? episode.position : 1;
-  return { title, season, episode: position };
+      : position;
+  return {
+    title,
+    season,
+    episode: absoluteEpisode,
+    relativeEpisode: position,
+  };
 }
 
 function kickassIsAnimeItem(item) {
@@ -11724,7 +11943,20 @@ async function kickassSources(args) {
   }
   if (match == null || !match.slug) return { sources: [] };
 
-  const target = await kickassFindEpisode(match.slug, query.episode);
+  const matchTitle = match.title_en || match.title || match.name;
+  const seasonSpecific = kickassSeasonMarker(matchTitle, query.season);
+  const episodeCandidates = query.relativeEpisode === query.episode
+    ? [query.episode]
+    : seasonSpecific
+      ? [query.relativeEpisode, query.episode]
+      : [query.episode, query.relativeEpisode];
+  let target = null;
+  for (const candidate of episodeCandidates) {
+    target = await kickassFindEpisode(match.slug, candidate);
+    if (target != null) {
+      break;
+    }
+  }
   if (target == null) return { sources: [] };
   const detail = await kickassJson(
     `${kickassBaseUrl()}/api/show/${encodeURIComponent(match.slug)}/episode/` +
@@ -17519,7 +17751,10 @@ function anilistEpisodeGuideForTmdbSeason(media, schedule, season) {
         position,
         absoluteEpisode,
       };
-      const availableAt = schedule.get(absoluteEpisode);
+      // AniList has the precise airing timestamp when available. TMDB's
+      // season endpoint still provides the release date for episodes that
+      // are not present in AniList's schedule yet.
+      const availableAt = schedule.get(absoluteEpisode) ?? entry.availableAt;
       if (availableAt != null) episode.availableAt = availableAt;
       if (entry.stillPath) {
         episode.artwork = {

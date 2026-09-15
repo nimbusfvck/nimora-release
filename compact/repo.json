@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.70",
+      "version": "1.0.71",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Febbox playback by resolving the signed HLS URL through the player endpoint, forwarding the personal ui cookie only to Febbox, and rejecting invalid HLS responses.",
         "Made long-running anime details load TMDB seasons lazily, while preserving absolute episode mapping for playback and subtitles across multi-season anime such as One Piece.",
         "Added the Febbox provider with direct ShowBox-to-Febbox HLS resolution, optional personal ui cookie forwarding only to Febbox, fresh signed URLs, and 4K rendition discovery.",
         "Added KickassAnime as an HLS anime source with fresh iOS-compatible playback resolution, subtitle tracks, and season-safe matching.",
@@ -86,7 +87,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "cc1fc69ec2652866b00ff955bfe082dfce9da397311ced5040b3deccc2ea186e"
+      "bundleSha256": "9c10ad1ed2aa4696494f5759451aa86559926dc401383cba4d4b91cfcd3750d5"
     }
   ]
 }
