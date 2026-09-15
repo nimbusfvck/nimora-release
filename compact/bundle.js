@@ -2981,6 +2981,31 @@ function showboxFormat(url) {
   return 'other';
 }
 
+function showboxVariantHeight(entry) {
+  const match = showboxText(entry && entry.quality).match(/(\d{3,4})p/i);
+  return match == null ? null : Number(match[1]);
+}
+
+function showboxStreamVariants(entries, headers) {
+  const seen = {};
+  return entries.map((entry, index) => {
+    const url = showboxText(entry && entry.url);
+    if (!url || seen[url]) return null;
+    seen[url] = true;
+    const height = showboxVariantHeight(entry);
+    return {
+      id: (height == null ? 'variant' : 'quality-' + height + 'p') +
+        '-' + index,
+      url,
+      headers,
+      format: showboxFormat(url),
+      label: showboxText(entry && (entry.quality || entry.linkName)) ||
+        'Auto',
+      ...(height == null ? {} : { height }),
+    };
+  }).filter((variant) => variant != null);
+}
+
 const SHOWBOX_QUALITY_ORDER = {
   '2160p': 0,
   '1440p': 1,
@@ -3152,21 +3177,28 @@ async function showboxListSources(args) {
   if (parsed == null) return { sources: [] };
 
   const entries = await showboxEntries(parsed, item);
-  const occurrences = {};
+  const groups = [];
+  const groupByKey = {};
+  for (const entry of entries) {
+    const key = entry.fileId + '\u0000' + entry.shareId;
+    let group = groupByKey[key];
+    if (group == null) {
+      group = { entries: [] };
+      groupByKey[key] = group;
+      groups.push(group);
+    }
+    group.entries.push(entry);
+  }
   const hasCookie = showboxRuntimeCookie() != null;
   return {
-    sources: entries.map((entry) => {
-      const key = entry.fileId + '\u0000' + entry.linkName + '\u0000' + entry.quality;
-      const occurrence = occurrences[key] || 0;
-      occurrences[key] = occurrence + 1;
+    sources: groups.map((group) => {
+      const entry = group.entries[0];
       const sourcePayload = {
         m: parsed.tmdbId,
         k: parsed.kind,
         f: entry.fileId,
         h: entry.shareId,
-        n: entry.linkName,
-        q: entry.quality,
-        o: occurrence,
+        v: 2,
       };
       if (parsed.season != null) {
         sourcePayload.s = parsed.season;
@@ -3176,7 +3208,7 @@ async function showboxListSources(args) {
       const suffix = entry.size ? ' · ' + entry.size : '';
       return {
         id,
-        label: 'Febbox' + (hasCookie ? ' ⚡' : '') + ' · ' + entry.quality + suffix,
+        label: 'Febbox' + (hasCookie ? ' ⚡' : '') + ' · Auto' + suffix,
         provider: 'Nimora',
         providerId: SHOWBOX_PROVIDER_ID,
       };
@@ -3198,8 +3230,14 @@ async function showboxResolveSource(sourceId) {
     type: parsed.kind,
     showboxShareId: payloadId.h,
   });
-  const entry = showboxMatchEntry(entries, payloadId);
-  if (entry == null) {
+  const selectedEntries = payloadId.v === 2
+    ? entries.filter((entry) =>
+        entry.fileId === payloadId.f && entry.shareId === payloadId.h)
+    : (() => {
+        const entry = showboxMatchEntry(entries, payloadId);
+        return entry == null ? [] : [entry];
+      })();
+  if (selectedEntries.length === 0) {
     throw new Error('ShowBox: selected link is no longer available');
   }
   const cookie = showboxRuntimeCookie();
@@ -3208,10 +3246,17 @@ async function showboxResolveSource(sourceId) {
     'User-Agent': SHOWBOX_UA,
   };
   if (cookie) headers.Cookie = 'ui=' + cookie;
+  const variants = showboxStreamVariants(selectedEntries, headers);
+  if (variants.length === 0) {
+    throw new Error('ShowBox: selected link has no playable variants');
+  }
+  const primary = variants[0];
   return {
-    url: entry.url,
-    format: entry.format,
+    url: primary.url,
+    format: primary.format,
     headers,
+    label: 'Febbox',
+    ...(variants.length > 1 ? { variants } : {}),
   };
 }
 
