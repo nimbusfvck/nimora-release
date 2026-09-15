@@ -4696,6 +4696,8 @@ const SHEGU_TRAILER_TIMEOUT_MS = 1500;
 let tmdbLeaksMemo = null;
 const tmdbImagesMemo = new Map();
 const TMDB_TITLE_LOGO_CONCURRENCY = 4;
+const TMDB_TRENDING_RANKS_TTL_MS = 15 * 60 * 1000;
+const tmdbTrendingRanksMemo = new Map();
 
 // --- fetch helpers ---
 
@@ -5152,6 +5154,30 @@ async function fetchTrending(mediaType) {
   return enrichTrendingBackdrops(results, items, mediaType);
 }
 
+function fetchTrendingRanks(mediaType) {
+  const now = Date.now();
+  const existing = tmdbTrendingRanksMemo.get(mediaType);
+  if (existing != null &&
+      now - existing.fetchedAt < TMDB_TRENDING_RANKS_TTL_MS) {
+    return existing.promise;
+  }
+  const request = tmdbGetJson(`/trending/${mediaType}/day`, { include_adult: 'false' })
+    .then((data) => {
+      const results = Array.isArray(data.results) ? data.results : [];
+      const ranks = new Map();
+      results.forEach((result, index) => {
+        const rating = result && result.vote_average;
+        if (result == null || result.id == null ||
+            typeof rating !== 'number' || rating <= 0) return;
+        ranks.set(`${mediaType === 'movie' ? 'movie' : 'series'}:${result.id}`, index);
+      });
+      return ranks;
+    })
+    .catch(() => new Map());
+  tmdbTrendingRanksMemo.set(mediaType, { fetchedAt: now, promise: request });
+  return request;
+}
+
 // A future-dated result isn't guaranteed to actually be one — TMDB's flat
 // `release_date`/`first_air_date` field can carry a stale, long-past date
 // (region rerelease quirks and the like) even when a feed calls the title
@@ -5321,20 +5347,40 @@ async function fetchRecentCountryPage(country, mediaType, page) {
     ? {
         region: country.originCountry,
         with_release_type: '4',
+        // Category country rows should not show titles whose TMDB rating is
+        // still missing. A small positive lower bound excludes TMDB's 0
+        // placeholder while keeping any genuinely rated movie.
+        'vote_average.gte': 0.1,
       }
     : {};
-  const discover = await fetchDiscoverPage(mediaType, {
+  const ratingParams = { 'vote_average.gte': 0.1 };
+  const discoverRequest = fetchDiscoverPage(mediaType, {
     sort_by: mediaType === 'movie'
       ? 'primary_release_date.desc'
       : 'first_air_date.desc',
     with_origin_country: country.originCountry,
     with_original_language: country.originalLanguage,
     ...releaseParams,
+    ...ratingParams,
     [oldestDateParam]: oldest,
     [dateParam]: today,
   }, requestedPage);
+  const trendingRanksRequest = mediaType === 'movie' || mediaType === 'tv'
+    ? fetchTrendingRanks(mediaType)
+    : Promise.resolve(null);
+  const [discover, trendingRanks] = await Promise.all([
+    discoverRequest,
+    trendingRanksRequest,
+  ]);
+  const items = trendingRanks == null
+    ? discover.items
+    : discover.items.slice().sort((a, b) => {
+        const aRank = trendingRanks.get(a.ref.id) ?? Number.MAX_SAFE_INTEGER;
+        const bRank = trendingRanks.get(b.ref.id) ?? Number.MAX_SAFE_INTEGER;
+        return aRank - bRank;
+      });
   return {
-    items: discover.items,
+    items,
     page: discover.page,
     totalPages: discover.totalPages,
   };
