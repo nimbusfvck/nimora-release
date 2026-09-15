@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.59",
+      "version": "1.0.60",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Switched the Indonesian Movies category row to Indomax's rated country catalog with direct detail metadata and playback refs, while retaining TMDB fallback.",
         "Prioritized rated Indonesian and Korean movie rows plus Korean Series by TMDB daily Trending Today rankings, with rated non-trending titles kept as fallback.",
         "Disabled the Idlix stream provider while its upstream API is blocked by a Cloudflare challenge; added HD TMDB alternate backdrops and restored TMDB title logos for the Featured Summary.",
         "Fixed See more pagination for Indonesian and Korean movie/series rows and limited country movie rows to TMDB digital releases without vote-count filtering.",
@@ -75,7 +76,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "3339c8a6b20c93bb6a0b9c62b0b0287de3750e3bf2cd83b1556f3d7b49dd4510"
+      "bundleSha256": "84058b74de2ce64cb6ac7e0f791be2016cea56f5f1b18929e568f9629be74245"
     }
   ]
 }

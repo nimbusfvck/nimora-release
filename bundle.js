@@ -7350,13 +7350,42 @@ async function fetchMostRecent(mediaType) {
 
 const CATEGORY_COUNTRY_SHELVES = {
   movie: [
-    { id: 'indonesian_movie', name: 'Indonesian Movies', originCountry: 'ID', originalLanguage: 'id' },
+    {
+      id: 'indonesian_movie',
+      name: 'Indonesian Movies',
+      originCountry: 'ID',
+      originalLanguage: 'id',
+      indomaxCountry: 'indonesia',
+    },
     { id: 'korean_movie', name: 'Korean Movies', originCountry: 'KR', originalLanguage: 'ko' },
   ],
   tv: [
     { id: 'korean_tv', name: 'Korean Series', originCountry: 'KR', originalLanguage: 'ko' },
   ],
 };
+
+async function fetchCountryCategoryPage(country, mediaType, page) {
+  if (mediaType === 'movie' && country.indomaxCountry != null &&
+      typeof globalThis.__indomaxCountryMoviePage === 'function') {
+    try {
+      const indomaxPage = await globalThis.__indomaxCountryMoviePage(
+        country.indomaxCountry,
+        page,
+      );
+      if (indomaxPage != null && Array.isArray(indomaxPage.items) &&
+          indomaxPage.items.length > 0) {
+        return indomaxPage;
+      }
+    } catch (_) {}
+  }
+  const discover = await fetchRecentCountryPage(country, mediaType, page);
+  return {
+    items: discover.items,
+    nextPage: discover.page < discover.totalPages
+      ? String(discover.page + 1)
+      : null,
+  };
+}
 
 async function fetchRecentCountryPage(country, mediaType, page) {
   const requestedPage = tmdbRequestedPage(page);
@@ -7418,14 +7447,8 @@ function categoryCountryGroups(mediaType) {
   return (CATEGORY_COUNTRY_SHELVES[mediaType] || []).map((country) => ({
     id: `recent_${country.id}`,
     name: country.name,
-    fetch: async () => (await fetchRecentCountryPage(country, mediaType, 1)).items,
-    fetchPage: async (page) => {
-      const result = await fetchRecentCountryPage(country, mediaType, page);
-      return {
-        items: result.items,
-        nextPage: result.page < result.totalPages ? String(result.page + 1) : null,
-      };
-    },
+    fetch: async () => (await fetchCountryCategoryPage(country, mediaType, 1)).items,
+    fetchPage: (page) => fetchCountryCategoryPage(country, mediaType, page),
   }));
 }
 
@@ -10833,6 +10856,12 @@ function indomaxCategoryUrl(base, categoryId, page) {
   return page > 1 ? `${base}${path}page/${page}/` : `${base}${path}`;
 }
 
+function indomaxCountryUrl(base, countrySlug, page) {
+  const slug = String(countrySlug || '').replace(/^\/+|\/+$/g, '');
+  const path = `/country/${slug}/`;
+  return page > 1 ? `${base}${path}page/${page}/` : `${base}${path}`;
+}
+
 function indomaxHasNextPage(html) {
   return /<a\b[^>]*\bclass\s*=\s*["'][^"']*\bnext\b[^"']*["'][^>]*>/i.test(html || '');
 }
@@ -10853,6 +10882,44 @@ function indomaxCatalogItem(result, categoryId) {
   if (result.poster) item.artwork = { portrait: { url: result.poster } };
   if (Number.isFinite(result.rating)) item.rating = result.rating;
   return item;
+}
+
+function indomaxCountryMovieItem(result) {
+  const item = indomaxCatalogItem(result, 'indonesian_movie');
+  const yearMatch = /^(.*?)(?:\s*\((\d{4})\))?$/.exec(item.title);
+  const title = yearMatch == null ? item.title : yearMatch[1].trim();
+  const year = yearMatch == null || yearMatch[2] == null
+    ? null
+    : Number(yearMatch[2]);
+  item.title = title || item.title;
+  if (Number.isInteger(year) && year > 0) item.releaseYear = year;
+  return item;
+}
+
+async function indomaxCountryMoviePage(countrySlug, page) {
+  const base = await indomaxActiveBase();
+  const requestedPage = Number(page);
+  const currentPage = Number.isInteger(requestedPage) && requestedPage > 0
+    ? requestedPage
+    : 1;
+  const candidates = [
+    base,
+    ...INDOMAX_CATALOG_FALLBACK_BASES.filter((candidate) => candidate !== base),
+  ];
+  for (const candidate of candidates) {
+    const url = indomaxCountryUrl(candidate, countrySlug, currentPage);
+    const response = await indomaxGet(url, `${candidate}/`);
+    if (response == null) continue;
+    const results = indomaxSearchResults(response.body, candidate)
+      .filter((result) => !/\/tv\//i.test(result.url))
+      .filter((result) => Number.isFinite(result.rating) && result.rating > 0)
+      .map(indomaxCountryMovieItem);
+    if (results.length === 0) continue;
+    const result = { items: results };
+    if (indomaxHasNextPage(response.body)) result.nextPage = String(currentPage + 1);
+    return result;
+  }
+  return null;
 }
 
 async function indomaxCategoryCatalog(query, categoryId, title, subCategories) {
@@ -11645,6 +11712,8 @@ globalThis.__catalogProviders.push({
   catalogId: INDOMAX_NSFW_CATALOG_ID,
   catalog: indomaxNsfwCatalog,
 });
+
+globalThis.__indomaxCountryMoviePage = indomaxCountryMoviePage;
 
 globalThis.__extension = globalThis.__extension || {};
 const indomaxPreviousSearch = globalThis.__extension.search;

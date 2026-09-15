@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.59",
+  "version": "1.0.60",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -127,6 +127,11 @@
           "display": "row"
         }
       ]
+    },
+    {
+      "id": "nimora.indomax",
+      "name": "Indomax",
+      "roles": ["stream", "search", "meta"]
     },
     {
       "id": "nimora.dramadev",
