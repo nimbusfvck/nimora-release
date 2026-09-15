@@ -5344,6 +5344,7 @@ const CATEGORY_COUNTRY_SHELVES = {
       originCountry: 'KR',
       originalLanguage: 'ko',
       sortByRatingPopularity: true,
+      minVoteCount: 10,
     },
   ],
 };
@@ -5395,6 +5396,9 @@ async function fetchRecentCountryPage(country, mediaType, page) {
       }
     : {};
   const ratingParams = { 'vote_average.gte': 0.1 };
+  const voteCountParams = country.minVoteCount == null
+    ? {}
+    : { 'vote_count.gte': country.minVoteCount };
   const discoverRequest = fetchDiscoverPage(mediaType, {
     sort_by: mediaType === 'movie'
       ? 'primary_release_date.desc'
@@ -5403,6 +5407,7 @@ async function fetchRecentCountryPage(country, mediaType, page) {
     with_original_language: country.originalLanguage,
     ...releaseParams,
     ...ratingParams,
+    ...voteCountParams,
     [oldestDateParam]: oldest,
     [dateParam]: today,
   }, requestedPage);
@@ -8046,6 +8051,19 @@ function sokujaHasNextPage(html, order, page) {
 
 async function sokujaCatalog(query) {
   if (query.category !== SOKUJA_ANIME_CATEGORY) return { sections: [] };
+  // AniList is the richer anime catalogue when its GraphQL endpoint answers.
+  // Keep Sokuja as the complete fallback for outages, rate limits, and the
+  // Sokuja-only genre/update subcategories.
+  if (typeof anilistCatalog === 'function') {
+    try {
+      const anilistPage = await anilistCatalog(query);
+      const hasItems = anilistPage != null &&
+        Array.isArray(anilistPage.sections) &&
+        anilistPage.sections.some((section) =>
+          section != null && Array.isArray(section.items) && section.items.length > 0);
+      if (hasItems) return anilistPage;
+    } catch (_) {}
+  }
   const orders = await sokujaCatalogOrders();
   const subCategories = orders.map((entry) => ({
     id: entry.id,

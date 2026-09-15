@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.61",
+      "version": "1.0.62",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Switched the Anime category to AniList-first data with Sokuja fallback and added a minimum TMDB vote count of 10 for Korean Series.",
         "Sorted Korean Movies and Korean Series by TMDB rating, using popularity as the tie-breaker.",
         "Switched the Indonesian Movies category row to Indomax's rated country catalog with direct detail metadata and playback refs, while retaining TMDB fallback.",
         "Prioritized rated Indonesian and Korean movie rows plus Korean Series by TMDB daily Trending Today rankings, with rated non-trending titles kept as fallback.",
@@ -77,7 +78,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "640ed326b32e3a3cb4118c356af195fc52d9178e7889660f80d5f508a53cbec6"
+      "bundleSha256": "8248141dfeea48dfd74937ab5b4db89348641b2645cc0f4d102edc08e9f89ef2"
     }
   ]
 }

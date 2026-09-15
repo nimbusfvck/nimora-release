@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.73",
+      "version": "1.0.74",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Switched the Anime category to AniList-first data with Sokuja fallback and added a minimum TMDB vote count of 10 for Korean Series.",
         "Sorted Korean Movies and Korean Series by TMDB rating, using popularity as the tie-breaker.",
         "Switched the Indonesian Movies category row to Indomax's rated country catalog with direct detail metadata and playback refs, while retaining TMDB fallback.",
         "Prioritized rated Indonesian and Korean movie rows plus Korean Series by TMDB daily Trending Today rankings, with rated non-trending titles kept as fallback.",
@@ -217,7 +218,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "d897cec134a84b68308ce95967c678f815f12e0a0c329aa303b4c2a45ad7fc76"
+      "bundleSha256": "71a77b8bf12fbe9de7e6044c24fc35767aeb2f5bb7981174cb880e3be7ec18ea"
     }
   ]
 }
