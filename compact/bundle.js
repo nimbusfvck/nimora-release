@@ -4680,7 +4680,9 @@ const TMDB_BASE = globalThis.__tmdbBaseUrl || 'https://api.themoviedb.org/3';
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
 const SHEGU_LISTS_BASE = globalThis.__sheguListsBaseUrl || 'https://lists.shegu.st/joy';
 const SHEGU_TRAILER_BASE = globalThis.__sheguTrailerBaseUrl || 'https://trailer.shegu.st';
-const TMDB_API_KEY = '8476a7ab80ad76f0936744df0430e67c';
+// Credentials are supplied by the trusted host at runtime. Never put a
+// TMDB key in the public bundle. A proxy/base-url override may also answer
+// these requests without an api_key parameter.
 
 const TMDB_PROVIDER_ID = 'nimora.tmdb';
 const TMDB_MOVIE_CATEGORY = 'movie';
@@ -4700,23 +4702,94 @@ const TMDB_TRENDING_RANKS_TTL_MS = 15 * 60 * 1000;
 const tmdbTrendingRanksMemo = new Map();
 const TMDB_ANIME_ARTWORK_TTL_MS = 24 * 60 * 60 * 1000;
 const tmdbAnimeArtworkMemo = new Map();
+const TMDB_KEY_FAILURE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const TMDB_KEY_RATE_LIMIT_COOLDOWN_MS = 60 * 1000;
+const tmdbKeyCooldownUntil = new Map();
+const tmdbInFlightKeys = new Set();
+let tmdbActiveKeyIndex = 0;
 
 // --- fetch helpers ---
 
-function tmdbUrl(path, query) {
-  const params = Object.entries({ api_key: TMDB_API_KEY, language: 'en-US', ...query })
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join('&');
-  return `${TMDB_BASE}${path}?${params}`;
+function tmdbApiKeys() {
+  const configured = globalThis.__tmdbApiKeys;
+  if (Array.isArray(configured)) {
+    const keys = [...new Set(configured.map(String).map((key) => key.trim()).filter(Boolean))];
+    if (keys.length > 0) return keys;
+  }
+  const single = globalThis.__tmdbApiKey;
+  if (typeof single === 'string' && single.trim()) return [single.trim()];
+  // Keep local proxy/test bases usable without credentials while making a
+  // direct production TMDB request fail clearly with 401.
+  return [null];
 }
 
-async function tmdbGetJson(path, query) {
-  const response = await fetch(tmdbUrl(path, query));
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`Request to ${path} failed: ${response.status}`);
-  }
-  return JSON.parse(response.body);
+function tmdbUrl(path, query, apiKey, baseUrl) {
+  const parameters = { language: 'en-US', ...query };
+  if (apiKey != null) parameters.api_key = apiKey;
+  const params = Object.entries(parameters)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
+  return `${baseUrl}${path}?${params}`;
 }
+
+function tmdbKeyCandidate(keys) {
+  const now = Date.now();
+  for (let offset = 0; offset < keys.length; offset++) {
+    const index = (tmdbActiveKeyIndex + offset) % keys.length;
+    const key = keys[index];
+    const cooldownUntil = tmdbKeyCooldownUntil.get(key) || 0;
+    if (cooldownUntil <= now && !tmdbInFlightKeys.has(key)) return index;
+  }
+  // Concurrent requests can temporarily occupy every otherwise healthy key.
+  // Reuse the active one rather than waiting forever for a key slot.
+  for (let offset = 0; offset < keys.length; offset++) {
+    const index = (tmdbActiveKeyIndex + offset) % keys.length;
+    if ((tmdbKeyCooldownUntil.get(keys[index]) || 0) <= now) return index;
+  }
+  return tmdbActiveKeyIndex % keys.length;
+}
+
+async function tmdbGetJson(path, query, options) {
+  const baseUrl = options && options.baseUrl || TMDB_BASE;
+  const headers = options && options.headers;
+  const keys = tmdbApiKeys();
+  let lastStatus = null;
+  for (let attempt = 0; attempt < keys.length; attempt++) {
+    const index = tmdbKeyCandidate(keys);
+    const apiKey = keys[index];
+    tmdbInFlightKeys.add(apiKey);
+    let response;
+    try {
+      response = await fetch(
+        tmdbUrl(path, query, apiKey, baseUrl),
+        headers == null ? undefined : { headers },
+      );
+    } finally {
+      tmdbInFlightKeys.delete(apiKey);
+    }
+    if (response.status >= 200 && response.status < 300) {
+      tmdbActiveKeyIndex = index;
+      return JSON.parse(response.body);
+    }
+    lastStatus = response.status;
+    if (response.status !== 401 && response.status !== 403 && response.status !== 429) {
+      throw new Error(`Request to ${path} failed: ${response.status}`);
+    }
+    tmdbKeyCooldownUntil.set(
+      apiKey,
+      Date.now() + (response.status === 429
+        ? TMDB_KEY_RATE_LIMIT_COOLDOWN_MS
+      : TMDB_KEY_FAILURE_COOLDOWN_MS),
+    );
+    tmdbActiveKeyIndex = (index + 1) % keys.length;
+  }
+  throw new Error(`TMDB keys exhausted for ${path}: ${lastStatus}`);
+}
+
+// Other Nimora providers use this same dispatcher when they need TMDB
+// metadata. Keeping key selection here prevents one stale key from making
+// only the anime artwork or subtitle path fail while the main catalog works.
+globalThis.__tmdbGetJson = tmdbGetJson;
 
 // FlyStream's leak feed is metadata enrichment, not a playback source. Keep
 // the fetch behind the existing FlyStream cookie/gate when the bundle has
@@ -7535,7 +7608,7 @@ let sokujaBasePending = null;
 const SOKUJA_UNREACHABLE = { unreachable: true };
 const SOKUJA_TMDB_BASE =
   globalThis.__sokujaTmdbBaseUrl || 'https://api.themoviedb.org/3';
-const SOKUJA_TMDB_API_KEY = '8476a7ab80ad76f0936744df0430e67c';
+const SOKUJA_TMDB_API_KEY = globalThis.__tmdbApiKey || null;
 const SOKUJA_PROVIDER_KEY = 'sokuja';
 const SOKUJA_PROVIDER_ID = 'nimora.sokuja';
 const SOKUJA_CATALOG_ID = 'sokuja';
@@ -8048,20 +8121,34 @@ async function sokujaEpisodeAvailableAt(item) {
   const parsed = sokujaTmdbEpisodeRef(item);
   if (parsed == null) return null;
 
-  const query = [
-    `api_key=${encodeURIComponent(SOKUJA_TMDB_API_KEY)}`,
-    'language=en-US',
-  ].join('&');
-  const response = await sokujaGet(
-    `${SOKUJA_TMDB_BASE}/tv/${encodeURIComponent(parsed.tmdbId)}` +
-      `/season/${encodeURIComponent(parsed.season)}` +
-      `/episode/${encodeURIComponent(parsed.episode)}?${query}`,
-    { headers: sokujaHeaders(SOKUJA_TMDB_BASE) },
-  );
+  const path = `/tv/${encodeURIComponent(parsed.tmdbId)}` +
+    `/season/${encodeURIComponent(parsed.season)}` +
+    `/episode/${encodeURIComponent(parsed.episode)}`;
+  const payload = await sokujaTmdbJson(path);
+  if (payload == null) return null;
+  return sokujaDateKey(payload && payload.air_date);
+}
+
+async function sokujaTmdbJson(path) {
+  if (typeof globalThis.__tmdbGetJson === 'function') {
+    try {
+      return await globalThis.__tmdbGetJson(path, {}, {
+        baseUrl: SOKUJA_TMDB_BASE,
+        headers: sokujaHeaders(SOKUJA_TMDB_BASE),
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+  const query = SOKUJA_TMDB_API_KEY == null
+    ? 'language=en-US'
+    : `api_key=${encodeURIComponent(SOKUJA_TMDB_API_KEY)}&language=en-US`;
+  const response = await sokujaGet(`${SOKUJA_TMDB_BASE}${path}?${query}`, {
+    headers: sokujaHeaders(SOKUJA_TMDB_BASE),
+  });
   if (response == null) return null;
   try {
-    const payload = JSON.parse(response.body);
-    return sokujaDateKey(payload && payload.air_date);
+    return JSON.parse(response.body);
   } catch (_) {
     return null;
   }
@@ -8074,22 +8161,9 @@ async function sokujaAbsoluteEpisode(item, season, episode) {
   const parsed = sokujaTmdbEpisodeRef(item);
   if (parsed == null) return null;
 
-  const query = [
-    `api_key=${encodeURIComponent(SOKUJA_TMDB_API_KEY)}`,
-    'language=en-US',
-  ].join('&');
-  const response = await sokujaGet(
-    `${SOKUJA_TMDB_BASE}/tv/${encodeURIComponent(parsed.tmdbId)}?${query}`,
-    { headers: sokujaHeaders(SOKUJA_TMDB_BASE) },
-  );
-  if (response == null) return null;
-  let seasons;
-  try {
-    const payload = JSON.parse(response.body);
-    seasons = Array.isArray(payload && payload.seasons) ? payload.seasons : [];
-  } catch (_) {
-    return null;
-  }
+  const payload = await sokujaTmdbJson(`/tv/${encodeURIComponent(parsed.tmdbId)}`);
+  if (payload == null) return null;
+  const seasons = Array.isArray(payload && payload.seasons) ? payload.seasons : [];
 
   let offset = 0;
   for (const entry of seasons) {
@@ -13115,7 +13189,7 @@ const SKIP_INTRO_PROVIDER_ID = 'nimora.skipintro';
 const SKIP_INTRO_TMDB_BASE =
   globalThis.__tmdbBaseUrl || 'https://api.themoviedb.org/3';
 const SKIP_INTRO_TMDB_API_KEY =
-  globalThis.__tmdbApiKey || '8476a7ab80ad76f0936744df0430e67c';
+  globalThis.__tmdbApiKey || null;
 const SKIP_INTRO_ANILIST_BASE =
   globalThis.__anilistApiUrl || 'https://graphql.anilist.co';
 const SKIP_INTRO_INTRODB_BASE =
@@ -13246,8 +13320,19 @@ async function skipIntroTmdbImdbId(tmdbId) {
     return skipIntroTmdbImdbMemo.get(tmdbId);
   }
   const promise = (async () => {
+    if (typeof globalThis.__tmdbGetJson === 'function') {
+      const data = await globalThis.__tmdbGetJson(
+        `/tv/${encodeURIComponent(tmdbId)}/external_ids`,
+        {},
+        { baseUrl: SKIP_INTRO_TMDB_BASE },
+      );
+      const imdbId = data && typeof data.imdb_id === 'string'
+        ? data.imdb_id.trim()
+        : '';
+      return imdbId.startsWith('tt') ? imdbId : null;
+    }
     const params = skipIntroQuery({
-      api_key: SKIP_INTRO_TMDB_API_KEY,
+      ...(SKIP_INTRO_TMDB_API_KEY == null ? {} : {api_key: SKIP_INTRO_TMDB_API_KEY}),
       language: 'en-US',
     });
     const data = await skipIntroFetchJson(
