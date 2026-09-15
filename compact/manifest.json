@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.68",
+  "version": "1.0.69",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -79,7 +79,7 @@
     },
     {
       "id": "nimora.showbox",
-      "name": "ShowBox · FebBox",
+      "name": "Febbox",
       "roles": ["stream"]
     },
     {

@@ -3828,102 +3828,251 @@ globalThis.__streamProviders.push({
   resolve: (sourceId) => movieboxResolveSource(sourceId),
 });
 
-// ShowBox/FebBox as a Nimora stream provider, over the host `fetch` API.
+// ShowBox/FebBox as a Nimora stream provider.
 //
-// The upstream API returns direct links grouped under `versions[].links[]`.
-// A personal FebBox `ui` cookie is optional, but is the upstream's switch for
-// the account's quota and higher-quality links.  It is deliberately supplied
-// at runtime through `globalThis.__showboxUiCookie`; it is never committed,
-// put in a source id, or written to logs.
-//
-// Source ids carry only the TMDB identity and the advertised link identity.
-// resolve() asks the API again so a short-lived link is never reused after a
-// discovery call.
+// This follows the site's own flow instead of using a third-party FEBAPI:
+// showbox.media search -> share_link -> febbox.com file list -> HLS master.
+// A personal ui value is supplied at runtime as a Cookie header only to
+// showbox.media/febbox.com. It is never committed, logged, or put in a source
+// id. Resolved URLs are fetched again so signed links are not cached.
 
-const SHOWBOX_API_BASE =
-  globalThis.__showboxApiBaseUrl ||
-  'https://febapi.nuvioapp.space/api/media';
+const SHOWBOX_DOMAIN =
+  globalThis.__showboxDomain || 'https://www.showbox.media';
+const FEBBOX_DOMAIN =
+  globalThis.__febboxDomain || 'https://www.febbox.com';
 const SHOWBOX_PROVIDER_KEY = 'showbox';
 const SHOWBOX_PROVIDER_ID = 'nimora.showbox';
 const SHOWBOX_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
-const SHOWBOX_REFERER = 'https://www.febbox.com/';
 
 function showboxText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-// Accept either the documented raw `ui` value or a copied `ui=...` pair.
-// A complete Cookie header is intentionally reduced to its ui value so no
-// unrelated browser cookies are forwarded to the API.
 function showboxRuntimeCookie() {
   const raw = showboxText(globalThis.__showboxUiCookie);
   if (!raw) return null;
-  if (raw.startsWith('ui=')) {
-    const value = raw.slice(3).split(';', 1)[0].trim();
-    return value || null;
-  }
-  return raw.split(';', 1)[0].trim() || null;
+  const value = raw.startsWith('ui=')
+    ? raw.slice(3).split(';', 1)[0].trim()
+    : raw.split(';', 1)[0].trim();
+  return value || null;
 }
 
-function showboxHeaders() {
-  return {
-    Accept: 'application/json,*/*',
-    Referer: SHOWBOX_REFERER,
-    'User-Agent': SHOWBOX_UA,
-  };
-}
-
-function showboxParseRef(refId) {
-  if (typeof refId !== 'string') return null;
-  const episode = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
-  if (episode != null) {
-    return {
-      kind: 'tv',
-      tmdbId: episode[1],
-      season: episode[2],
-      episode: episode[3],
-    };
-  }
-  const movie = /^movie:([^:]+)$/.exec(refId);
-  return movie == null
-    ? null
-    : { kind: 'movie', tmdbId: movie[1], season: null, episode: null };
-}
-
-function showboxApiUrl(parsed) {
-  const base = String(SHOWBOX_API_BASE).replace(/\/$/, '');
-  let url = parsed.kind === 'tv'
-    ? `${base}/tv/${encodeURIComponent(parsed.tmdbId)}/oss=USA7/` +
-      `${encodeURIComponent(parsed.season)}/${encodeURIComponent(parsed.episode)}`
-    : `${base}/movie/${encodeURIComponent(parsed.tmdbId)}/oss=USA7`;
+function showboxHeaders(referer, includeCookie) {
   const cookie = showboxRuntimeCookie();
-  if (cookie) url += `?cookie=${encodeURIComponent(cookie)}`;
-  return url;
+  const headers = {};
+  headers.Accept = 'text/html,application/json,*/*';
+  headers.Referer = referer || SHOWBOX_DOMAIN + '/';
+  headers['User-Agent'] = SHOWBOX_UA;
+  if (includeCookie && cookie) headers.Cookie = 'ui=' + cookie;
+  return headers;
 }
 
-async function showboxFetchJson(parsed) {
+async function showboxFetch(url, referer, includeCookie) {
   try {
-    const response = await fetch(showboxApiUrl(parsed), {
-      headers: showboxHeaders(),
+    const response = await fetch(url, {
+      headers: showboxHeaders(referer, includeCookie),
       timeoutMs: 20000,
     });
     if (response == null || response.status < 200 || response.status >= 300) {
       return null;
     }
-    const payload = JSON.parse(response.body);
-    return payload && payload.success === false ? null : payload;
+    return response.body || '';
   } catch (_) {
     return null;
   }
 }
 
-function showboxQuality(...values) {
-  const text = values.map(showboxText).join(' ').toLowerCase();
+function showboxHtmlText(value) {
+  return showboxText(String(value || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&#x27;/gi, "'")
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' '));
+}
+
+function showboxTitleKey(value) {
+  return showboxHtmlText(value).toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function showboxTitlesMatch(wanted, candidate) {
+  const a = showboxTitleKey(wanted);
+  const b = showboxTitleKey(candidate);
+  return a.length > 0 && b.length > 0 &&
+    (a === b || a.includes(b) || b.includes(a));
+}
+
+function showboxFindDetail(html, item) {
+  const wantedTitle = item && (item.type === 'tv' && item.subtitle
+    ? item.subtitle
+    : item.title || item.name || item.originalTitle);
+  const wantedYear = String(item && item.year || '');
+  const pattern =
+    /<h2\b[^>]*class=["'][^"']*\bfilm-name\b[^"']*["'][^>]*>\s*<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>[\s\S]*?<div\b[^>]*class=["'][^"']*\bfd-infor\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi;
+  let match;
+  while ((match = pattern.exec(html)) != null) {
+    const title = showboxHtmlText(match[2]);
+    const meta = showboxHtmlText(match[3]);
+    const type = /\b(?:tv|series|show)\b/i.test(meta) ? 'tv'
+      : /\bmovie\b/i.test(meta) ? 'movie'
+      : null;
+    const yearMatch = meta.match(/\b(19|20)\d{2}\b/);
+    const year = yearMatch ? yearMatch[0] : '';
+    if (type !== null && type !== (item && item.type)) continue;
+    if (wantedYear && year && wantedYear !== year) continue;
+    if (wantedTitle && !showboxTitlesMatch(wantedTitle, title)) continue;
+    const href = showboxText(match[1]);
+    if (!href) continue;
+    return {
+      href: /^https?:\/\//i.test(href)
+        ? href
+        : SHOWBOX_DOMAIN + (href.startsWith('/') ? '' : '/') + href,
+      title,
+      year,
+      type,
+    };
+  }
+  return null;
+}
+
+async function showboxFindShareId(parsed, item) {
+  const title = showboxText(item && (parsed.kind === 'tv'
+    ? item.subtitle || item.title || item.name
+    : item.title || item.name)) || parsed.tmdbId;
+  const searchUrl = SHOWBOX_DOMAIN + '/search?keyword=' +
+    encodeURIComponent(title);
+  const searchBody = await showboxFetch(searchUrl, SHOWBOX_DOMAIN + '/');
+  if (searchBody == null) return null;
+  const detailItem = Object.assign({}, item || {}, { type: parsed.kind });
+  const detail = showboxFindDetail(searchBody, detailItem);
+  if (detail == null) return null;
+
+  let idMatch = detail.href.match(/detail\/([0-9]+)/i);
+  if (idMatch == null) {
+    const detailBody = await showboxFetch(
+      detail.href,
+      SHOWBOX_DOMAIN + '/',
+    );
+    if (detailBody == null) return null;
+    idMatch = detailBody.match(
+      /href=["'][^"']*\/detail\/([0-9]+)/i,
+    );
+    if (idMatch == null) {
+      idMatch = detailBody.match(
+        /data:\s*\{\s*['"]id['"]\s*:\s*([0-9]+)/i,
+      );
+    }
+  }
+  const id = idMatch ? idMatch[1] : '';
+  if (!id) return null;
+  const type = parsed.kind === 'movie' ? '1' : '2';
+  const shareBody = await showboxFetch(
+    SHOWBOX_DOMAIN + '/index/share_link?id=' + id + '&type=' + type,
+    SHOWBOX_DOMAIN + '/',
+  );
+  if (shareBody == null) return null;
+  try {
+    const payload = JSON.parse(shareBody);
+    const link = showboxText(payload && payload.data && payload.data.link);
+    const parts = link.split('/').filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function showboxFileList(shareId, parentId, page) {
+  let url = FEBBOX_DOMAIN + '/file/file_share_list?share_key=' +
+    encodeURIComponent(shareId);
+  if (parentId) {
+    url += '&parent_id=' + encodeURIComponent(parentId) + '&page=' + (page || 1);
+  }
+  const body = await showboxFetch(url, FEBBOX_DOMAIN + '/', true);
+  if (body == null) return null;
+  try {
+    const payload = JSON.parse(body);
+    return payload && payload.data && Array.isArray(payload.data.file_list)
+      ? payload.data.file_list
+      : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function showboxSeasonNumber(value) {
+  const match = showboxText(value).match(/season\s*([0-9]+)/i);
+  return match ? match[1] : '';
+}
+
+function showboxEpisodeName(season, episode) {
+  return 's' + (Number(season) < 10 ? '0' + season : season) + 'e' +
+    (Number(episode) < 10 ? '0' + episode : episode);
+}
+
+async function showboxFiles(parsed, item) {
+  const shareId = showboxText(item && item.showboxShareId) ||
+    await showboxFindShareId(parsed, item);
+  if (!shareId) return [];
+  const root = await showboxFileList(shareId);
+  if (root == null) return [];
+  if (parsed.kind === 'movie') {
+    return root.map((file) =>
+      Object.assign({}, file, { _showboxShareId: shareId }),
+    );
+  }
+
+  const season = root.find((entry) =>
+    showboxSeasonNumber(entry && entry.file_name) === String(parsed.season),
+  );
+  const parentId = showboxText(season && season.fid);
+  if (!parentId) return [];
+  const episodes = await showboxFileList(shareId, parentId, 1);
+  if (episodes == null) return [];
+  const wanted = showboxEpisodeName(parsed.season, parsed.episode).toLowerCase();
+  return episodes.filter((entry) =>
+    showboxText(entry && entry.file_name).toLowerCase().includes(wanted),
+  ).map((file) =>
+    Object.assign({}, file, { _showboxShareId: shareId }),
+  );
+}
+
+function showboxAbsoluteUrl(value, baseUrl) {
+  const raw = showboxText(value)
+    .replace(/\\u0026/g, '&')
+    .replace(/&amp;/gi, '&')
+    .replace(/[),]+$/, '');
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/')) return baseUrl + raw;
+  return '';
+}
+
+function showboxPlaylistUrls(body) {
+  const urls = [];
+  const seen = {};
+  const lines = String(body || '').split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/https?:\/\/[^\s"'<>]+/i);
+    const url = showboxAbsoluteUrl(match ? match[0] : line, FEBBOX_DOMAIN);
+    if (!/^https?:\/\//i.test(url) || seen[url]) continue;
+    seen[url] = true;
+    urls.push(url);
+  }
+  return urls;
+}
+
+function showboxQuality(first, second, third, fourth) {
+  const text = [first, second, third, fourth]
+    .map(showboxText).join(' ').toLowerCase();
   const match = /(?:^|[^0-9])(2160|1440|1080|720|576|480|360)\s*p?(?:[^0-9]|$)/.exec(text);
-  if (match != null) return `${match[1]}p`;
+  if (match != null) return match[1] + 'p';
   if (/\b(?:4k|uhd)\b/.test(text)) return '2160p';
+  if (/\bstereo\b/.test(text)) return '720p';
   return 'ORG';
 }
 
@@ -3946,39 +4095,6 @@ function showboxFormat(url) {
   return 'other';
 }
 
-function showboxEntries(payload) {
-  const versions = payload && Array.isArray(payload.versions)
-    ? payload.versions
-    : [];
-  const entries = [];
-  for (const version of versions) {
-    if (version == null || !Array.isArray(version.links)) continue;
-    const versionName = showboxText(version.name) || 'Original';
-    for (const link of version.links) {
-      const url = showboxText(link && link.url);
-      if (!/^https?:\/\//i.test(url)) continue;
-      const linkName = showboxText(link && link.name) || 'Auto';
-      const quality = showboxQuality(
-        link && link.quality,
-        linkName,
-        versionName,
-        url,
-      );
-      entries.push({
-        url,
-        versionName,
-        linkName,
-        quality,
-        size: showboxText(link && link.size) || showboxText(version.size),
-        codecs: showboxCodecs(`${versionName} ${linkName}`),
-        format: showboxFormat(url),
-        index: entries.length,
-      });
-    }
-  }
-  return entries;
-}
-
 const SHOWBOX_QUALITY_ORDER = {
   '2160p': 0,
   '1440p': 1,
@@ -3990,12 +4106,36 @@ const SHOWBOX_QUALITY_ORDER = {
   ORG: 7,
 };
 
-function showboxSortedEntries(payload) {
-  return showboxEntries(payload).sort((a, b) => {
+async function showboxEntries(parsed, item) {
+  const files = await showboxFiles(parsed, item);
+  const entries = [];
+  for (const file of files) {
+    const fileId = showboxText(file && (file.oss_fid || file.fid || file.id));
+    if (!fileId) continue;
+    const masterUrl = FEBBOX_DOMAIN + '/hls/main/' + encodeURIComponent(fileId) + '.m3u8';
+    const body = await showboxFetch(masterUrl, FEBBOX_DOMAIN + '/', true);
+    const urls = showboxPlaylistUrls(body);
+    const candidates = urls.length ? urls : [masterUrl];
+    for (const url of candidates) {
+      const fileName = showboxText(file && file.file_name);
+      entries.push({
+        fileId,
+        shareId: showboxText(file && file._showboxShareId),
+        url,
+        versionName: fileName || 'Original',
+        linkName: 'Auto',
+        quality: showboxQuality(fileName, url),
+        size: showboxText(file && (file.file_size || file.size)),
+        codecs: showboxCodecs(fileName),
+        format: showboxFormat(url),
+        index: entries.length,
+      });
+    }
+  }
+  return entries.sort((a, b) => {
     const quality = (SHOWBOX_QUALITY_ORDER[a.quality] ?? 99) -
       (SHOWBOX_QUALITY_ORDER[b.quality] ?? 99);
-    if (quality !== 0) return quality;
-    return a.index - b.index;
+    return quality || a.index - b.index;
   });
 }
 
@@ -4014,18 +4154,18 @@ function showboxDecode(value) {
 }
 
 function showboxSourceId(payload) {
-  // No URL or cookie is included here: both can be short-lived or sensitive.
-  return `${SHOWBOX_PROVIDER_KEY}:${showboxEncode(payload)}`;
+  return SHOWBOX_PROVIDER_KEY + ':' + showboxEncode(payload);
 }
 
 function showboxSourcePayload(sourceId) {
-  const prefix = `${SHOWBOX_PROVIDER_KEY}:`;
+  const prefix = SHOWBOX_PROVIDER_KEY + ':';
   if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) {
-    throw new Error(`Invalid ShowBox source id: ${sourceId}`);
+    throw new Error('Invalid ShowBox source id: ' + sourceId);
   }
   const payload = showboxDecode(sourceId.slice(prefix.length));
   if (payload == null || typeof payload.m !== 'string' ||
-      typeof payload.k !== 'string') {
+      typeof payload.k !== 'string' || typeof payload.f !== 'string' ||
+      typeof payload.h !== 'string') {
     throw new Error('Malformed ShowBox source id');
   }
   return payload;
@@ -4033,11 +4173,28 @@ function showboxSourcePayload(sourceId) {
 
 function showboxMatchEntry(entries, payload) {
   const matches = entries.filter((entry) =>
-    entry.versionName === payload.v &&
-    entry.linkName === payload.n &&
-    entry.quality === payload.q,
+    entry.fileId === payload.f &&
+    entry.quality === payload.q &&
+    entry.linkName === payload.n,
   );
   return matches[payload.o || 0] || null;
+}
+
+function showboxParsedRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const episode = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
+  if (episode != null) {
+    return {
+      kind: 'tv',
+      tmdbId: episode[1],
+      season: episode[2],
+      episode: episode[3],
+    };
+  }
+  const movie = /^movie:([^:]+)$/.exec(refId);
+  return movie == null
+    ? null
+    : { kind: 'movie', tmdbId: movie[1], season: null, episode: null };
 }
 
 async function showboxListSources(args) {
@@ -4047,33 +4204,35 @@ async function showboxListSources(args) {
   }
   const item = (args && args.item) || {};
   const refId = (item.ref && item.ref.id) || item.id || '';
-  const parsed = showboxParseRef(refId);
+  const parsed = showboxParsedRef(refId);
   if (parsed == null) return { sources: [] };
 
-  const payload = await showboxFetchJson(parsed);
-  const entries = showboxSortedEntries(payload);
+  const entries = await showboxEntries(parsed, item);
   const occurrences = {};
   const hasCookie = showboxRuntimeCookie() != null;
   return {
     sources: entries.map((entry) => {
-      const key = `${entry.versionName}\u0000${entry.linkName}\u0000${entry.quality}`;
+      const key = entry.fileId + '\u0000' + entry.linkName + '\u0000' + entry.quality;
       const occurrence = occurrences[key] || 0;
       occurrences[key] = occurrence + 1;
-      const id = showboxSourceId({
+      const sourcePayload = {
         m: parsed.tmdbId,
         k: parsed.kind,
-        ...(parsed.season != null
-          ? { s: parsed.season, e: parsed.episode }
-          : {}),
-        v: entry.versionName,
+        f: entry.fileId,
+        h: entry.shareId,
         n: entry.linkName,
         q: entry.quality,
         o: occurrence,
-      });
-      const suffix = entry.size ? ` · ${entry.size}` : '';
+      };
+      if (parsed.season != null) {
+        sourcePayload.s = parsed.season;
+        sourcePayload.e = parsed.episode;
+      }
+      const id = showboxSourceId(sourcePayload);
+      const suffix = entry.size ? ' · ' + entry.size : '';
       return {
         id,
-        label: `ShowBox${hasCookie ? ' ⚡' : ''} · ${entry.quality}${suffix}`,
+        label: 'ShowBox' + (hasCookie ? ' ⚡' : '') + ' · ' + entry.quality + suffix,
         provider: 'Nimora',
         providerId: SHOWBOX_PROVIDER_ID,
       };
@@ -4089,18 +4248,26 @@ async function showboxResolveSource(sourceId) {
     season: payloadId.s || null,
     episode: payloadId.e || null,
   };
-  const payload = await showboxFetchJson(parsed);
-  const entry = showboxMatchEntry(showboxSortedEntries(payload), payloadId);
+  const entries = await showboxEntries(parsed, {
+    title: '',
+    ref: { id: parsed.kind + ':' + parsed.tmdbId },
+    type: parsed.kind,
+    showboxShareId: payloadId.h,
+  });
+  const entry = showboxMatchEntry(entries, payloadId);
   if (entry == null) {
     throw new Error('ShowBox: selected link is no longer available');
   }
+  const cookie = showboxRuntimeCookie();
+  const headers = {
+    Referer: FEBBOX_DOMAIN + '/',
+    'User-Agent': SHOWBOX_UA,
+  };
+  if (cookie) headers.Cookie = 'ui=' + cookie;
   return {
     url: entry.url,
     format: entry.format,
-    headers: {
-      Referer: SHOWBOX_REFERER,
-      'User-Agent': SHOWBOX_UA,
-    },
+    headers,
   };
 }
 
@@ -11496,7 +11663,7 @@ function kickassPlayerData(body) {
   }
 }
 
-function kickassSubtitles(data) {
+function kickassSubtitles(data, headers) {
   const list = data && Array.isArray(data.subtitles) ? data.subtitles : [];
   return list.map((entry) => {
     const subtitle = kickassSerialized(entry);
@@ -11506,6 +11673,7 @@ function kickassSubtitles(data) {
       language: String((subtitle && subtitle.language) || 'und'),
       label: String((subtitle && (subtitle.name || subtitle.language)) || 'Subtitle'),
       url,
+      headers,
     };
   }).filter((subtitle) => subtitle != null);
 }
@@ -11567,7 +11735,7 @@ async function kickassResolveSource(sourceId) {
     headers,
     format: 'hls',
     label: `KickassAnime · ${payload.name || 'HLS'}`,
-    subtitles: kickassSubtitles(data),
+    subtitles: kickassSubtitles(data, headers),
   };
 }
 
