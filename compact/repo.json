@@ -90,7 +90,7 @@
         "Initial Nimora Compact bundle with the core catalog, playback, subtitle and LayarKaca providers."
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
-      "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
+      "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/bcdd84148ef36b70a19a55df2331804e73dbc4ea/compact/bundle.js",
       "bundleSha256": "b3aa9a2eda27680547ee8ba01601569d2aded76be39e954245c961a7fa4f4935"
     }
   ]

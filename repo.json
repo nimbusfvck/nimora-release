@@ -230,7 +230,7 @@
         "Renamed content certification facts for clarity."
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
-      "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
+      "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/bcdd84148ef36b70a19a55df2331804e73dbc4ea/bundle.js",
       "bundleSha256": "4be98d6d2402c84ec8086ebee5a6d85d419d4acdad158fbb9d38a6edb0d18e9a"
     }
   ]
