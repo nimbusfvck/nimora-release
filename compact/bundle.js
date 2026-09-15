@@ -4706,6 +4706,7 @@ const TMDB_TRENDING_RANKS_TTL_MS = 15 * 60 * 1000;
 const tmdbTrendingRanksMemo = new Map();
 const TMDB_ANIME_ARTWORK_TTL_MS = 24 * 60 * 60 * 1000;
 const tmdbAnimeArtworkMemo = new Map();
+const tmdbAnimeShowMemo = new Map();
 const TMDB_KEY_FAILURE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const TMDB_KEY_RATE_LIMIT_COOLDOWN_MS = 60 * 1000;
 const tmdbKeyCooldownUntil = new Map();
@@ -6348,22 +6349,82 @@ async function tmdbAnimeSeriesOf(media) {
   return value;
 }
 
-function tmdbAnimeSeasonOf(media, showData) {
+async function tmdbAnimeShowDataOf(series) {
+  const tmdbId = Number(series && series.id);
+  if (!Number.isInteger(tmdbId) || tmdbId < 1) return null;
+  const key = `show:${tmdbId}`;
+  const now = Date.now();
+  const cached = tmdbAnimeShowMemo.get(key);
+  if (cached != null && now - cached.fetchedAt < TMDB_ANIME_ARTWORK_TTL_MS) {
+    return cached.value;
+  }
+  const request = tmdbGetJson(`/tv/${tmdbId}`, {
+    append_to_response: 'credits,content_ratings,images,videos',
+    include_image_language: 'en,null',
+    include_video_language: 'en,null',
+  }).catch(() => null);
+  tmdbAnimeShowMemo.set(key, { fetchedAt: now, value: request });
+  return request;
+}
+
+// AniList keeps the stable identity and stream-matching title. TMDB supplies
+// the richer detail payload, while the AniList detail remains a safe fallback
+// when title search or the proxy is unavailable.
+async function tmdbAnimeDetail(media) {
+  try {
+    const series = await tmdbAnimeSeriesOf(media);
+    const data = await tmdbAnimeShowDataOf(series);
+    if (data == null) return null;
+    const detail = { item: tmdbToMediaItem(data, 'tv') };
+    if (data.overview) detail.description = data.overview;
+    const genres = tmdbGenresOf(data);
+    if (genres.length > 0) detail.tags = genres;
+    const facts = tmdbTvFacts(data);
+    if (facts.length > 0) detail.facts = facts;
+    const credits = tmdbCreditsOf(data);
+    if (credits.length > 0) detail.credits = credits;
+    const trailers = tmdbTrailers(data);
+    if (trailers.length > 0) detail.trailers = trailers;
+    return detail;
+  } catch (_) {
+    return null;
+  }
+}
+
+function tmdbAnimeSeasonsOf(media, showData, episodeCount) {
   const seasons = Array.isArray(showData && showData.seasons)
-    ? showData.seasons.filter((season) => Number(season.season_number) > 0)
+    ? showData.seasons
+      .filter((season) => Number(season.season_number) > 0)
+      .sort((a, b) => Number(a.season_number) - Number(b.season_number))
     : [];
-  if (seasons.length === 0) return null;
-  if (seasons.length === 1) return seasons[0];
+  if (seasons.length === 0) return [];
 
   const wantedYear = media && media.startDate && Number(media.startDate.year);
+  let startIndex = 0;
   if (Number.isInteger(wantedYear) && wantedYear > 0) {
-    const byYear = seasons.find((season) =>
+    const byYear = seasons.findIndex((season) =>
       Number(String(season.air_date || '').slice(0, 4)) === wantedYear);
-    if (byYear != null) return byYear;
+    if (byYear >= 0) startIndex = byYear;
+    else if (seasons.length > 1) return [];
   }
-  // Multiple TMDB seasons without a reliable year match are ambiguous. Do
-  // not attach another cour's stills to an AniList episode.
-  return null;
+
+  // AniList numbers a long-running title continuously, while TMDB restarts
+  // `episode_number` at 1 for every season. Start at the season matching the
+  // AniList entry's year, then fetch enough following seasons to cover this
+  // entry. For One Piece this turns TMDB S2E1 into absolute episode 62.
+  const selected = [];
+  let knownEpisodeCount = 0;
+  for (let index = startIndex; index < seasons.length; index++) {
+    const season = seasons[index];
+    selected.push(season);
+    const count = Number(season.episode_count);
+    if (Number.isInteger(count) && count > 0) knownEpisodeCount += count;
+    if (
+      Number.isInteger(episodeCount) && episodeCount > 0 &&
+      knownEpisodeCount >= episodeCount
+    ) break;
+  }
+  return selected;
 }
 
 async function tmdbAnimeEpisodeArtwork(media, guide) {
@@ -6386,34 +6447,70 @@ async function tmdbAnimeEpisodeArtwork(media, guide) {
       tmdbAnimeArtworkMemo.set(cacheKey, { fetchedAt: now, value: null });
       return guide;
     }
-    const showData = await tmdbGetJson(`/tv/${series.id}`, {});
-    const season = tmdbAnimeSeasonOf(media, showData);
-    if (season == null) {
+    const showData = await tmdbAnimeShowDataOf(series);
+    if (showData == null) {
       tmdbAnimeArtworkMemo.set(cacheKey, { fetchedAt: now, value: null });
       return guide;
     }
-    const seasonData = await tmdbGetJson(
-      `/tv/${series.id}/season/${season.season_number}`,
-      {},
-    );
-    const artworkByEpisode = new Map(
-      (Array.isArray(seasonData.episodes) ? seasonData.episodes : [])
-        .filter((episode) => episode && Number.isInteger(Number(episode.episode_number)))
-        .map((episode) => [Number(episode.episode_number), episode.still_path]),
-    );
+    const episodeCount = guide.groups.reduce((highest, group) => {
+      const episodes = Array.isArray(group && group.episodes) ? group.episodes : [];
+      return Math.max(
+        highest,
+        ...episodes.map((episode) => Number(episode && episode.position) || 0),
+      );
+    }, 0);
+    const seasons = tmdbAnimeSeasonsOf(media, showData, episodeCount);
+    if (seasons.length === 0) {
+      tmdbAnimeArtworkMemo.set(cacheKey, { fetchedAt: now, value: null });
+      return guide;
+    }
+    const seasonData = await Promise.all(seasons.map(async (season) => {
+      try {
+        return {
+          season,
+          data: await tmdbGetJson(
+            `/tv/${series.id}/season/${season.season_number}`,
+            {},
+          ),
+        };
+      } catch (_) {
+        return { season, data: null };
+      }
+    }));
+    const artworkByEpisode = new Map();
+    let absolutePosition = 0;
+    for (const entry of seasonData) {
+      const episodes = Array.isArray(entry.data && entry.data.episodes)
+        ? entry.data.episodes
+          .filter((episode) => episode && Number.isInteger(Number(episode.episode_number)))
+          .sort((a, b) => Number(a.episode_number) - Number(b.episode_number))
+        : [];
+      for (const episode of episodes) {
+        absolutePosition++;
+        artworkByEpisode.set(absolutePosition, {
+          stillPath: episode.still_path,
+          title: episode.name,
+        });
+      }
+    }
     enriched = {
       ...guide,
       groups: guide.groups.map((group) => ({
         ...group,
         episodes: Array.isArray(group.episodes)
           ? group.episodes.map((episode) => {
-            const stillPath = artworkByEpisode.get(Number(episode.position));
-            return stillPath
-              ? {
-                ...episode,
-                artwork: { landscape: { url: `${TMDB_IMAGE_BASE}/w780${stillPath}` } },
-              }
-              : episode;
+            const mapped = artworkByEpisode.get(Number(episode.position));
+            if (mapped == null) return episode;
+            const updated = { ...episode };
+            if (mapped.stillPath) {
+              updated.artwork = {
+                landscape: { url: `${TMDB_IMAGE_BASE}/w780${mapped.stillPath}` },
+              };
+            }
+            if (typeof mapped.title === 'string' && mapped.title.trim()) {
+              updated.title = mapped.title;
+            }
+            return updated;
           })
           : group.episodes,
       })),
@@ -6429,6 +6526,7 @@ async function tmdbAnimeEpisodeArtwork(media, guide) {
 }
 
 globalThis.__tmdbAnimeEpisodeArtwork = tmdbAnimeEpisodeArtwork;
+globalThis.__tmdbAnimeDetail = tmdbAnimeDetail;
 
 function tmdbEpisodeOf(tvId, seasonNumber, episode) {
   const mapped = {
@@ -13137,10 +13235,27 @@ async function anilistMeta(args) {
   const media = data && data.Media;
   if (media == null) throw new Error(`AniList has no media ${mediaId}`);
 
-  const detail = { item: anilistToMediaItem(media) };
+  const anilistItem = anilistToMediaItem(media);
+  let detail = { item: anilistItem };
+  if (typeof globalThis.__tmdbAnimeDetail === 'function') {
+    const tmdbDetail = await globalThis.__tmdbAnimeDetail(media);
+    if (tmdbDetail != null && tmdbDetail.item != null) {
+      detail = {
+        ...tmdbDetail,
+        item: {
+          ...tmdbDetail.item,
+          // Keep the AniList ref/title so Sokuja and Indomax matching keeps
+          // seeing the same stable identity as the catalog item.
+          ref: anilistItem.ref,
+          title: anilistItem.title,
+          artwork: tmdbDetail.item.artwork || anilistItem.artwork,
+        },
+      };
+    }
+  }
   const description = anilistDescription(media.description);
-  if (description) detail.description = description;
-  if (Array.isArray(media.genres) && media.genres.length > 0) {
+  if (description && detail.description == null) detail.description = description;
+  if (Array.isArray(media.genres) && media.genres.length > 0 && detail.tags == null) {
     detail.tags = media.genres.filter((genre) => typeof genre === 'string');
   }
   if (media.format === 'MOVIE') return detail;
