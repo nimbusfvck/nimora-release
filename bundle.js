@@ -7357,10 +7357,22 @@ const CATEGORY_COUNTRY_SHELVES = {
       originalLanguage: 'id',
       indomaxCountry: 'indonesia',
     },
-    { id: 'korean_movie', name: 'Korean Movies', originCountry: 'KR', originalLanguage: 'ko' },
+    {
+      id: 'korean_movie',
+      name: 'Korean Movies',
+      originCountry: 'KR',
+      originalLanguage: 'ko',
+      sortByRatingPopularity: true,
+    },
   ],
   tv: [
-    { id: 'korean_tv', name: 'Korean Series', originCountry: 'KR', originalLanguage: 'ko' },
+    {
+      id: 'korean_tv',
+      name: 'Korean Series',
+      originCountry: 'KR',
+      originalLanguage: 'ko',
+      sortByRatingPopularity: true,
+    },
   ],
 };
 
@@ -7422,20 +7434,32 @@ async function fetchRecentCountryPage(country, mediaType, page) {
     [oldestDateParam]: oldest,
     [dateParam]: today,
   }, requestedPage);
-  const trendingRanksRequest = mediaType === 'movie' || mediaType === 'tv'
+  const trendingRanksRequest = !country.sortByRatingPopularity &&
+      (mediaType === 'movie' || mediaType === 'tv')
     ? fetchTrendingRanks(mediaType)
     : Promise.resolve(null);
   const [discover, trendingRanks] = await Promise.all([
     discoverRequest,
     trendingRanksRequest,
   ]);
-  const items = trendingRanks == null
-    ? discover.items
-    : discover.items.slice().sort((a, b) => {
-        const aRank = trendingRanks.get(a.ref.id) ?? Number.MAX_SAFE_INTEGER;
-        const bRank = trendingRanks.get(b.ref.id) ?? Number.MAX_SAFE_INTEGER;
-        return aRank - bRank;
-      });
+  // Korean country rows are intentionally independent of the daily trending
+  // feed: rating is the primary order, with popularity breaking equal ratings.
+  const items = country.sortByRatingPopularity
+    ? discover.entries
+        .slice()
+        .sort((a, b) => {
+          const aRating = typeof a.item.rating === 'number' ? a.item.rating : 0;
+          const bRating = typeof b.item.rating === 'number' ? b.item.rating : 0;
+          return bRating - aRating || b.popularity - a.popularity || a.index - b.index;
+        })
+        .map((entry) => entry.item)
+    : trendingRanks == null
+      ? discover.items
+      : discover.items.slice().sort((a, b) => {
+          const aRank = trendingRanks.get(a.ref.id) ?? Number.MAX_SAFE_INTEGER;
+          const bRank = trendingRanks.get(b.ref.id) ?? Number.MAX_SAFE_INTEGER;
+          return aRank - bRank;
+        });
   return {
     items,
     page: discover.page,
@@ -7534,8 +7558,14 @@ async function fetchDiscoverPage(mediaType, extraParams, page) {
     ...extraParams,
   });
   const results = Array.isArray(data.results) ? data.results : [];
+  const entries = results.map((r, index) => ({
+    item: tmdbToMediaItem(r, mediaType, null),
+    popularity: typeof r.popularity === 'number' ? r.popularity : 0,
+    index,
+  }));
   return {
-    items: results.map((r) => tmdbToMediaItem(r, mediaType, null)),
+    items: entries.map((entry) => entry.item),
+    entries,
     page: typeof data.page === 'number' ? data.page : page,
     totalPages: typeof data.total_pages === 'number' ? data.total_pages : page,
   };
