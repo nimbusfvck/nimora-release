@@ -2554,6 +2554,289 @@ globalThis.__streamProviders.push({
   resolve: (sourceId) => movieboxResolveSource(sourceId),
 });
 
+// ShowBox/FebBox as a Nimora stream provider, over the host `fetch` API.
+//
+// The upstream API returns direct links grouped under `versions[].links[]`.
+// A personal FebBox `ui` cookie is optional, but is the upstream's switch for
+// the account's quota and higher-quality links.  It is deliberately supplied
+// at runtime through `globalThis.__showboxUiCookie`; it is never committed,
+// put in a source id, or written to logs.
+//
+// Source ids carry only the TMDB identity and the advertised link identity.
+// resolve() asks the API again so a short-lived link is never reused after a
+// discovery call.
+
+const SHOWBOX_API_BASE =
+  globalThis.__showboxApiBaseUrl ||
+  'https://febapi.nuvioapp.space/api/media';
+const SHOWBOX_PROVIDER_KEY = 'showbox';
+const SHOWBOX_PROVIDER_ID = 'nimora.showbox';
+const SHOWBOX_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
+const SHOWBOX_REFERER = 'https://www.febbox.com/';
+
+function showboxText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+// Accept either the documented raw `ui` value or a copied `ui=...` pair.
+// A complete Cookie header is intentionally reduced to its ui value so no
+// unrelated browser cookies are forwarded to the API.
+function showboxRuntimeCookie() {
+  const raw = showboxText(globalThis.__showboxUiCookie);
+  if (!raw) return null;
+  if (raw.startsWith('ui=')) {
+    const value = raw.slice(3).split(';', 1)[0].trim();
+    return value || null;
+  }
+  return raw.split(';', 1)[0].trim() || null;
+}
+
+function showboxHeaders() {
+  return {
+    Accept: 'application/json,*/*',
+    Referer: SHOWBOX_REFERER,
+    'User-Agent': SHOWBOX_UA,
+  };
+}
+
+function showboxParseRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const episode = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
+  if (episode != null) {
+    return {
+      kind: 'tv',
+      tmdbId: episode[1],
+      season: episode[2],
+      episode: episode[3],
+    };
+  }
+  const movie = /^movie:([^:]+)$/.exec(refId);
+  return movie == null
+    ? null
+    : { kind: 'movie', tmdbId: movie[1], season: null, episode: null };
+}
+
+function showboxApiUrl(parsed) {
+  const base = String(SHOWBOX_API_BASE).replace(/\/$/, '');
+  let url = parsed.kind === 'tv'
+    ? `${base}/tv/${encodeURIComponent(parsed.tmdbId)}/oss=USA7/` +
+      `${encodeURIComponent(parsed.season)}/${encodeURIComponent(parsed.episode)}`
+    : `${base}/movie/${encodeURIComponent(parsed.tmdbId)}/oss=USA7`;
+  const cookie = showboxRuntimeCookie();
+  if (cookie) url += `?cookie=${encodeURIComponent(cookie)}`;
+  return url;
+}
+
+async function showboxFetchJson(parsed) {
+  try {
+    const response = await fetch(showboxApiUrl(parsed), {
+      headers: showboxHeaders(),
+      timeoutMs: 20000,
+    });
+    if (response == null || response.status < 200 || response.status >= 300) {
+      return null;
+    }
+    const payload = JSON.parse(response.body);
+    return payload && payload.success === false ? null : payload;
+  } catch (_) {
+    return null;
+  }
+}
+
+function showboxQuality(...values) {
+  const text = values.map(showboxText).join(' ').toLowerCase();
+  const match = /(?:^|[^0-9])(2160|1440|1080|720|576|480|360)\s*p?(?:[^0-9]|$)/.exec(text);
+  if (match != null) return `${match[1]}p`;
+  if (/\b(?:4k|uhd)\b/.test(text)) return '2160p';
+  return 'ORG';
+}
+
+function showboxCodecs(text) {
+  const value = showboxText(text).toLowerCase();
+  const codecs = [];
+  if (/dolby\s+vision|\bdovi\b|\.dv\b/.test(value)) codecs.push('DV');
+  else if (/\bhdr10\+?\b|\bhdr\b/.test(value)) codecs.push('HDR');
+  if (/\b(?:h265|x265|hevc)\b/.test(value)) codecs.push('H.265');
+  else if (/\b(?:h264|x264|avc)\b/.test(value)) codecs.push('H.264');
+  if (/\batmos\b/.test(value)) codecs.push('Atmos');
+  return codecs;
+}
+
+function showboxFormat(url) {
+  const value = showboxText(url).toLowerCase();
+  if (/\.m3u8(?:$|\?)/.test(value)) return 'hls';
+  if (/\.mpd(?:$|\?)/.test(value)) return 'dash';
+  if (/\.mp4(?:$|\?)/.test(value)) return 'mp4';
+  return 'other';
+}
+
+function showboxEntries(payload) {
+  const versions = payload && Array.isArray(payload.versions)
+    ? payload.versions
+    : [];
+  const entries = [];
+  for (const version of versions) {
+    if (version == null || !Array.isArray(version.links)) continue;
+    const versionName = showboxText(version.name) || 'Original';
+    for (const link of version.links) {
+      const url = showboxText(link && link.url);
+      if (!/^https?:\/\//i.test(url)) continue;
+      const linkName = showboxText(link && link.name) || 'Auto';
+      const quality = showboxQuality(
+        link && link.quality,
+        linkName,
+        versionName,
+        url,
+      );
+      entries.push({
+        url,
+        versionName,
+        linkName,
+        quality,
+        size: showboxText(link && link.size) || showboxText(version.size),
+        codecs: showboxCodecs(`${versionName} ${linkName}`),
+        format: showboxFormat(url),
+        index: entries.length,
+      });
+    }
+  }
+  return entries;
+}
+
+const SHOWBOX_QUALITY_ORDER = {
+  '2160p': 0,
+  '1440p': 1,
+  '1080p': 2,
+  '720p': 3,
+  '576p': 4,
+  '480p': 5,
+  '360p': 6,
+  ORG: 7,
+};
+
+function showboxSortedEntries(payload) {
+  return showboxEntries(payload).sort((a, b) => {
+    const quality = (SHOWBOX_QUALITY_ORDER[a.quality] ?? 99) -
+      (SHOWBOX_QUALITY_ORDER[b.quality] ?? 99);
+    if (quality !== 0) return quality;
+    return a.index - b.index;
+  });
+}
+
+function showboxEncode(value) {
+  return host.codec.textToBase64(JSON.stringify(value))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function showboxDecode(value) {
+  let encoded = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const remainder = encoded.length % 4;
+  if (remainder !== 0) encoded += '='.repeat(4 - remainder);
+  return JSON.parse(host.codec.base64ToText(encoded));
+}
+
+function showboxSourceId(payload) {
+  // No URL or cookie is included here: both can be short-lived or sensitive.
+  return `${SHOWBOX_PROVIDER_KEY}:${showboxEncode(payload)}`;
+}
+
+function showboxSourcePayload(sourceId) {
+  const prefix = `${SHOWBOX_PROVIDER_KEY}:`;
+  if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) {
+    throw new Error(`Invalid ShowBox source id: ${sourceId}`);
+  }
+  const payload = showboxDecode(sourceId.slice(prefix.length));
+  if (payload == null || typeof payload.m !== 'string' ||
+      typeof payload.k !== 'string') {
+    throw new Error('Malformed ShowBox source id');
+  }
+  return payload;
+}
+
+function showboxMatchEntry(entries, payload) {
+  const matches = entries.filter((entry) =>
+    entry.versionName === payload.v &&
+    entry.linkName === payload.n &&
+    entry.quality === payload.q,
+  );
+  return matches[payload.o || 0] || null;
+}
+
+async function showboxListSources(args) {
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && enabled.indexOf(SHOWBOX_PROVIDER_ID) === -1) {
+    return { sources: [] };
+  }
+  const item = (args && args.item) || {};
+  const refId = (item.ref && item.ref.id) || item.id || '';
+  const parsed = showboxParseRef(refId);
+  if (parsed == null) return { sources: [] };
+
+  const payload = await showboxFetchJson(parsed);
+  const entries = showboxSortedEntries(payload);
+  const occurrences = {};
+  const hasCookie = showboxRuntimeCookie() != null;
+  return {
+    sources: entries.map((entry) => {
+      const key = `${entry.versionName}\u0000${entry.linkName}\u0000${entry.quality}`;
+      const occurrence = occurrences[key] || 0;
+      occurrences[key] = occurrence + 1;
+      const id = showboxSourceId({
+        m: parsed.tmdbId,
+        k: parsed.kind,
+        ...(parsed.season != null
+          ? { s: parsed.season, e: parsed.episode }
+          : {}),
+        v: entry.versionName,
+        n: entry.linkName,
+        q: entry.quality,
+        o: occurrence,
+      });
+      const suffix = entry.size ? ` · ${entry.size}` : '';
+      return {
+        id,
+        label: `ShowBox${hasCookie ? ' ⚡' : ''} · ${entry.quality}${suffix}`,
+        provider: 'Nimora',
+        providerId: SHOWBOX_PROVIDER_ID,
+      };
+    }),
+  };
+}
+
+async function showboxResolveSource(sourceId) {
+  const payloadId = showboxSourcePayload(sourceId);
+  const parsed = {
+    tmdbId: payloadId.m,
+    kind: payloadId.k,
+    season: payloadId.s || null,
+    episode: payloadId.e || null,
+  };
+  const payload = await showboxFetchJson(parsed);
+  const entry = showboxMatchEntry(showboxSortedEntries(payload), payloadId);
+  if (entry == null) {
+    throw new Error('ShowBox: selected link is no longer available');
+  }
+  return {
+    url: entry.url,
+    format: entry.format,
+    headers: {
+      Referer: SHOWBOX_REFERER,
+      'User-Agent': SHOWBOX_UA,
+    },
+  };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: SHOWBOX_PROVIDER_KEY,
+  sources: showboxListSources,
+  resolve: (sourceId) => showboxResolveSource(sourceId),
+});
+
 // Idlix stream provider for TMDB-backed movies and TV episodes.
 //
 // The upstream flow is search -> detail -> play-info -> claim -> redeem.
@@ -8854,6 +9137,418 @@ if (!globalThis.__extension.sources) {
     return provider.resolve(sourceId);
   };
 }
+
+// KickassAnime HLS source for AniList/Sokuja anime items.
+//
+// The site exposes a useful JSON search/episode API, but the playback URL is
+// short-lived and is embedded in a player page. Discovery therefore carries
+// only the stable show/episode/server reference; resolve() fetches the player
+// page and validates a fresh HLS playlist.
+
+const KICKASS_BASE_URL =
+  globalThis.__kickassanimeBaseUrl || 'https://kaa.lt';
+const KICKASS_PROVIDER_KEY = 'kickassanime';
+const KICKASS_PROVIDER_ID = 'nimora.kickassanime';
+const KICKASS_ANILIST_PROVIDER_ID = 'nimora.anilist';
+const KICKASS_SOKUJA_PROVIDER_ID = 'nimora.sokuja';
+const KICKASS_USER_AGENT =
+  'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
+
+function kickassBaseUrl() {
+  return String(KICKASS_BASE_URL).replace(/\/$/, '');
+}
+
+function kickassOrigin(url) {
+  const match = /^(https?:\/\/[^/?#]+)/i.exec(String(url || ''));
+  return match == null ? null : match[1];
+}
+
+function kickassUrl(value, base) {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const raw = value.trim().replace(/\\\//g, '/');
+  if (/^https?:\/\/{2,}/i.test(raw)) {
+    return raw.replace(/^(https?):\/{2,}/i, '$1://');
+  }
+  if (raw.startsWith('//')) return `https:${raw}`;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const root = String(base || kickassBaseUrl()).replace(/\/$/, '');
+  if (raw.startsWith('/')) {
+    const origin = kickassOrigin(root);
+    return origin == null ? null : `${origin}${raw}`;
+  }
+  return `${root}/${raw}`;
+}
+
+function kickassApiHeaders() {
+  return {
+    Accept: 'application/json,*/*',
+    'Content-Type': 'application/json',
+    'User-Agent': KICKASS_USER_AGENT,
+    'x-origin': 'kickass-anime.ru',
+  };
+}
+
+function kickassPlayerHeaders(playerUrl) {
+  const origin = kickassOrigin(playerUrl);
+  return {
+    Accept: '*/*',
+    Origin: origin || kickassBaseUrl(),
+    Referer: playerUrl,
+    'User-Agent': KICKASS_USER_AGENT,
+  };
+}
+
+async function kickassFetch(url, options) {
+  try {
+    const response = await fetch(url, options || {});
+    if (response == null || response.status < 200 || response.status >= 300) {
+      return null;
+    }
+    return response;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function kickassJson(url, options) {
+  const response = await kickassFetch(url, options);
+  if (response == null || typeof response.body !== 'string') return null;
+  try {
+    return JSON.parse(response.body);
+  } catch (_) {
+    return null;
+  }
+}
+
+function kickassTitleKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function kickassSeasonMarker(title, season) {
+  if (!Number.isInteger(season) || season < 1) return false;
+  const value = String(title || '');
+  return new RegExp(
+    `(?:season\\s*${season}|${season}(?:st|nd|rd|th)\\s+season|\\bs${season}\\b)`,
+    'i',
+  ).test(value);
+}
+
+function kickassSearchCandidates(results, title, season) {
+  const wanted = kickassTitleKey(title);
+  if (!wanted || !Array.isArray(results)) return [];
+  return results
+    .map((result, index) => {
+      if (result == null || typeof result !== 'object' || !result.slug) {
+        return null;
+      }
+      const names = [result.title_en, result.title, result.name]
+        .filter((name) => typeof name === 'string' && name.trim())
+        .map(kickassTitleKey);
+      if (names.length === 0) return null;
+      const exact = names.some((name) => name === wanted);
+      const startsWith = names.some((name) => name.startsWith(wanted));
+      const seasonExact = kickassSeasonMarker(
+        result.title_en || result.title || result.name,
+        season,
+      );
+      if (!exact && !startsWith) return null;
+      // Exact title wins. For a requested later season, a season-labelled
+      // result wins over the base series even when the API ranks it later.
+      const score = (exact ? 0 : 20) +
+        (season != null && season > 1
+          ? (seasonExact ? -15 : 15)
+          : (seasonExact ? 5 : 0)) +
+        index / 1000;
+      return { result, score };
+    })
+    .filter((entry) => entry != null)
+    .sort((a, b) => a.score - b.score);
+}
+
+function kickassItemQuery(item) {
+  const extra = item && item.extra && typeof item.extra === 'object'
+    ? item.extra
+    : {};
+  const episode = item && item.episode && typeof item.episode === 'object'
+    ? item.episode
+    : null;
+  const groupId = episode && typeof episode.groupId === 'string'
+    ? episode.groupId
+    : '';
+  const groupSeason = /(?:^|:)season:(\d+)/i.exec(groupId);
+  const title = typeof extra.seriesTitle === 'string' && extra.seriesTitle.trim()
+    ? extra.seriesTitle.trim()
+    : typeof item.subtitle === 'string' && item.subtitle.trim()
+      ? item.subtitle.trim()
+      : typeof item.title === 'string' ? item.title.trim() : '';
+  const season = Number.isInteger(extra.season)
+    ? extra.season
+    : groupSeason == null ? 1 : Number(groupSeason[1]);
+  const position = Number.isInteger(extra.episode)
+    ? extra.episode
+    : episode && Number.isInteger(episode.position) ? episode.position : 1;
+  return { title, season, episode: position };
+}
+
+function kickassIsAnimeItem(item) {
+  if (!item || (item.kind !== 'episode' && item.kind !== 'video')) return false;
+  const ref = item.ref || {};
+  if (ref.providerId === KICKASS_ANILIST_PROVIDER_ID) return true;
+  if (ref.providerId === KICKASS_SOKUJA_PROVIDER_ID &&
+      typeof ref.id === 'string' && ref.id.startsWith('sokuja:anime:')) {
+    return true;
+  }
+  return false;
+}
+
+async function kickassTitleVariants(item, title) {
+  const variants = [];
+  const seen = new Set();
+  const add = (value) => {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    const key = kickassTitleKey(normalized);
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      variants.push(normalized);
+    }
+  };
+  add(title);
+  if (typeof globalThis.__animeTitleVariants === 'function') {
+    try {
+      const result = await globalThis.__animeTitleVariants(item);
+      if (Array.isArray(result)) result.forEach(add);
+      else add(result);
+    } catch (_) {
+      // Title enrichment is optional; the item's own title remains usable.
+    }
+  }
+  return variants;
+}
+
+function kickassEncode(value) {
+  return host.codec.textToBase64(JSON.stringify(value))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function kickassDecode(value) {
+  let encoded = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const remainder = encoded.length % 4;
+  if (remainder !== 0) encoded += '='.repeat(4 - remainder);
+  try {
+    return JSON.parse(host.codec.base64ToText(encoded));
+  } catch (_) {
+    return null;
+  }
+}
+
+function kickassSourcePayload(sourceId) {
+  const prefix = `${KICKASS_PROVIDER_KEY}:`;
+  if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) return null;
+  return kickassDecode(sourceId.slice(prefix.length));
+}
+
+function kickassEpisodeUrl(showSlug, episode) {
+  const episodesUrl = `${kickassBaseUrl()}/api/show/${encodeURIComponent(showSlug)}` +
+    `/episodes?ep=${encodeURIComponent(episode)}&lang=ja-JP`;
+  return episodesUrl;
+}
+
+async function kickassFindEpisode(showSlug, episode) {
+  const data = await kickassJson(
+    kickassEpisodeUrl(showSlug, episode),
+    { headers: kickassApiHeaders() },
+  );
+  const entries = data && Array.isArray(data.result) ? data.result : [];
+  const wanted = Number(episode);
+  return entries.find((entry) =>
+    entry != null && Number(entry.episode_number) === wanted && entry.slug,
+  ) || null;
+}
+
+function kickassServerIsHls(server) {
+  if (server == null || typeof server.src !== 'string') return false;
+  if (!/vidstreaming|catstream/i.test(String(server.name || ''))) return false;
+  return !/[?&]type=dash(?:&|$)/i.test(server.src);
+}
+
+async function kickassSources(args) {
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && enabled.indexOf(KICKASS_PROVIDER_ID) === -1) {
+    return { sources: [] };
+  }
+  const item = args && args.item;
+  if (!kickassIsAnimeItem(item)) return { sources: [] };
+  const query = kickassItemQuery(item);
+  if (!query.title || query.episode < 1) return { sources: [] };
+
+  const titles = await kickassTitleVariants(item, query.title);
+  let match = null;
+  for (const title of titles) {
+    const data = await kickassJson(`${kickassBaseUrl()}/api/fsearch`, {
+      method: 'POST',
+      headers: kickassApiHeaders(),
+      body: JSON.stringify({ page: '1', query: title }),
+    });
+    const candidates = kickassSearchCandidates(
+      data && data.result,
+      title,
+      query.season,
+    );
+    if (candidates.length > 0) {
+      match = candidates[0].result;
+      break;
+    }
+  }
+  if (match == null || !match.slug) return { sources: [] };
+
+  const target = await kickassFindEpisode(match.slug, query.episode);
+  if (target == null) return { sources: [] };
+  const detail = await kickassJson(
+    `${kickassBaseUrl()}/api/show/${encodeURIComponent(match.slug)}/episode/` +
+      `ep-${Number(target.episode_number)}-${encodeURIComponent(target.slug)}`,
+    { headers: kickassApiHeaders() },
+  );
+  const servers = detail && Array.isArray(detail.servers) ? detail.servers : [];
+  const sources = servers
+    .filter(kickassServerIsHls)
+    .map((server) => ({
+      id: `${KICKASS_PROVIDER_KEY}:${kickassEncode({
+        show: match.slug,
+        episode: Number(target.episode_number),
+        episodeSlug: target.slug,
+        server: server.src,
+        name: server.name || 'HLS',
+      })}`,
+      label: `KickassAnime · ${server.name || 'HLS'}`,
+      provider: 'Nimora',
+      providerId: KICKASS_PROVIDER_ID,
+    }));
+  return { sources };
+}
+
+function kickassDecodeHtml(value) {
+  return String(value || '')
+    .replace(/&quot;|&#34;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&');
+}
+
+function kickassSerialized(value) {
+  if (Array.isArray(value)) {
+    if (value.length === 2 && typeof value[0] === 'number') {
+      return kickassSerialized(value[1]);
+    }
+    return value.map(kickassSerialized);
+  }
+  if (value != null && typeof value === 'object') {
+    const result = {};
+    Object.keys(value).forEach((key) => {
+      result[key] = kickassSerialized(value[key]);
+    });
+    return result;
+  }
+  return value;
+}
+
+function kickassPlayerData(body) {
+  const match = /props\s*=\s*(["'])([\s\S]*?)\1/i.exec(String(body || ''));
+  if (match == null) return null;
+  try {
+    return kickassSerialized(JSON.parse(kickassDecodeHtml(match[2])));
+  } catch (_) {
+    return null;
+  }
+}
+
+function kickassSubtitles(data) {
+  const list = data && Array.isArray(data.subtitles) ? data.subtitles : [];
+  return list.map((entry) => {
+    const subtitle = kickassSerialized(entry);
+    const url = kickassUrl(subtitle && subtitle.src);
+    if (url == null || !/^https?:\/\/[^\s]+$/i.test(url)) return null;
+    return {
+      language: String((subtitle && subtitle.language) || 'und'),
+      label: String((subtitle && (subtitle.name || subtitle.language)) || 'Subtitle'),
+      url,
+    };
+  }).filter((subtitle) => subtitle != null);
+}
+
+function kickassFirstChildPlaylist(body, playlistUrl) {
+  const lines = String(body || '').split(/\r?\n/);
+  let expectPlaylist = false;
+  for (const line of lines) {
+    const value = line.trim();
+    if (!value) continue;
+    if (value.startsWith('#EXT-X-STREAM-INF')) {
+      expectPlaylist = true;
+      continue;
+    }
+    if (expectPlaylist && !value.startsWith('#')) {
+      return kickassUrl(value, playlistUrl.slice(0, playlistUrl.lastIndexOf('/')));
+    }
+  }
+  return null;
+}
+
+function kickassValidPlaylist(body, master) {
+  if (!String(body || '').trimStart().startsWith('#EXTM3U')) return false;
+  return master
+    ? /#EXT-X-STREAM-INF/i.test(body)
+    : /#EXTINF:|#EXT-X-MAP/i.test(body);
+}
+
+async function kickassResolveSource(sourceId) {
+  const payload = kickassSourcePayload(sourceId);
+  if (payload == null || !payload.server || !payload.show ||
+      !payload.episode || !payload.episodeSlug) {
+    throw new Error('Malformed KickassAnime source id');
+  }
+  const playerUrl = kickassUrl(payload.server);
+  if (playerUrl == null) throw new Error('KickassAnime: invalid player URL');
+  const headers = kickassPlayerHeaders(playerUrl);
+  const page = await kickassFetch(playerUrl, { headers });
+  const data = kickassPlayerData(page && page.body);
+  const manifest = kickassUrl(data && data.manifest);
+  if (manifest == null || !/\.m3u8(?:[?#]|$)/i.test(manifest)) {
+    throw new Error('KickassAnime: no iOS-compatible HLS manifest');
+  }
+
+  const playlist = await kickassFetch(manifest, { headers });
+  const playlistBody = playlist && playlist.body;
+  if (playlist == null || !kickassValidPlaylist(playlistBody, true)) {
+    throw new Error('KickassAnime: invalid HLS master playlist');
+  }
+  const childUrl = kickassFirstChildPlaylist(playlistBody, manifest);
+  if (childUrl != null) {
+    const child = await kickassFetch(childUrl, { headers });
+    if (child == null || !kickassValidPlaylist(child.body, false)) {
+      throw new Error('KickassAnime: invalid HLS media playlist');
+    }
+  }
+  return {
+    url: manifest,
+    headers,
+    format: 'hls',
+    label: `KickassAnime · ${payload.name || 'HLS'}`,
+    subtitles: kickassSubtitles(data),
+  };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: KICKASS_PROVIDER_KEY,
+  sources: kickassSources,
+  resolve: (sourceId) => kickassResolveSource(sourceId),
+});
 
 // Indomax VOD streams.  Indomax is a WordPress catalogue whose active domain
 // is published in CloudX's Website.json.  Its player pages hand off to

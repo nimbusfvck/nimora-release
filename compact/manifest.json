@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.67",
+  "version": "1.0.68",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -75,6 +75,11 @@
     {
       "id": "nimora.moviebox",
       "name": "MovieBox",
+      "roles": ["stream"]
+    },
+    {
+      "id": "nimora.showbox",
+      "name": "ShowBox · FebBox",
       "roles": ["stream"]
     },
     {
@@ -185,6 +190,11 @@
           "contentRating": "general"
         }
       ]
+    },
+    {
+      "id": "nimora.kickassanime",
+      "name": "KickassAnime",
+      "roles": ["stream"]
     },
     {
       "id": "nimora.shegu",

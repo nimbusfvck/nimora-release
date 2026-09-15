@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.79",
+      "version": "1.0.80",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added KickassAnime as an HLS anime source with fresh iOS-compatible playback resolution, subtitle tracks, and season-safe matching.",
         "Made AniList anime details TMDB-first for richer metadata, episode titles, and per-episode artwork; preserved AniList episode refs and absolute multi-season mapping so long-running anime such as One Piece continue matching Sokuja and Indomax.",
         "Routed TMDB requests through the private Cloudflare proxy with edge caching and server-side key rotation, so AniList episode details can load TMDB still artwork without exposing API keys in the bundle; AniList cover/banner artwork remains the fallback.",
         "Centralized TMDB API requests with key rotation across available keys so anime artwork and metadata survive stale or rate-limited keys.",
@@ -223,7 +224,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "31c6589989d618790cdb2b1d6f4b4822bd2607b3c78e5db2e82f948be7bccb87"
+      "bundleSha256": "314ab830e3e37e5673e81ecab0144ef059d18918aef323c194e27e7241c9be0c"
     }
   ]
 }

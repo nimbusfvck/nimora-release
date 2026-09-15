@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.79",
+  "version": "1.0.80",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -50,6 +50,13 @@
     {
       "id": "nimora.moviebox",
       "name": "MovieBox",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.showbox",
+      "name": "ShowBox · FebBox",
       "roles": [
         "stream"
       ]
@@ -277,6 +284,13 @@
           "display": "row",
           "contentRating": "general"
         }
+      ]
+    },
+    {
+      "id": "nimora.kickassanime",
+      "name": "KickassAnime",
+      "roles": [
+        "stream"
       ]
     },
     {
