@@ -10084,12 +10084,37 @@ async function sokujaCatalog(query) {
   // Sokuja-only genre/update subcategories.
   if (typeof anilistCatalog === 'function') {
     try {
-      const anilistPage = await anilistCatalog(query);
-      const hasItems = anilistPage != null &&
-        Array.isArray(anilistPage.sections) &&
-        anilistPage.sections.some((section) =>
-          section != null && Array.isArray(section.items) && section.items.length > 0);
-      if (hasItems) return anilistPage;
+      const anilistShelfIds = query.subCategory == null
+        ? ['trending', 'popular', 'airing', 'top']
+        : [query.subCategory];
+      const anilistPages = await Promise.all(anilistShelfIds.map((subCategory) =>
+        anilistCatalog({...query, subCategory})));
+      const sections = anilistPages.flatMap((page) =>
+        page != null && Array.isArray(page.sections) ? page.sections : [])
+        .filter((section) =>
+          section != null && Array.isArray(section.items) && section.items.length > 0)
+        .map((section) => ({
+          ...section,
+          title: {
+            trending: 'Trending',
+            popular: 'Popular',
+            airing: 'Airing Now',
+            top: 'Top Rated',
+          }[section.id] || section.title,
+        }));
+      if (sections.length > 0) {
+        const firstPage = anilistPages.find((page) => page != null);
+        const result = {
+          sections,
+          subCategories: firstPage && Array.isArray(firstPage.subCategories)
+            ? firstPage.subCategories
+            : [],
+        };
+        if (anilistPages.some((page) => page != null && page.nextPage != null)) {
+          result.nextPage = String(Number(query.page || 1) + 1);
+        }
+        return result;
+      }
     } catch (_) {}
   }
   const orders = await sokujaCatalogOrders();
@@ -15609,6 +15634,15 @@ const ANILIST_PROVIDER_ID = 'nimora.anilist';
 const ANILIST_CATALOG_ID = 'anilist';
 const ANILIST_CATEGORY = 'anime';
 const ANILIST_PER_PAGE = 30;
+// AniList allows 90 requests/minute. Keep a buffer for other clients using
+// the same public endpoint, and make the normal browsing path much quieter by
+// retaining catalogue pages across refreshes and app launches.
+const ANILIST_CATALOG_CACHE_TTL_MS = 45 * 60 * 1000;
+const ANILIST_SEARCH_CACHE_TTL_MS = 15 * 60 * 1000;
+const ANILIST_META_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const ANILIST_FAILURE_COOLDOWN_MS = 60 * 1000;
+const ANILIST_RATE_WINDOW_MS = 60 * 1000;
+const ANILIST_MAX_REQUESTS_PER_WINDOW = 75;
 // One page of aired episodes is enough to date a running cour, which is the
 // case that needs dates at all: a stream provider stamps its uploads with the
 // broadcast day. A long-runner's early episodes fall outside this window and
@@ -15661,7 +15695,79 @@ const ANILIST_SHELVES = [
   { id: 'top', name: 'Top Rated', sort: ['SCORE_DESC'] },
 ];
 
-async function anilistQuery(query, variables) {
+const anilistQueryMemo = new Map();
+const anilistRequestTimes = [];
+
+function anilistStorage() {
+  return typeof host === 'object' && host !== null && host.storage
+    ? host.storage
+    : null;
+}
+
+function anilistHash(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) {
+    hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function anilistCacheKey(query, variables) {
+  return `nimora.anilist.graphql.v1.${anilistHash(JSON.stringify({ query, variables }))}`;
+}
+
+function anilistCacheRead(key) {
+  const storage = anilistStorage();
+  if (storage === null) return null;
+  let raw;
+  try {
+    raw = storage.read(key);
+  } catch (_) {
+    return null;
+  }
+  if (typeof raw !== 'string' || raw.length === 0) return null;
+  try {
+    const value = JSON.parse(raw);
+    return value != null && typeof value === 'object' ? value : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function anilistCacheWrite(key, value, ttlMs) {
+  const storage = anilistStorage();
+  if (storage === null) return;
+  try {
+    storage.write(key, JSON.stringify(value), ttlMs);
+  } catch (_) {
+    // Storage is an optional cache. A refused write must not fail discovery.
+  }
+}
+
+async function anilistWaitForRateSlot() {
+  while (true) {
+    const now = Date.now();
+    while (
+      anilistRequestTimes.length > 0 &&
+      now - anilistRequestTimes[0] >= ANILIST_RATE_WINDOW_MS
+    ) {
+      anilistRequestTimes.shift();
+    }
+    if (anilistRequestTimes.length < ANILIST_MAX_REQUESTS_PER_WINDOW) {
+      anilistRequestTimes.push(now);
+      return;
+    }
+    const waitMs = Math.max(
+      1,
+      anilistRequestTimes[0] + ANILIST_RATE_WINDOW_MS - now,
+    );
+    if (typeof globalThis.setTimeout !== 'function') return;
+    await new Promise((resolve) => globalThis.setTimeout(resolve, waitMs));
+  }
+}
+
+async function anilistFetchQuery(query, variables) {
+  await anilistWaitForRateSlot();
   try {
     const response = await fetch(ANILIST_API_URL, {
       method: 'POST',
@@ -15679,6 +15785,45 @@ async function anilistQuery(query, variables) {
   } catch (_) {
     return null;
   }
+}
+
+// The in-process promise deduplicates concurrent shelf/meta requests. The
+// optional host storage extends the same cache across engine launches. Failed
+// calls are held only during a short cooldown, so a 429 or outage does not
+// turn a refresh loop into a request storm.
+function anilistQuery(
+  query,
+  variables,
+  ttlMs = ANILIST_CATALOG_CACHE_TTL_MS,
+) {
+  const key = anilistCacheKey(query, variables);
+  const now = Date.now();
+  const memo = anilistQueryMemo.get(key);
+  if (memo != null) {
+    const memoTtl = memo.failed ? ANILIST_FAILURE_COOLDOWN_MS : ttlMs;
+    if (now - memo.fetchedAt < memoTtl) return memo.promise;
+    anilistQueryMemo.delete(key);
+  }
+
+  const cached = anilistCacheRead(key);
+  if (cached != null) {
+    const cachedMemo = {
+      fetchedAt: now,
+      failed: false,
+      promise: Promise.resolve(cached),
+    };
+    anilistQueryMemo.set(key, cachedMemo);
+    return cachedMemo.promise;
+  }
+
+  const entry = { fetchedAt: now, failed: false, promise: null };
+  entry.promise = anilistFetchQuery(query, variables).then((data) => {
+    entry.failed = data == null;
+    if (data != null) anilistCacheWrite(key, data, ttlMs);
+    return data;
+  });
+  anilistQueryMemo.set(key, entry);
+  return entry.promise;
 }
 
 // Romaji first, not English: the Indonesian fansub sites this catalog feeds
@@ -15755,7 +15900,7 @@ async function anilistCatalog(query) {
     perPage: ANILIST_PER_PAGE,
     sort: shelf.sort,
     status: shelf.status,
-  });
+  }, ANILIST_CATALOG_CACHE_TTL_MS);
   if (data == null) return { sections: [], subCategories };
 
   // No section title: the shelf is chosen by chip and the grid is one flat,
@@ -15822,7 +15967,7 @@ async function anilistSearch(args) {
     perPage: ANILIST_PER_PAGE,
     search,
     sort: ['SEARCH_MATCH'],
-  });
+  }, ANILIST_SEARCH_CACHE_TTL_MS);
   if (data == null) return { sections: [] };
   const result = { sections: [{ id: 'anilist-results', items: anilistItemsOf(data) }] };
   const pageInfo = data.Page && data.Page.pageInfo;
@@ -15917,7 +16062,7 @@ async function anilistMeta(args) {
   const data = await anilistQuery(ANILIST_MEDIA_QUERY, {
     id: Number(mediaId),
     schedulePerPage: ANILIST_SCHEDULE_PER_PAGE,
-  });
+  }, ANILIST_META_CACHE_TTL_MS);
   const media = data && data.Media;
   if (media == null) throw new Error(`AniList has no media ${mediaId}`);
 
