@@ -2561,7 +2561,7 @@ globalThis.__streamProviders.push({
 // playback URL is deliberately fetched only in resolve().
 
 const IDLIX_BASE_URL =
-  globalThis.__idlixBaseUrl || 'https://z1.idlixku.com';
+  globalThis.__idlixBaseUrl || 'https://z2.idlixku.com';
 const IDLIX_PROVIDER_KEY = 'idlix';
 const IDLIX_PROVIDER_ID = 'nimora.idlix';
 const IDLIX_TMDB_PROVIDER_ID = 'nimora.tmdb';
@@ -2665,6 +2665,62 @@ function idlixPickSearchResult(results, title, mediaType) {
   return compatible.find((result) => idlixTitleKey(result.title) === wanted) || null;
 }
 
+function idlixSlug(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function idlixSlugCandidates(item, title) {
+  const base = idlixSlug(title);
+  if (!base) return [];
+  const year = Number.isInteger(item && item.releaseYear) && item.releaseYear > 0
+    ? String(item.releaseYear)
+    : '';
+  return year ? [`${base}-${year}`, base] : [base];
+}
+
+function idlixDetailPath(mediaType, slug) {
+  return mediaType === 'tv'
+    ? `/api/series/${encodeURIComponent(slug)}`
+    : `/api/movies/${encodeURIComponent(slug)}`;
+}
+
+function idlixContentFromDetail(detail, ref, title, slug) {
+  if (detail == null) return null;
+  if (ref.mediaType === 'movie') {
+    return detail.id == null ? null : {
+      mediaType: ref.mediaType,
+      tmdbId: ref.tmdbId,
+      slug,
+      contentId: String(detail.id),
+      contentType: 'movie',
+      title,
+    };
+  }
+
+  const seasonNumber = ref.season;
+  const episodeNumber = ref.episode;
+  let target = null;
+  const firstSeason = detail.firstSeason;
+  if (firstSeason != null && Number(firstSeason.seasonNumber) === seasonNumber) {
+    target = (firstSeason.episodes || []).find(
+      (episode) => Number(episode.episodeNumber) === episodeNumber,
+    );
+  }
+  return target == null || target.id == null ? null : {
+    mediaType: ref.mediaType,
+    tmdbId: ref.tmdbId,
+    slug,
+    contentId: String(target.id),
+    contentType: 'episode',
+    season: seasonNumber,
+    episode: episodeNumber,
+    title,
+  };
+}
+
 async function idlixFindContent(item) {
   const ref = idlixRef(item);
   if (ref == null) return null;
@@ -2674,32 +2730,32 @@ async function idlixFindContent(item) {
   const title = idlixTitleOf(item);
   if (!title) return null;
 
+  const discoveryHeaders = idlixHeaders(null);
+  for (const slug of idlixSlugCandidates(item, title)) {
+    const detail = await idlixJson(
+      `${idlixBaseUrl()}${idlixDetailPath(ref.mediaType, slug)}`,
+      { headers: discoveryHeaders },
+    );
+    const content = idlixContentFromDetail(detail, ref, title, slug);
+    if (content != null) return content;
+  }
+
+  // Keep search only as a compatibility fallback for titles whose provider
+  // slug does not follow the usual title/year convention.
   const search = await idlixJson(
     `${idlixBaseUrl()}/api/search?q=${encodeURIComponent(title)}&page=1&limit=8`,
-    { headers: idlixHeaders() },
+    { headers: discoveryHeaders },
   );
   const match = idlixPickSearchResult(search && search.results, title, ref.mediaType);
   if (match == null) return null;
-
-  const detailPath = ref.mediaType === 'tv'
-    ? `/api/series/${encodeURIComponent(match.slug)}`
-    : `/api/movies/${encodeURIComponent(match.slug)}`;
   const detail = await idlixJson(
-    `${idlixBaseUrl()}${detailPath}`,
-    { headers: idlixHeaders() },
+    `${idlixBaseUrl()}${idlixDetailPath(ref.mediaType, match.slug)}`,
+    { headers: discoveryHeaders },
   );
-  if (detail == null) return null;
+  const directContent = idlixContentFromDetail(detail, ref, title, match.slug);
+  if (directContent != null) return directContent;
 
-  if (ref.mediaType === 'movie') {
-    return detail.id == null ? null : {
-      mediaType: ref.mediaType,
-      tmdbId: ref.tmdbId,
-      slug: match.slug,
-      contentId: String(detail.id),
-      contentType: 'movie',
-      title,
-    };
-  }
+  if (ref.mediaType === 'movie') return null;
 
   const seasonNumber = ref.season;
   const episodeNumber = ref.episode;
@@ -2718,7 +2774,7 @@ async function idlixFindContent(item) {
     if (season != null) {
       const seasonData = await idlixJson(
         `${idlixBaseUrl()}/api/series/${encodeURIComponent(match.slug)}/season/${seasonNumber}`,
-        { headers: idlixHeaders() },
+        { headers: idlixHeaders(null) },
       );
       const seasonObject = seasonData && (seasonData.season || seasonData);
       target = (seasonObject && seasonObject.episodes || []).find(
@@ -4638,7 +4694,7 @@ const TMDB_LEAKS_TTL_MS = 15 * 60 * 1000;
 const SHEGU_TRAILER_TIMEOUT_MS = 1500;
 
 let tmdbLeaksMemo = null;
-const tmdbTitleLogoMemo = new Map();
+const tmdbImagesMemo = new Map();
 const TMDB_TITLE_LOGO_CONCURRENCY = 4;
 
 // --- fetch helpers ---
@@ -4897,9 +4953,16 @@ function tmdbToMediaItem(result, mediaType) {
   if (rating != null) mediaItem.rating = rating;
   const artwork = {};
   if (result.poster_path) artwork.portrait = { url: `${TMDB_IMAGE_BASE}/w500${result.poster_path}` };
-  if (result.backdrop_path) artwork.landscape = { url: `${TMDB_IMAGE_BASE}/w780${result.backdrop_path}` };
+  if (result.backdrop_path) artwork.landscape = { url: `${TMDB_IMAGE_BASE}/w1280${result.backdrop_path}` };
   const titleLogo = tmdbTitleLogo(result.images);
   if (titleLogo) artwork.logo = { url: `${TMDB_IMAGE_BASE}/w300${titleLogo.file_path}` };
+  const backdrops = (result.images && Array.isArray(result.images.backdrops)
+    ? result.images.backdrops : [])
+    .filter((backdrop) => backdrop && backdrop.file_path &&
+      backdrop.file_path !== result.backdrop_path)
+    .slice(0, 9)
+    .map((backdrop) => ({ url: `${TMDB_IMAGE_BASE}/w1280${backdrop.file_path}` }));
+  if (backdrops.length > 0) artwork.backdrops = backdrops;
   if (Object.keys(artwork).length > 0) mediaItem.artwork = artwork;
   return mediaItem;
 }
@@ -4913,6 +4976,55 @@ function tmdbReleaseDateIso(dateStr) {
 
 // TMDB returns logos in popularity order. Prefer an English title treatment,
 // then an untagged one that can work across locales.
+function tmdbImagesRequest(mediaType, tmdbId) {
+  const key = `${mediaType}:${tmdbId}`;
+  const existing = tmdbImagesMemo.get(key);
+  if (existing != null) return existing;
+  const request = tmdbGetJson(`/${mediaType}/${tmdbId}/images`, {
+    include_image_language: 'en,null',
+  })
+    .catch(() => null);
+  tmdbImagesMemo.set(key, request);
+  return request;
+}
+
+function tmdbBackdropImages(images, primaryPath) {
+  const backdrops = images && Array.isArray(images.backdrops)
+    ? images.backdrops : [];
+  return backdrops
+    .filter((backdrop) => backdrop && backdrop.file_path &&
+      backdrop.file_path !== primaryPath)
+    .slice(0, 9)
+    .map((backdrop) => ({
+      url: `${TMDB_IMAGE_BASE}/w1280${backdrop.file_path}`,
+    }));
+}
+
+async function enrichTrendingBackdrops(results, items, mediaType) {
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < results.length) {
+      const index = nextIndex++;
+      const result = results[index];
+      if (result == null || result.id == null) continue;
+      const images = await tmdbImagesRequest(mediaType, result.id);
+      const backdrops = tmdbBackdropImages(images, result.backdrop_path);
+      const logo = tmdbTitleLogo(images);
+      if (backdrops.length === 0 && logo == null) continue;
+      items[index].artwork = {
+        ...(items[index].artwork || {}),
+        ...(backdrops.length > 0 ? { backdrops } : {}),
+        ...(logo != null
+          ? { logo: { url: `${TMDB_IMAGE_BASE}/w300${logo.file_path}` } }
+          : {}),
+      };
+    }
+  };
+  const workerCount = Math.min(TMDB_TITLE_LOGO_CONCURRENCY, results.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return items;
+}
+
 function tmdbTitleLogo(images) {
   const logos = images && Array.isArray(images.logos) ? images.logos : [];
   return logos.find((logo) => logo.file_path && logo.iso_639_1 === 'en')
@@ -4921,36 +5033,9 @@ function tmdbTitleLogo(images) {
 }
 
 function tmdbTitleLogoRequest(mediaType, tmdbId) {
-  const key = `${mediaType}:${tmdbId}`;
-  const existing = tmdbTitleLogoMemo.get(key);
-  if (existing != null) return existing;
-  const request = tmdbGetJson(`/${mediaType}/${tmdbId}/images`, {
-    include_image_language: 'en,null',
-  })
+  return tmdbImagesRequest(mediaType, tmdbId)
     .then(tmdbTitleLogo)
     .catch(() => null);
-  tmdbTitleLogoMemo.set(key, request);
-  return request;
-}
-
-async function enrichTrendingTitleLogos(results, items, mediaType) {
-  let nextIndex = 0;
-  const worker = async () => {
-    while (nextIndex < results.length) {
-      const index = nextIndex++;
-      const result = results[index];
-      if (result == null || result.id == null) continue;
-      const logo = await tmdbTitleLogoRequest(mediaType, result.id);
-      if (logo == null) continue;
-      items[index].artwork = {
-        ...(items[index].artwork || {}),
-        logo: { url: `${TMDB_IMAGE_BASE}/w300${logo.file_path}` },
-      };
-    }
-  };
-  const workerCount = Math.min(TMDB_TITLE_LOGO_CONCURRENCY, results.length);
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  return items;
 }
 
 function tmdbTrailerUrl(video) {
@@ -5064,7 +5149,7 @@ async function fetchTrending(mediaType) {
   // Every Trending item can become a Home hero candidate. Keep the fan-out
   // bounded and memoized so repeated catalog reads do not create an
   // unbounded burst of TMDB requests.
-  return enrichTrendingTitleLogos(results, items, mediaType);
+  return enrichTrendingBackdrops(results, items, mediaType);
 }
 
 // A future-dated result isn't guaranteed to actually be one — TMDB's flat
@@ -6006,7 +6091,7 @@ function tmdbEpisodeOf(tvId, seasonNumber, episode) {
   };
   if (episode.overview) mapped.description = episode.overview;
   if (episode.still_path) {
-    mapped.artwork = { landscape: { url: `${TMDB_IMAGE_BASE}/w300${episode.still_path}` } };
+    mapped.artwork = { landscape: { url: `${TMDB_IMAGE_BASE}/w780${episode.still_path}` } };
   }
   if (typeof episode.runtime === 'number' && episode.runtime > 0) {
     mapped.durationSeconds = episode.runtime * 60;

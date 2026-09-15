@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.65",
+      "version": "1.0.70",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Disabled the Idlix stream provider while its upstream API is blocked by a Cloudflare challenge; added HD TMDB alternate backdrops and restored TMDB title logos for the Featured Summary.",
         "Fixed See more pagination for Indonesian and Korean movie/series rows and limited country movie rows to TMDB digital releases without vote-count filtering.",
         "Added recent Indonesian and Korean movie rows plus recent Korean series, without vote-count filtering; removed Indonesian Series from the category layout.",
         "Added Trending Today rows to the Movie, TV Shows, and Anime categories; Movie and TV use TMDB daily trends, while Anime uses Sokuja's weekly ranking.",
@@ -213,7 +214,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "5c8b749981c4595c34e8b50c37e65e78ad2cdcb6aaf31ad4d7a92b316ca52904"
+      "bundleSha256": "f31ea5c5b268b74ff2493ed1eaec6de66b627ea9becd135bac6fe695d750f34a"
     }
   ]
 }
