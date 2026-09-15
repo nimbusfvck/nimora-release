@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.77",
+      "version": "1.0.78",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Routed TMDB requests through the private Cloudflare proxy with edge caching and server-side key rotation, so AniList episode details can load TMDB still artwork without exposing API keys in the bundle; AniList cover/banner artwork remains the fallback.",
         "Centralized TMDB API requests with key rotation across available keys so anime artwork and metadata survive stale or rate-limited keys.",
         "Moved All-category anime rankings to AniList with Sokuja fallback and added lazy TMDB episode still artwork for AniList anime details.",
         "Added persistent AniList caching, duplicate-request coalescing, and a conservative 75-request-per-minute guard to stay below AniList's 90-request limit.",
@@ -221,7 +222,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "c9518fbf9ff01f6ed35e9330e4241c5116e726e6b42f572c20e7e719e42a16fb"
+      "bundleSha256": "be721b9287e39ce6a85c5ee08ba2c3cd0284f245c8496920235d1075ced1e07b"
     }
   ]
 }

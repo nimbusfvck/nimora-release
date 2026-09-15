@@ -6704,7 +6704,11 @@ if (!globalThis.__extension.sources) {
 //
 // Reuses `EXTENSION_ID` from fixtures.js (build_bundle.dart loads that first).
 
-const TMDB_BASE = globalThis.__tmdbBaseUrl || 'https://api.themoviedb.org/3';
+// The public bundle uses the server-side proxy by default. Hosts may override
+// this for a private proxy or local fixture server; the TMDB API key never
+// belongs in the bundle.
+const TMDB_BASE = globalThis.__tmdbBaseUrl ||
+  'https://nimora-tmdb-proxy.nimora-cloud.workers.dev/3';
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
 const SHEGU_LISTS_BASE = globalThis.__sheguListsBaseUrl || 'https://lists.shegu.st/joy';
 const SHEGU_TRAILER_BASE = globalThis.__sheguTrailerBaseUrl || 'https://trailer.shegu.st';
@@ -16357,12 +16361,29 @@ function anilistSchedule(media) {
   return byEpisode;
 }
 
+// The detail page must remain useful when TMDB is unavailable (for example,
+// when the host has not configured its private TMDB proxy yet). AniList's
+// cover/banner are not episode-specific, but they are a better tile fallback
+// than an empty image. tmdbAnimeEpisodeArtwork replaces these with stills when
+// the TMDB mapping succeeds.
+function anilistEpisodeArtwork(media) {
+  const artwork = {};
+  const cover = media && media.coverImage ? media.coverImage : {};
+  const portrait = cover.extraLarge || cover.large;
+  if (portrait) artwork.portrait = { url: portrait };
+  if (media && media.bannerImage) {
+    artwork.landscape = { url: media.bannerImage };
+  }
+  return Object.keys(artwork).length > 0 ? artwork : null;
+}
+
 // One group, always: an AniList entry *is* one cour, numbered from 1, so a
 // season axis on top of it would be invented. The id still says `season:1`
 // because stream providers read the season out of it.
 function anilistEpisodeGuide(media, schedule, total) {
   if (total < 1) return null;
   const episodes = [];
+  const fallbackArtwork = anilistEpisodeArtwork(media);
   for (let position = 1; position <= total; position++) {
     const episode = {
       ref: {
@@ -16373,6 +16394,7 @@ function anilistEpisodeGuide(media, schedule, total) {
       title: `Episode ${position}`,
       position,
     };
+    if (fallbackArtwork != null) episode.artwork = fallbackArtwork;
     const availableAt = schedule.get(position);
     if (availableAt != null) episode.availableAt = availableAt;
     episodes.push(episode);

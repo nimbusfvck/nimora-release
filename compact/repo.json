@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.65",
+      "version": "1.0.66",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Routed TMDB requests through the private Cloudflare proxy with edge caching and server-side key rotation, so AniList episode details can load TMDB still artwork without exposing API keys in the bundle; AniList cover/banner artwork remains the fallback.",
         "Centralized TMDB API requests with key rotation across available keys so anime artwork and metadata survive stale or rate-limited keys.",
         "Moved All-category anime rankings to AniList with Sokuja fallback and added lazy TMDB episode still artwork for AniList anime details.",
         "Added persistent AniList caching, duplicate-request coalescing, and a conservative 75-request-per-minute guard to stay below AniList's 90-request limit.",
@@ -81,7 +82,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "4e49b4794c948d19ed6cfce58b681169f3083c87964e4fe7f1f41852898d2cee"
+      "bundleSha256": "411dce5af1fec0bb2acc4abfb1815983606ca49a750a0be10ce25cfe4dc0a74f"
     }
   ]
 }
