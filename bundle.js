@@ -6726,6 +6726,8 @@ const tmdbImagesMemo = new Map();
 const TMDB_TITLE_LOGO_CONCURRENCY = 4;
 const TMDB_TRENDING_RANKS_TTL_MS = 15 * 60 * 1000;
 const tmdbTrendingRanksMemo = new Map();
+const TMDB_ANIME_ARTWORK_TTL_MS = 24 * 60 * 60 * 1000;
+const tmdbAnimeArtworkMemo = new Map();
 
 // --- fetch helpers ---
 
@@ -7793,6 +7795,17 @@ async function fetchSokujaAnimeRanking(rank) {
   }
 }
 
+async function fetchAnimeRankingWithFallback(rank) {
+  const loader = globalThis.__anilistAnimeRankingItems;
+  if (typeof loader === 'function') {
+    try {
+      const items = await loader(rank);
+      if (Array.isArray(items) && items.length > 0) return items;
+    } catch (_) {}
+  }
+  return fetchSokujaAnimeRanking(rank);
+}
+
 const HIGHLIGHT_GROUPS = [
   { id: 'trending_movie', name: 'Trending Movie', fetch: () => fetchTrending('movie') },
   { id: 'trending_tv', name: 'Trending TV', fetch: () => fetchTrending('tv') },
@@ -7807,12 +7820,12 @@ const HIGHLIGHT_GROUPS = [
   {
     id: 'top_anime_all_time',
     name: 'Top Anime All Time',
-    fetch: () => fetchSokujaAnimeRanking('all'),
+    fetch: () => fetchAnimeRankingWithFallback('all'),
   },
   {
     id: 'popular_anime_week',
     name: 'Popular Anime This Week',
-    fetch: () => fetchSokujaAnimeRanking('weekly'),
+    fetch: () => fetchAnimeRankingWithFallback('weekly'),
   },
   {
     id: 'top_rated_movie',
@@ -8214,6 +8227,159 @@ function tmdbEpisodeRef(tvId, seasonNumber, episodeNumber) {
     id: `series:${tvId}:season:${seasonNumber}:episode:${episodeNumber}`,
   };
 }
+
+function tmdbAnimeNormalizeTitle(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function tmdbAnimeTitleVariants(media) {
+  const title = media && media.title ? media.title : {};
+  const values = [title.english, title.romaji, title.native];
+  if (Array.isArray(media && media.synonyms)) values.push(...media.synonyms);
+  const seen = new Set();
+  return values.filter((value) => {
+    const normalized = tmdbAnimeNormalizeTitle(value);
+    if (!normalized || seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+}
+
+function tmdbAnimeSearchMatch(result, media) {
+  if (result == null || typeof result !== 'object') return false;
+  const candidateTitles = [result.name, result.original_name]
+    .map(tmdbAnimeNormalizeTitle)
+    .filter(Boolean);
+  const variants = tmdbAnimeTitleVariants(media);
+  if (candidateTitles.length === 0 || variants.length === 0) return false;
+  const exact = candidateTitles.some((candidate) => variants.some((variant) =>
+    tmdbAnimeNormalizeTitle(variant) === candidate));
+  if (!exact) return false;
+  const wantedYear = media && media.startDate && Number(media.startDate.year);
+  const resultYear = Number(String(result.first_air_date || '').slice(0, 4));
+  return !Number.isInteger(wantedYear) || wantedYear < 1 ||
+    !Number.isInteger(resultYear) || resultYear < 1 ||
+    Math.abs(wantedYear - resultYear) <= 1;
+}
+
+async function tmdbAnimeSeriesOf(media) {
+  const mediaId = media && Number(media.id);
+  const key = Number.isInteger(mediaId) && mediaId > 0
+    ? String(mediaId)
+    : tmdbAnimeTitleVariants(media).join('|');
+  const now = Date.now();
+  const cached = tmdbAnimeArtworkMemo.get(`series:${key}`);
+  if (cached != null && now - cached.fetchedAt < TMDB_ANIME_ARTWORK_TTL_MS) {
+    return cached.value;
+  }
+
+  let match = null;
+  for (const title of tmdbAnimeTitleVariants(media).slice(0, 3)) {
+    try {
+      const wantedYear = media && media.startDate && Number(media.startDate.year);
+      const data = await tmdbGetJson('/search/tv', {
+        query: title,
+        ...(Number.isInteger(wantedYear) && wantedYear > 0
+          ? { first_air_date_year: wantedYear }
+          : {}),
+        include_adult: 'false',
+      });
+      const results = Array.isArray(data.results) ? data.results : [];
+      match = results.find((result) => tmdbAnimeSearchMatch(result, media)) || null;
+      if (match != null) break;
+    } catch (_) {}
+  }
+  const value = match && Number.isInteger(Number(match.id)) ? match : null;
+  tmdbAnimeArtworkMemo.set(`series:${key}`, { fetchedAt: now, value });
+  return value;
+}
+
+function tmdbAnimeSeasonOf(media, showData) {
+  const seasons = Array.isArray(showData && showData.seasons)
+    ? showData.seasons.filter((season) => Number(season.season_number) > 0)
+    : [];
+  if (seasons.length === 0) return null;
+  if (seasons.length === 1) return seasons[0];
+
+  const wantedYear = media && media.startDate && Number(media.startDate.year);
+  if (Number.isInteger(wantedYear) && wantedYear > 0) {
+    const byYear = seasons.find((season) =>
+      Number(String(season.air_date || '').slice(0, 4)) === wantedYear);
+    if (byYear != null) return byYear;
+  }
+  // Multiple TMDB seasons without a reliable year match are ambiguous. Do
+  // not attach another cour's stills to an AniList episode.
+  return null;
+}
+
+async function tmdbAnimeEpisodeArtwork(media, guide) {
+  if (media == null || guide == null || !Array.isArray(guide.groups)) return guide;
+  const mediaId = Number(media.id);
+  const key = Number.isInteger(mediaId) && mediaId > 0
+    ? String(mediaId)
+    : tmdbAnimeTitleVariants(media).join('|');
+  const cacheKey = `artwork:${key}`;
+  const now = Date.now();
+  const cached = tmdbAnimeArtworkMemo.get(cacheKey);
+  if (cached != null && now - cached.fetchedAt < TMDB_ANIME_ARTWORK_TTL_MS) {
+    return cached.value || guide;
+  }
+
+  let enriched = guide;
+  try {
+    const series = await tmdbAnimeSeriesOf(media);
+    if (series == null) {
+      tmdbAnimeArtworkMemo.set(cacheKey, { fetchedAt: now, value: null });
+      return guide;
+    }
+    const showData = await tmdbGetJson(`/tv/${series.id}`, {});
+    const season = tmdbAnimeSeasonOf(media, showData);
+    if (season == null) {
+      tmdbAnimeArtworkMemo.set(cacheKey, { fetchedAt: now, value: null });
+      return guide;
+    }
+    const seasonData = await tmdbGetJson(
+      `/tv/${series.id}/season/${season.season_number}`,
+      {},
+    );
+    const artworkByEpisode = new Map(
+      (Array.isArray(seasonData.episodes) ? seasonData.episodes : [])
+        .filter((episode) => episode && Number.isInteger(Number(episode.episode_number)))
+        .map((episode) => [Number(episode.episode_number), episode.still_path]),
+    );
+    enriched = {
+      ...guide,
+      groups: guide.groups.map((group) => ({
+        ...group,
+        episodes: Array.isArray(group.episodes)
+          ? group.episodes.map((episode) => {
+            const stillPath = artworkByEpisode.get(Number(episode.position));
+            return stillPath
+              ? {
+                ...episode,
+                artwork: { landscape: { url: `${TMDB_IMAGE_BASE}/w780${stillPath}` } },
+              }
+              : episode;
+          })
+          : group.episodes,
+      })),
+    };
+  } catch (_) {
+    enriched = guide;
+  }
+  tmdbAnimeArtworkMemo.set(cacheKey, {
+    fetchedAt: now,
+    value: enriched === guide ? null : enriched,
+  });
+  return enriched;
+}
+
+globalThis.__tmdbAnimeEpisodeArtwork = tmdbAnimeEpisodeArtwork;
 
 function tmdbEpisodeOf(tvId, seasonNumber, episode) {
   const mapped = {
@@ -15648,6 +15814,7 @@ const ANILIST_MAX_REQUESTS_PER_WINDOW = 75;
 // broadcast day. A long-runner's early episodes fall outside this window and
 // carry no date, and are matched by number instead.
 const ANILIST_SCHEDULE_PER_PAGE = 100;
+const ANILIST_RANKING_LIMIT = 25;
 
 const ANILIST_MEDIA_FIELDS = `
   id
@@ -15656,7 +15823,8 @@ const ANILIST_MEDIA_FIELDS = `
   episodes
   averageScore
   startDate { year }
-  title { romaji english }
+  title { romaji english native }
+  synonyms
   coverImage { extraLarge large }
   bannerImage
 `;
@@ -15713,7 +15881,7 @@ function anilistHash(value) {
 }
 
 function anilistCacheKey(query, variables) {
-  return `nimora.anilist.graphql.v1.${anilistHash(JSON.stringify({ query, variables }))}`;
+  return `nimora.anilist.graphql.v2.${anilistHash(JSON.stringify({ query, variables }))}`;
 }
 
 function anilistCacheRead(key) {
@@ -15832,6 +16000,76 @@ function anilistQuery(
 function anilistTitle(media) {
   const title = media && media.title ? media.title : {};
   return title.romaji || title.english || 'Untitled';
+}
+
+function anilistMediaIdFromItem(item) {
+  const refs = [
+    item && item.ref,
+    item && item.episode && item.episode.parentRef,
+  ];
+  for (const ref of refs) {
+    const match = /^anilist:(?:media|episode):(\d+)/.exec(
+      String(ref && ref.id || ''),
+    );
+    if (match != null) return Number(match[1]);
+  }
+  return null;
+}
+
+function anilistTitleVariantsForMedia(media) {
+  const titles = [];
+  const seen = new Set();
+  const add = (value) => {
+    const title = typeof value === 'string' ? value.trim() : '';
+    const key = title.toLowerCase();
+    if (title && !seen.has(key)) {
+      seen.add(key);
+      titles.push(title);
+    }
+  };
+  const title = media && media.title ? media.title : {};
+  add(title.romaji);
+  add(title.native);
+  add(title.english);
+  for (const synonym of Array.isArray(media && media.synonyms)
+    ? media.synonyms
+    : []) {
+    add(synonym);
+  }
+  return titles;
+}
+
+function anilistItemBaseTitle(item) {
+  const extra = item && item.extra && typeof item.extra === 'object'
+    ? item.extra
+    : {};
+  const title = extra.seriesTitle || (item && item.subtitle) || (item && item.title);
+  return typeof title === 'string' ? title.trim() : '';
+}
+
+async function anilistTitleVariants(item) {
+  const original = anilistItemBaseTitle(item);
+  const mediaId = anilistMediaIdFromItem(item);
+  if (!Number.isInteger(mediaId) || mediaId < 1) return original ? [original] : [];
+
+  const data = await anilistQuery(ANILIST_MEDIA_QUERY, {
+    id: mediaId,
+    schedulePerPage: ANILIST_SCHEDULE_PER_PAGE,
+  }, ANILIST_META_CACHE_TTL_MS);
+  const media = data && data.Media;
+  const variants = [];
+  const seen = new Set();
+  const add = (value) => {
+    const title = typeof value === 'string' ? value.trim() : '';
+    const key = title.toLowerCase();
+    if (title && !seen.has(key)) {
+      seen.add(key);
+      variants.push(title);
+    }
+  };
+  add(original);
+  anilistTitleVariantsForMedia(media).forEach(add);
+  return variants;
 }
 
 function anilistRefId(mediaId) {
@@ -15957,6 +16195,20 @@ async function anilistPopularSeasonItems(now) {
   return data == null ? [] : anilistItemsOf(data);
 }
 
+// AniList has no literal "this week" aggregate. TRENDING_DESC is its closest
+// supported ranking and is what the All-category weekly anime row uses. The
+// all-time row is deliberately score-ranked rather than popularity-ranked so
+// its label remains meaningful next to the existing Top Rated shelves.
+async function anilistAnimeRankingItems(rank) {
+  const sort = rank === 'weekly' ? ['TRENDING_DESC'] : ['SCORE_DESC'];
+  const data = await anilistQuery(ANILIST_LIST_QUERY, {
+    page: 1,
+    perPage: ANILIST_RANKING_LIMIT,
+    sort,
+  });
+  return data == null ? [] : anilistItemsOf(data);
+}
+
 async function anilistSearch(args) {
   const search = args && args.query;
   if (!search) return { sections: [] };
@@ -16076,8 +16328,13 @@ async function anilistMeta(args) {
 
   const schedule = anilistSchedule(media);
   const total = anilistEpisodeCount(media, schedule);
-  const guide = anilistEpisodeGuide(media, schedule, total);
+  let guide = anilistEpisodeGuide(media, schedule, total);
   if (guide != null) {
+    // TMDB is metadata-only here. The AniList episode refs remain the source
+    // identity used by Sokuja/Indomax; TMDB only contributes still artwork.
+    if (typeof globalThis.__tmdbAnimeEpisodeArtwork === 'function') {
+      guide = await globalThis.__tmdbAnimeEpisodeArtwork(media, guide);
+    }
     detail.episodeGuide = guide;
     const lastAired = Math.min(anilistLastAired(media, schedule), total);
     if (lastAired >= 1) {
@@ -16102,6 +16359,12 @@ globalThis.__metaProviders.push({
   providerId: ANILIST_PROVIDER_ID,
   meta: anilistMeta,
 });
+
+// Sokuja and Indomax search their own title indexes. Keep AniList's stable
+// ref as the identity, but give those providers every known title spelling
+// before they declare that no stream exists.
+globalThis.__animeTitleVariants = anilistTitleVariants;
+globalThis.__anilistAnimeRankingItems = anilistAnimeRankingItems;
 
 // Search is one call per extension, so the providers in this bundle form a
 // chain rather than a fan-out. Sokuja owns the live anime catalog when it is

@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.63",
+      "version": "1.0.64",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Moved All-category anime rankings to AniList with Sokuja fallback and added lazy TMDB episode still artwork for AniList anime details.",
         "Added persistent AniList caching, duplicate-request coalescing, and a conservative 75-request-per-minute guard to stay below AniList's 90-request limit.",
         "Switched the Anime category to AniList-first data with Sokuja fallback and added a minimum TMDB vote count of 10 for Korean Series.",
         "Sorted Korean Movies and Korean Series by TMDB rating, using popularity as the tie-breaker.",
@@ -79,7 +80,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "41d74f5f88cc9688edf457a7a94d111587e1764f2338c359b55065d5395807fb"
+      "bundleSha256": "8413d02399f6c5ebf4ee5962763700b5f92e6d46990edd42a207af7b68f6c1b9"
     }
   ]
 }
