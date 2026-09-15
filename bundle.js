@@ -3850,6 +3850,11 @@ function showboxText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function showboxId(value) {
+  if (typeof value === 'number' && isFinite(value)) return String(value);
+  return showboxText(value);
+}
+
 function showboxRuntimeCookie() {
   const raw = showboxText(globalThis.__showboxUiCookie);
   if (!raw) return null;
@@ -4029,7 +4034,7 @@ async function showboxFiles(parsed, item) {
   const season = root.find((entry) =>
     showboxSeasonNumber(entry && entry.file_name) === String(parsed.season),
   );
-  const parentId = showboxText(season && season.fid);
+  const parentId = showboxId(season && season.fid);
   if (!parentId) return [];
   const episodes = await showboxFileList(shareId, parentId, 1);
   if (episodes == null) return [];
@@ -4110,7 +4115,7 @@ async function showboxEntries(parsed, item) {
   const files = await showboxFiles(parsed, item);
   const entries = [];
   for (const file of files) {
-    const fileId = showboxText(file && (file.oss_fid || file.fid || file.id));
+    const fileId = showboxId(file && (file.oss_fid || file.fid || file.id));
     if (!fileId) continue;
     const masterUrl = FEBBOX_DOMAIN + '/hls/main/' + encodeURIComponent(fileId) + '.m3u8';
     const body = await showboxFetch(masterUrl, FEBBOX_DOMAIN + '/', true);
@@ -7183,6 +7188,10 @@ const TMDB_TITLE_LOGO_CONCURRENCY = 4;
 const TMDB_TRENDING_RANKS_TTL_MS = 15 * 60 * 1000;
 const tmdbTrendingRanksMemo = new Map();
 const TMDB_ANIME_ARTWORK_TTL_MS = 24 * 60 * 60 * 1000;
+// Season endpoints return every episode, including stills. Keep long-running
+// anime detail pages responsive; AniList still supplies the complete guide
+// and fallback artwork when a full TMDB season payload would be excessive.
+const TMDB_ANIME_ARTWORK_MAX_EPISODES = 24;
 const tmdbAnimeArtworkMemo = new Map();
 const tmdbAnimeShowMemo = new Map();
 const TMDB_KEY_FAILURE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
@@ -8905,6 +8914,92 @@ function tmdbAnimeSeasonsOf(media, showData, episodeCount) {
   return selected;
 }
 
+function tmdbAnimeSeasonNumberOf(groupId) {
+  const match = /(?:^|:)season:(\d+)/i.exec(String(groupId || ''));
+  const season = match == null ? NaN : Number(match[1]);
+  return Number.isInteger(season) && season > 0 ? season : null;
+}
+
+// Long-running anime can expose season metadata without loading any episode
+// payload. The app uses these as lazy group placeholders and requests one
+// concrete season through meta({groupId}) only after the user selects it.
+async function tmdbAnimeSeasonGroups(media, episodeCount) {
+  try {
+    const series = await tmdbAnimeSeriesOf(media);
+    const showData = await tmdbAnimeShowDataOf(series);
+    const seasons = tmdbAnimeSeasonsOf(media, showData, episodeCount);
+    return seasons.map((season) => ({
+      id: `season:${Number(season.season_number)}`,
+      title: season.name || `Season ${season.season_number}`,
+      episodes: [],
+      loaded: false,
+    }));
+  } catch (_) {
+    return [];
+  }
+}
+
+async function tmdbAnimeSeasonEpisodes(media, groupId, episodeCount) {
+  const seasonNumber = tmdbAnimeSeasonNumberOf(groupId);
+  if (seasonNumber == null) return null;
+  const mediaId = Number(media && media.id);
+  const mediaKey = Number.isInteger(mediaId) && mediaId > 0
+    ? String(mediaId)
+    : tmdbAnimeTitleVariants(media).join('|');
+  const cacheKey = `anime-season:${mediaKey}:${seasonNumber}`;
+  const now = Date.now();
+  const cached = tmdbAnimeArtworkMemo.get(cacheKey);
+  if (cached != null && now - cached.fetchedAt < TMDB_ANIME_ARTWORK_TTL_MS) {
+    return cached.value;
+  }
+
+  let value = null;
+  try {
+    const series = await tmdbAnimeSeriesOf(media);
+    const showData = await tmdbAnimeShowDataOf(series);
+    const seasons = tmdbAnimeSeasonsOf(media, showData, episodeCount);
+    const seasonIndex = seasons.findIndex((season) =>
+      Number(season.season_number) === seasonNumber);
+    if (series == null || showData == null || seasonIndex < 0) {
+      tmdbAnimeArtworkMemo.set(cacheKey, { fetchedAt: now, value: null });
+      return null;
+    }
+    let offset = 0;
+    for (let index = 0; index < seasonIndex; index++) {
+      const count = Number(seasons[index].episode_count);
+      if (!Number.isInteger(count) || count < 1) {
+        tmdbAnimeArtworkMemo.set(cacheKey, { fetchedAt: now, value: null });
+        return null;
+      }
+      offset += count;
+    }
+    const data = await tmdbGetJson(
+      `/tv/${series.id}/season/${seasonNumber}`,
+      {},
+    );
+    const episodes = Array.isArray(data && data.episodes)
+      ? data.episodes
+        .filter((episode) => episode && Number.isInteger(Number(episode.episode_number)))
+        .sort((a, b) => Number(a.episode_number) - Number(b.episode_number))
+      : [];
+    value = {
+      id: `season:${seasonNumber}`,
+      title: seasons[seasonIndex].name || `Season ${seasonNumber}`,
+      loaded: true,
+      episodes: episodes.map((episode) => ({
+        position: Number(episode.episode_number),
+        absoluteEpisode: offset + Number(episode.episode_number),
+        title: episode.name || `Episode ${episode.episode_number}`,
+        ...(episode.still_path
+          ? {stillPath: episode.still_path}
+          : {}),
+      })),
+    };
+  } catch (_) {}
+  tmdbAnimeArtworkMemo.set(cacheKey, { fetchedAt: now, value });
+  return value;
+}
+
 async function tmdbAnimeEpisodeArtwork(media, guide) {
   if (media == null || guide == null || !Array.isArray(guide.groups)) return guide;
   const mediaId = Number(media.id);
@@ -8937,6 +9032,10 @@ async function tmdbAnimeEpisodeArtwork(media, guide) {
         ...episodes.map((episode) => Number(episode && episode.position) || 0),
       );
     }, 0);
+    if (episodeCount > TMDB_ANIME_ARTWORK_MAX_EPISODES) {
+      tmdbAnimeArtworkMemo.set(cacheKey, { fetchedAt: now, value: null });
+      return guide;
+    }
     const seasons = tmdbAnimeSeasonsOf(media, showData, episodeCount);
     if (seasons.length === 0) {
       tmdbAnimeArtworkMemo.set(cacheKey, { fetchedAt: now, value: null });
@@ -9005,6 +9104,8 @@ async function tmdbAnimeEpisodeArtwork(media, guide) {
 
 globalThis.__tmdbAnimeEpisodeArtwork = tmdbAnimeEpisodeArtwork;
 globalThis.__tmdbAnimeDetail = tmdbAnimeDetail;
+globalThis.__tmdbAnimeSeasonGroups = tmdbAnimeSeasonGroups;
+globalThis.__tmdbAnimeSeasonEpisodes = tmdbAnimeSeasonEpisodes;
 
 function tmdbEpisodeOf(tvId, seasonNumber, episode) {
   const mapped = {
@@ -10085,9 +10186,18 @@ function parseSheguAnilistEpisode(refId, item) {
     ? item.episode.groupId
     : '';
   const seasonMatch = /(?:^|:)season:(\d+)/i.exec(groupId);
+  const relativeEpisode = item && item.episode &&
+    Number.isInteger(item.episode.position)
+    ? item.episode.position
+    : Number(match[2]);
+  const absoluteEpisode = item && item.episode &&
+    Number.isInteger(item.episode.absoluteEpisode)
+    ? item.episode.absoluteEpisode
+    : Number(match[2]);
   return {
     anilistId: match[1],
-    episode: match[2],
+    episode: String(absoluteEpisode),
+    seasonEpisode: String(relativeEpisode),
     season: seasonMatch == null ? '1' : seasonMatch[1],
   };
 }
@@ -10116,7 +10226,7 @@ async function sheguExternalSubtitles(args) {
     const tracks = await fetchMovieSubtitles(
       identity.tmdbId,
       identity.season || anilistEpisode.season,
-      anilistEpisode.episode,
+      anilistEpisode.seasonEpisode,
     );
     return { subtitles: tracks };
   }
@@ -10600,7 +10710,8 @@ function sokujaHighestEpisodeNumber(html) {
 async function sokujaNumberedEpisodeUrl(item, query, detailBody) {
   const relative = sokujaEpisodeUrl(detailBody, query.episode, null);
   if (!Number.isInteger(query.season) || query.season <= 1) return relative;
-  const absolute = await sokujaAbsoluteEpisode(item, query.season, query.episode);
+  const absolute = query.absoluteEpisode ||
+    await sokujaAbsoluteEpisode(item, query.season, query.episode);
   if (absolute == null) return null;
   if (sokujaHighestEpisodeNumber(detailBody) < absolute) return relative;
   return sokujaEpisodeUrl(detailBody, absolute, null);
@@ -10773,6 +10884,9 @@ function sokujaItemQuery(item) {
   const v2EpisodeNumber = v2Episode && Number.isInteger(v2Episode.position)
     ? v2Episode.position
     : null;
+  const v2AbsoluteEpisode = v2Episode && Number.isInteger(v2Episode.absoluteEpisode)
+    ? v2Episode.absoluteEpisode
+    : null;
   const v2SeriesTitle = item && typeof item.subtitle === 'string'
     ? item.subtitle.trim()
     : '';
@@ -10786,7 +10900,13 @@ function sokujaItemQuery(item) {
   }
   const season = Number.isInteger(extra.season) ? extra.season : v2Season;
   const episode = Number.isInteger(extra.episode) ? extra.episode : v2EpisodeNumber;
-  return { title, season, episode, isEpisode: item && item.kind === 'episode' };
+  return {
+    title,
+    season,
+    episode,
+    absoluteEpisode: v2AbsoluteEpisode,
+    isEpisode: item && item.kind === 'episode',
+  };
 }
 
 function sokujaPathOf(url) {
@@ -11485,7 +11605,9 @@ function kickassItemQuery(item) {
     : groupSeason == null ? 1 : Number(groupSeason[1]);
   const position = Number.isInteger(extra.episode)
     ? extra.episode
-    : episode && Number.isInteger(episode.position) ? episode.position : 1;
+    : episode && Number.isInteger(episode.absoluteEpisode)
+      ? episode.absoluteEpisode
+      : episode && Number.isInteger(episode.position) ? episode.position : 1;
   return { title, season, episode: position };
 }
 
@@ -16854,6 +16976,7 @@ const ANILIST_MAX_REQUESTS_PER_WINDOW = 75;
 // carry no date, and are matched by number instead.
 const ANILIST_SCHEDULE_PER_PAGE = 100;
 const ANILIST_RANKING_LIMIT = 25;
+const ANILIST_LAZY_SEASON_THRESHOLD = 24;
 
 const ANILIST_MEDIA_FIELDS = `
   id
@@ -17363,6 +17486,62 @@ function anilistEpisodeGuide(media, schedule, total) {
   return { groups: [{ id: 'season:1', title: 'Episodes', episodes }] };
 }
 
+function anilistLazyEpisodeGuide(groups) {
+  if (!Array.isArray(groups) || groups.length === 0) return null;
+  return {
+    groups: groups.map((group) => ({
+      id: group.id,
+      title: group.title,
+      episodes: [],
+      loaded: false,
+    })),
+  };
+}
+
+function anilistEpisodeGuideForTmdbSeason(media, schedule, season) {
+  if (season == null || !Array.isArray(season.episodes)) return null;
+  const episodes = season.episodes
+    .map((entry) => {
+      const position = Number(entry && entry.position);
+      const absoluteEpisode = Number(entry && entry.absoluteEpisode);
+      if (!Number.isInteger(position) || position < 1 ||
+          !Number.isInteger(absoluteEpisode) || absoluteEpisode < 1) {
+        return null;
+      }
+      const episode = {
+        ref: {
+          extensionId: EXTENSION_ID,
+          providerId: ANILIST_PROVIDER_ID,
+          // Keep the stable ref keyed by the continuous AniList episode.
+          id: anilistEpisodeRefId(media.id, absoluteEpisode),
+        },
+        title: entry.title || `Episode ${position}`,
+        position,
+        absoluteEpisode,
+      };
+      const availableAt = schedule.get(absoluteEpisode);
+      if (availableAt != null) episode.availableAt = availableAt;
+      if (entry.stillPath) {
+        episode.artwork = {
+          landscape: {url: `${TMDB_IMAGE_BASE}/w780${entry.stillPath}`},
+        };
+      } else {
+        const fallbackArtwork = anilistEpisodeArtwork(media);
+        if (fallbackArtwork != null) episode.artwork = fallbackArtwork;
+      }
+      return episode;
+    })
+    .filter((episode) => episode != null);
+  return {
+    groups: [{
+      id: season.id,
+      title: season.title,
+      episodes,
+      loaded: true,
+    }],
+  };
+}
+
 async function anilistMeta(args) {
   const mediaId = anilistParseRefId(args && args.ref && args.ref.id);
   if (mediaId == null) {
@@ -17402,21 +17581,57 @@ async function anilistMeta(args) {
 
   const schedule = anilistSchedule(media);
   const total = anilistEpisodeCount(media, schedule);
-  let guide = anilistEpisodeGuide(media, schedule, total);
+  const requestedGroupId = typeof args.groupId === 'string' && args.groupId
+    ? args.groupId
+    : null;
+  let guide = requestedGroupId == null &&
+      total <= ANILIST_LAZY_SEASON_THRESHOLD
+    ? anilistEpisodeGuide(media, schedule, total)
+    : null;
+  if (guide == null) {
+    let lazyGuide = null;
+    if (
+      requestedGroupId != null &&
+      typeof globalThis.__tmdbAnimeSeasonEpisodes === 'function'
+    ) {
+      const season = await globalThis.__tmdbAnimeSeasonEpisodes(
+        media,
+        requestedGroupId,
+        total,
+      );
+      lazyGuide = anilistEpisodeGuideForTmdbSeason(media, schedule, season);
+    } else if (
+      requestedGroupId == null &&
+      total > ANILIST_LAZY_SEASON_THRESHOLD &&
+      typeof globalThis.__tmdbAnimeSeasonGroups === 'function'
+    ) {
+      const groups = await globalThis.__tmdbAnimeSeasonGroups(media, total);
+      lazyGuide = anilistLazyEpisodeGuide(groups);
+    }
+    guide = lazyGuide || anilistEpisodeGuide(media, schedule, total);
+  }
   if (guide != null) {
-    // TMDB is metadata-only here. The AniList episode refs remain the source
-    // identity used by Sokuja/Indomax; TMDB only contributes still artwork.
-    if (typeof globalThis.__tmdbAnimeEpisodeArtwork === 'function') {
+    if (
+      requestedGroupId == null &&
+      total <= ANILIST_LAZY_SEASON_THRESHOLD &&
+      typeof globalThis.__tmdbAnimeEpisodeArtwork === 'function'
+    ) {
+      // TMDB is metadata-only here. The AniList episode refs remain the source
+      // identity used by Sokuja/Indomax; TMDB only contributes still artwork.
       guide = await globalThis.__tmdbAnimeEpisodeArtwork(media, guide);
     }
     detail.episodeGuide = guide;
     const lastAired = Math.min(anilistLastAired(media, schedule), total);
     if (lastAired >= 1) {
-      detail.episodeGuide.defaultEpisodeRef = {
+      const defaultEpisodeRef = {
         extensionId: EXTENSION_ID,
         providerId: ANILIST_PROVIDER_ID,
         id: anilistEpisodeRefId(media.id, lastAired),
       };
+      if (guide.groups.some((group) => group.episodes.some((episode) =>
+        episode.ref.id === defaultEpisodeRef.id))) {
+        detail.episodeGuide.defaultEpisodeRef = defaultEpisodeRef;
+      }
     }
   }
   return detail;
