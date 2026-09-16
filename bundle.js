@@ -11539,7 +11539,7 @@ globalThis.__sokujaCatalogActive = true;
 globalThis.__extension = globalThis.__extension || {};
 const sokujaPreviousSearch = globalThis.__extension.search;
 globalThis.__extension.search = async (args) => {
-  if (args && (args.category == null || args.category === SOKUJA_ANIME_CATEGORY)) {
+  if (args && args.category === SOKUJA_ANIME_CATEGORY) {
     return sokujaSearch(args);
   }
   if (typeof sokujaPreviousSearch !== 'function') return { sections: [] };
@@ -17703,7 +17703,7 @@ async function anilistSearch(args) {
     search,
     sort: ['SEARCH_MATCH'],
   }, ANILIST_SEARCH_CACHE_TTL_MS);
-  if (data == null) return { sections: [] };
+  if (data == null) throw new Error('AniList search failed');
   const result = { sections: [{ id: 'anilist-results', items: anilistItemsOf(data) }] };
   const pageInfo = data.Page && data.Page.pageInfo;
   if (pageInfo && pageInfo.hasNextPage) result.nextPage = String(page + 1);
@@ -17954,15 +17954,20 @@ globalThis.__animeTitleVariants = anilistTitleVariants;
 globalThis.__anilistAnimeRankingItems = anilistAnimeRankingItems;
 
 // Search is one call per extension, so the providers in this bundle form a
-// chain rather than a fan-out. Sokuja owns the live anime catalog when it is
-// present; this keeps AniList available as a metadata/search fallback for
-// isolated bundles and existing AniList refs.
+// chain rather than a fan-out. AniList is tried first for anime search, with
+// Sokuja as the fallback if AniList fails; other scopes continue down-chain.
 globalThis.__extension = globalThis.__extension || {};
 const anilistPreviousSearch = globalThis.__extension.search;
 globalThis.__extension.search = async (args) => {
-  if (args && args.category === ANILIST_CATEGORY &&
-      !globalThis.__sokujaCatalogActive) {
-    return anilistSearch(args);
+  if (args && args.category === ANILIST_CATEGORY) {
+    try {
+      return await anilistSearch(args);
+    } catch (_) {
+      if (typeof anilistPreviousSearch === 'function') {
+        return anilistPreviousSearch(args);
+      }
+      return { sections: [] };
+    }
   }
   if (typeof anilistPreviousSearch !== 'function') return { sections: [] };
   return anilistPreviousSearch(args);

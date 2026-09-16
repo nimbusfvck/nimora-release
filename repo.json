@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.87",
+      "version": "1.0.88",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Kept All-category search on TMDB and made Anime search AniList-first with Sokuja fallback when AniList errors.",
         "Changed Febbox quality links into variants on one source, preserving 2160p/1080p/720p choices while keeping startup quality selection lightweight.",
         "Removed TMDB from the AniList anime detail path; episode titles, thumbnails, trailers, and related anime collections now come directly from AniList.",
         "Fixed Febbox source discovery by using the file fid and prioritizing signed quality-list HLS URLs before legacy playback fallbacks.",
@@ -232,7 +233,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "fbbf235450fd19ca572ce70b672a862eb381f4c0347442c38e7032270deeb1ee"
+      "bundleSha256": "ba489d7e1b6311ec32bb95d509678c62c11b34770b56d4441cb1c799b76ba9d2"
     }
   ]
 }
