@@ -4435,8 +4435,12 @@ function showboxMatchEntry(entries, payload) {
 }
 
 async function showboxMasterPlaylist(entries) {
-  const knownMaster = entries.find((entry) => entry.playlistType === 'master');
-  if (knownMaster) return knownMaster;
+  const knownMasters = entries.filter((entry) =>
+    entry.playlistType === 'master',
+  );
+  if (knownMasters.length === entries.length && knownMasters.length > 0) {
+    return { entry: knownMasters[0], otherEntries: [] };
+  }
   const candidates = entries.filter((entry) =>
     entry.format === 'hls' && entry.playlistType !== 'media',
   );
@@ -4451,7 +4455,21 @@ async function showboxMasterPlaylist(entries) {
       showboxPlaylistUrls(body, entry.url).length > 0;
   }));
   const masterIndex = isMaster.indexOf(true);
-  return masterIndex < 0 ? null : candidates[masterIndex];
+  const master = knownMasters[0] ||
+    (masterIndex < 0 ? null : candidates[masterIndex]);
+  if (master == null) return null;
+  const masterEntries = knownMasters.slice();
+  for (let i = 0; i < candidates.length; i++) {
+    if (isMaster[i] && masterEntries.indexOf(candidates[i]) < 0) {
+      masterEntries.push(candidates[i]);
+    }
+  }
+  return {
+    entry: master,
+    otherEntries: entries.filter((entry) =>
+      masterEntries.indexOf(entry) < 0,
+    ),
+  };
 }
 
 function showboxParsedRef(refId) {
@@ -4553,13 +4571,23 @@ async function showboxResolveSource(sourceId) {
       label: 'Febbox',
     };
   }
-  const master = await showboxMasterPlaylist(selectedEntries);
-  if (master != null) {
+  const masterPlaylist = await showboxMasterPlaylist(selectedEntries);
+  if (masterPlaylist != null) {
+    const master = masterPlaylist.entry;
+    // Keep the adaptive master as the source URL, but don't discard Febbox's
+    // separate fixed-quality playlists. Those remain explicit choices in the
+    // app quality picker (not separate source rows).
+    const fixedQualityEntries = masterPlaylist.otherEntries.filter((entry) =>
+      entry.url !== master.url &&
+      showboxVariantHeight(entry) != null,
+    );
+    const variants = showboxStreamVariants(fixedQualityEntries, headers);
     return {
       url: master.url,
       format: 'hls',
       headers,
       label: 'Febbox',
+      ...(variants.length > 0 ? { variants } : {}),
     };
   }
   const variants = showboxStreamVariants(selectedEntries, headers);

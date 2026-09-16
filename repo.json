@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.91",
+      "version": "1.0.92",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Restored Febbox fixed-quality variants so 720p and 360p remain available alongside the adaptive HLS source.",
         "Grouped Febbox quality links into one Auto source with fixed resolutions as playback variants, while keeping master HLS adaptive.",
         "Split Febbox quality playlists into independently selectable sources while refreshing signed URLs on resolve.",
         "Kept Febbox master HLS playlists intact for native adaptive quality; fixed-quality playlists remain selectable variants.",
@@ -236,7 +237,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "f4fa53501804940adb61725312503072b60a7e41376fae89055fe0b08508371f"
+      "bundleSha256": "bf913c09f0f8220a50731e41e372763a07482c3f26c3a2dbfdb16d9b19f054ab"
     }
   ]
 }
