@@ -4355,25 +4355,25 @@ async function showboxEntries(parsed, item) {
       'application/vnd.apple.mpegurl, application/x-mpegURL, */*',
     );
     const embeddedUrls = showboxEmbeddedHlsUrls(body, masterUrl);
-    if (!showboxIsPlaylist(body) && embeddedUrls.length === 0) continue;
-    const urls = embeddedUrls.length
-      ? embeddedUrls
-      : showboxPlaylistUrls(body, masterUrl);
-    const candidates = urls.length ? urls : [masterUrl];
-    for (const url of candidates) {
-      entries.push({
-        fileId,
-        shareId,
-        url,
-        versionName: fileName || 'Original',
-        linkName: 'Auto',
-        quality: showboxQuality(fileName, url),
-        size: showboxText(file && (file.file_size || file.size)),
-        codecs: showboxCodecs(fileName),
-        format: showboxFormat(url),
-        index: entries.length,
-      });
-    }
+    const isPlaylist = showboxIsPlaylist(body);
+    if (!isPlaylist && embeddedUrls.length === 0) continue;
+    const entryUrl = isPlaylist ? masterUrl : embeddedUrls[0] || masterUrl;
+    const childUrls = isPlaylist
+      ? showboxPlaylistUrls(body, masterUrl)
+      : [];
+    entries.push({
+      fileId,
+      shareId,
+      url: entryUrl,
+      playlistType: isPlaylist ? (childUrls.length ? 'master' : 'media') : '',
+      versionName: fileName || 'Original',
+      linkName: 'Auto',
+      quality: showboxQuality(fileName, entryUrl),
+      size: showboxText(file && (file.file_size || file.size)),
+      codecs: showboxCodecs(fileName),
+      format: showboxFormat(entryUrl),
+      index: entries.length,
+    });
   }
   return entries.sort((a, b) => {
     const quality = (SHOWBOX_QUALITY_ORDER[a.quality] ?? 99) -
@@ -4421,6 +4421,26 @@ function showboxMatchEntry(entries, payload) {
     entry.linkName === payload.n,
   );
   return matches[payload.o || 0] || null;
+}
+
+async function showboxMasterPlaylist(entries) {
+  const knownMaster = entries.find((entry) => entry.playlistType === 'master');
+  if (knownMaster) return knownMaster;
+  const candidates = entries.filter((entry) =>
+    entry.format === 'hls' && entry.playlistType !== 'media',
+  );
+  const isMaster = await Promise.all(candidates.map(async (entry) => {
+    const body = await showboxFetch(
+      entry.url,
+      FEBBOX_DOMAIN + '/',
+      false,
+      'application/vnd.apple.mpegurl, application/x-mpegURL, */*',
+    );
+    return showboxIsPlaylist(body) &&
+      showboxPlaylistUrls(body, entry.url).length > 0;
+  }));
+  const masterIndex = isMaster.indexOf(true);
+  return masterIndex < 0 ? null : candidates[masterIndex];
 }
 
 function showboxParsedRef(refId) {
@@ -4509,7 +4529,12 @@ async function showboxResolveSource(sourceId) {
         entry.fileId === payloadId.f && entry.shareId === payloadId.h)
     : (() => {
         const entry = showboxMatchEntry(entries, payloadId);
-        return entry == null ? [] : [entry];
+        if (entry != null) return [entry];
+        const fallback = entries.find((candidate) =>
+          candidate.fileId === payloadId.f &&
+          candidate.shareId === payloadId.h,
+        );
+        return fallback == null ? [] : [fallback];
       })();
   if (selectedEntries.length === 0) {
     throw new Error('ShowBox: selected link is no longer available');
@@ -4520,6 +4545,15 @@ async function showboxResolveSource(sourceId) {
     'User-Agent': SHOWBOX_UA,
   };
   if (cookie) headers.Cookie = 'ui=' + cookie;
+  const master = await showboxMasterPlaylist(selectedEntries);
+  if (master != null) {
+    return {
+      url: master.url,
+      format: 'hls',
+      headers,
+      label: 'Febbox',
+    };
+  }
   const variants = showboxStreamVariants(selectedEntries, headers);
   if (variants.length === 0) {
     throw new Error('ShowBox: selected link has no playable variants');

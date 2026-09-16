@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.76",
+      "version": "1.0.77",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Kept Febbox master HLS playlists intact for native adaptive quality; fixed-quality playlists remain selectable variants.",
         "Kept All-category search on TMDB and made Anime search AniList-first with Sokuja fallback when AniList errors.",
         "Changed Febbox quality links into variants on one source, preserving 2160p/1080p/720p choices while keeping startup quality selection lightweight.",
         "Removed TMDB from the AniList anime detail path; episode titles, thumbnails, trailers, and related anime collections now come directly from AniList.",
@@ -93,7 +94,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "597410563653682aa200cb965b9be0488868f4e31db89832ba24096cd9726c33"
+      "bundleSha256": "aa845c24d2356dfce5ff994464b0ea838efbc7c86b239304285aa8dd0a69b96c"
     }
   ]
 }
