@@ -3017,10 +3017,16 @@ const SHOWBOX_QUALITY_ORDER = {
   ORG: 7,
 };
 
-async function showboxEntries(parsed, item) {
+async function showboxEntries(parsed, item, wantedFileId) {
   const files = await showboxFiles(parsed, item);
   const entries = [];
   for (const file of files) {
+    const isDirectory = file && (
+      file.is_dir === true || file.is_dir === 1 ||
+      /^true$/i.test(showboxText(file.is_dir)) ||
+      showboxText(file.is_dir) === '1'
+    );
+    if (isDirectory) continue;
     const videoError = file && file.error_video;
     if (videoError === true || videoError === 1 ||
         showboxText(videoError) === '1' ||
@@ -3029,6 +3035,7 @@ async function showboxEntries(parsed, item) {
     // is a legacy playback identifier and can point at a different object.
     const fileId = showboxId(file && (file.fid || file.oss_fid || file.id));
     if (!fileId) continue;
+    if (wantedFileId && fileId !== wantedFileId) continue;
     const fileName = showboxText(file && file.file_name);
     const shareId = showboxText(file && file._showboxShareId);
     const qualityLinks = await showboxVideoQualityLinks(
@@ -3050,7 +3057,10 @@ async function showboxEntries(parsed, item) {
           index: entries.length,
         });
       }
-      continue;
+      // Febbox returns playable playlist choices for one file. Expose those
+      // choices as sources, but do not also enumerate alternate file records
+      // from the same share as duplicate source groups.
+      break;
     }
     // Keep the older player endpoint as a compatibility fallback, but do not
     // let it take precedence over the quality-list flow used by Febbox.
@@ -3071,7 +3081,7 @@ async function showboxEntries(parsed, item) {
           index: entries.length,
         });
       }
-      continue;
+      break;
     }
     const masterUrl = FEBBOX_DOMAIN + '/hls/main/' + encodeURIComponent(fileId) + '.m3u8';
     const body = await showboxFetch(
@@ -3100,6 +3110,7 @@ async function showboxEntries(parsed, item) {
       format: showboxFormat(entryUrl),
       index: entries.length,
     });
+    break;
   }
   return entries.sort((a, b) => {
     const quality = (SHOWBOX_QUALITY_ORDER[a.quality] ?? 99) -
@@ -3197,28 +3208,23 @@ async function showboxListSources(args) {
   if (parsed == null) return { sources: [] };
 
   const entries = await showboxEntries(parsed, item);
-  const groups = [];
-  const groupByKey = {};
-  for (const entry of entries) {
-    const key = entry.fileId + '\u0000' + entry.shareId;
-    let group = groupByKey[key];
-    if (group == null) {
-      group = { entries: [] };
-      groupByKey[key] = group;
-      groups.push(group);
-    }
-    group.entries.push(entry);
-  }
   const hasCookie = showboxRuntimeCookie() != null;
+  const selectorCounts = {};
   return {
-    sources: groups.map((group) => {
-      const entry = group.entries[0];
+    sources: entries.map((entry) => {
+      const selectorKey = entry.fileId + '\u0000' + entry.shareId +
+        '\u0000' + entry.quality + '\u0000' + entry.linkName;
+      const ordinal = selectorCounts[selectorKey] || 0;
+      selectorCounts[selectorKey] = ordinal + 1;
       const sourcePayload = {
         m: parsed.tmdbId,
         k: parsed.kind,
         f: entry.fileId,
         h: entry.shareId,
-        v: 2,
+        q: entry.quality,
+        n: entry.linkName,
+        o: ordinal,
+        v: 3,
       };
       if (parsed.season != null) {
         sourcePayload.s = parsed.season;
@@ -3228,7 +3234,8 @@ async function showboxListSources(args) {
       const suffix = entry.size ? ' · ' + entry.size : '';
       return {
         id,
-        label: 'Febbox' + (hasCookie ? ' ⚡' : '') + ' · Auto' + suffix,
+        label: 'Febbox' + (hasCookie ? ' ⚡' : '') + ' · ' +
+          (entry.linkName || 'Auto') + suffix,
         provider: 'Nimora',
         providerId: SHOWBOX_PROVIDER_ID,
       };
@@ -3249,13 +3256,14 @@ async function showboxResolveSource(sourceId) {
     ref: { id: parsed.kind + ':' + parsed.tmdbId },
     type: parsed.kind,
     showboxShareId: payloadId.h,
-  });
+  }, payloadId.f);
   const selectedEntries = payloadId.v === 2
     ? entries.filter((entry) =>
         entry.fileId === payloadId.f && entry.shareId === payloadId.h)
     : (() => {
         const entry = showboxMatchEntry(entries, payloadId);
         if (entry != null) return [entry];
+        if (payloadId.v === 3) return [];
         const fallback = entries.find((candidate) =>
           candidate.fileId === payloadId.f &&
           candidate.shareId === payloadId.h,
@@ -3271,6 +3279,15 @@ async function showboxResolveSource(sourceId) {
     'User-Agent': SHOWBOX_UA,
   };
   if (cookie) headers.Cookie = 'ui=' + cookie;
+  if (payloadId.v !== 2) {
+    const selected = selectedEntries[0];
+    return {
+      url: selected.url,
+      format: selected.format,
+      headers,
+      label: 'Febbox',
+    };
+  }
   const master = await showboxMasterPlaylist(selectedEntries);
   if (master != null) {
     return {
