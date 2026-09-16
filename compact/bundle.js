@@ -3209,37 +3209,28 @@ async function showboxListSources(args) {
 
   const entries = await showboxEntries(parsed, item);
   const hasCookie = showboxRuntimeCookie() != null;
-  const selectorCounts = {};
+  const entry = entries[0];
+  if (entry == null) return { sources: [] };
+  const sourcePayload = {
+    m: parsed.tmdbId,
+    k: parsed.kind,
+    f: entry.fileId,
+    h: entry.shareId,
+    v: 2,
+  };
+  if (parsed.season != null) {
+    sourcePayload.s = parsed.season;
+    sourcePayload.e = parsed.episode;
+  }
+  const id = showboxSourceId(sourcePayload);
+  const suffix = entry.size ? ' · ' + entry.size : '';
   return {
-    sources: entries.map((entry) => {
-      const selectorKey = entry.fileId + '\u0000' + entry.shareId +
-        '\u0000' + entry.quality + '\u0000' + entry.linkName;
-      const ordinal = selectorCounts[selectorKey] || 0;
-      selectorCounts[selectorKey] = ordinal + 1;
-      const sourcePayload = {
-        m: parsed.tmdbId,
-        k: parsed.kind,
-        f: entry.fileId,
-        h: entry.shareId,
-        q: entry.quality,
-        n: entry.linkName,
-        o: ordinal,
-        v: 3,
-      };
-      if (parsed.season != null) {
-        sourcePayload.s = parsed.season;
-        sourcePayload.e = parsed.episode;
-      }
-      const id = showboxSourceId(sourcePayload);
-      const suffix = entry.size ? ' · ' + entry.size : '';
-      return {
-        id,
-        label: 'Febbox' + (hasCookie ? ' ⚡' : '') + ' · ' +
-          (entry.linkName || 'Auto') + suffix,
-        provider: 'Nimora',
-        providerId: SHOWBOX_PROVIDER_ID,
-      };
-    }),
+    sources: [{
+      id,
+      label: 'Febbox' + (hasCookie ? ' ⚡' : '') + ' · Auto' + suffix,
+      provider: 'Nimora',
+      providerId: SHOWBOX_PROVIDER_ID,
+    }],
   };
 }
 
