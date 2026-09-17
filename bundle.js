@@ -18580,6 +18580,18 @@ async function timesoccerCatalog(query) {
   return result;
 }
 
+// The mixed TMDB highlights catalog reuses this page loader so the same
+// Time Soccer posts can appear on Home and in the All category. Keep the
+// standalone catalog above as the source of truth for pagination and mapping.
+globalThis.__timesoccerHighlightPage = async (page) => {
+  const result = await timesoccerCatalog({category: 'all', page});
+  const section = result.sections[0];
+  return {
+    items: section == null ? [] : section.items,
+    ...(result.nextPage == null ? {} : {nextPage: result.nextPage}),
+  };
+};
+
 async function timesoccerSources(args) {
   const item = args.item;
   const enabled = args.enabledProviders;

@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.80",
+  "version": "1.0.81",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -37,6 +37,11 @@
           "surface": "featured"
         }
       ]
+    },
+    {
+      "id": "nimora.timesoccer",
+      "name": "Time Soccer TV",
+      "roles": ["stream"]
     },
     {
       "id": "nimora.playz",
