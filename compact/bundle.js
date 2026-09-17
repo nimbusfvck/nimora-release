@@ -861,6 +861,27 @@ function isFotmobItem(item) {
   return `${item?.ref?.id || ''}`.startsWith('fotmob:');
 }
 
+function providerLandscapeArtwork(item) {
+  const url = item?.artwork?.landscape?.url;
+  return typeof url === 'string' && /^https?:\/\/[^\s]+$/i.test(url)
+    ? { url }
+    : null;
+}
+
+function mergeProviderArtwork(item, providerItem) {
+  const landscape = providerLandscapeArtwork(providerItem);
+  if (landscape == null) return item;
+  const currentArtwork = item?.artwork;
+  if (currentArtwork?.landscape?.url) return item;
+  return {
+    ...item,
+    artwork: {
+      ...(currentArtwork || {}),
+      landscape,
+    },
+  };
+}
+
 // FotMob remains the canonical metadata source. Provider-only football events
 // are appended after it, and any matching provider event is discarded so the
 // FotMob title, branding, participants, status, and editorial ranking win.
@@ -884,10 +905,15 @@ function footballCatalogItems(
   }
   for (const entry of entries.filter(isFootballEntry)) {
     const item = entry.item;
+    const matchingIndex = items.findIndex((existing) =>
+      sameFootballEvent(existing, item));
+    if (matchingIndex !== -1) {
+      items[matchingIndex] = mergeProviderArtwork(items[matchingIndex], item);
+      continue;
+    }
     if (
       item == null ||
-      knownFotmobItems.some((existing) => sameFootballEvent(existing, item)) ||
-      items.some((existing) => sameFootballEvent(existing, item))
+      knownFotmobItems.some((existing) => sameFootballEvent(existing, item))
     ) {
       continue;
     }
@@ -1011,6 +1037,15 @@ async function getCdnLiveTvSportEntries(nowMs) {
   if (typeof globalThis.__cdnLiveTvSportEntries !== 'function') return [];
   try {
     return await globalThis.__cdnLiveTvSportEntries(nowMs);
+  } catch (_) {
+    return [];
+  }
+}
+
+async function getTimstreamsSportEntries(nowMs) {
+  if (typeof globalThis.__timstreamsSportEntries !== 'function') return [];
+  try {
+    return await globalThis.__timstreamsSportEntries(nowMs);
   } catch (_) {
     return [];
   }
@@ -1296,11 +1331,12 @@ async function fixturesCatalog(query) {
   // and the other catalog entries are judged against the same "now".
   const nowMs = Date.now();
 
-  let [matches, popularLeagues, roxieEntries, cdnLiveTvEntries] = await Promise.all([
+  let [matches, popularLeagues, roxieEntries, cdnLiveTvEntries, timstreamsEntries] = await Promise.all([
     fetchFixturesMemo(nowMs),
     fetchPopularLeaguesMemo(),
     getRoxieSportEntries(nowMs),
     getCdnLiveTvSportEntries(nowMs),
+    getTimstreamsSportEntries(nowMs),
   ]);
   // Keep the complete FotMob feed as the identity authority for provider
   // dedupe. Finished matches remain available to schedule, but a stale
@@ -1322,6 +1358,7 @@ async function fixturesCatalog(query) {
     ...providerEntries,
     ...roxieEntries,
     ...cdnLiveTvEntries,
+    ...timstreamsEntries,
   ], nowMs);
   return buildPage(
     query,
@@ -17220,6 +17257,382 @@ globalThis.__streamProviders.push({
   providerKey: CDN_LIVE_TV_PROVIDER_KEY,
   sources: cdnLiveTvSources,
   resolve: cdnLiveTvResolve,
+});
+
+// TimStreams live-event catalog contributor and embed-to-HLS resolver.
+//
+// TimStreams exposes event metadata from one JSON endpoint and puts the
+// actual playlist behind an XOR-obfuscated embed page. Keep the event
+// catalog merged into fixtures.js so FotMob remains the identity authority
+// for football, while TimStreams can still contribute other live sports.
+
+const TIMSTREAMS_API_URL =
+  globalThis.__timstreamsApiUrl || 'https://timst.cfd/api/live-upcoming';
+const TIMSTREAMS_PROVIDER_ID = 'nimora.timstreams';
+const TIMSTREAMS_PROVIDER_KEY = 'timstreams';
+const TIMSTREAMS_ORIGIN = 'https://timst.cfd';
+const TIMSTREAMS_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36';
+const TIMSTREAMS_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const TIMSTREAMS_RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
+const TIMSTREAMS_EVENT_DURATION_MS = 3 * 60 * 60 * 1000;
+
+function timstreamsText(value) {
+  return value == null ? '' : String(value).trim();
+}
+
+function timstreamsBase64(value) {
+  return host.codec.textToBase64(JSON.stringify(value))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function timstreamsDecodeBase64(value) {
+  let encoded = timstreamsText(value).replace(/-/g, '+').replace(/_/g, '/');
+  while (encoded.length % 4) encoded += '=';
+  return JSON.parse(host.codec.base64ToText(encoded));
+}
+
+function timstreamsFetchJson() {
+  return fetch(TIMSTREAMS_API_URL, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': TIMSTREAMS_USER_AGENT,
+      Referer: `${TIMSTREAMS_ORIGIN}/`,
+    },
+  }).then((response) => {
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`TimStreams API request failed: ${response.status}`);
+    }
+    const data = JSON.parse(response.body || '');
+    if (data == null || typeof data !== 'object') {
+      throw new Error('TimStreams API response is not an object');
+    }
+    return data;
+  });
+}
+
+function timstreamsGenreMap(genres) {
+  const result = new Map();
+  if (Array.isArray(genres)) {
+    for (const genre of genres) {
+      if (genre == null || genre.id == null) continue;
+      const name = timstreamsText(genre.name || genre.title);
+      if (name) result.set(String(genre.id), name);
+    }
+  } else if (genres != null && typeof genres === 'object') {
+    for (const [id, genre] of Object.entries(genres)) {
+      const name = typeof genre === 'object'
+        ? timstreamsText(genre.name || genre.title)
+        : timstreamsText(genre);
+      if (name) result.set(id, name);
+    }
+  }
+  return result;
+}
+
+function timstreamsGenreLabel(event, genreMap) {
+  const raw = event && event.genre;
+  if (raw != null && typeof raw === 'object') {
+    const name = timstreamsText(raw.name || raw.title);
+    if (name) return name;
+  }
+  return genreMap.get(String(raw)) || timstreamsText(raw) || 'Other';
+}
+
+function timstreamsLocalDateMs(value) {
+  const text = timstreamsText(value);
+  if (!text) return null;
+  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)) {
+    const timestamp = Date.parse(text);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  }
+  const match = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/,
+  );
+  if (!match) {
+    const timestamp = Date.parse(text);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] || 0);
+  if (![year, month, day, hour, minute, second].every(Number.isFinite)) return null;
+
+  // TimStreams sends New York wall-clock time without an offset. Calculate
+  // the US DST boundary instead of inheriting the device/runtime timezone.
+  const sundayOnOrAfter = (monthIndex, date) => {
+    const first = new Date(Date.UTC(year, monthIndex, date));
+    return date + ((7 - first.getUTCDay()) % 7);
+  };
+  const dstStartDay = sundayOnOrAfter(2, 8); // second Sunday in March
+  const dstEndDay = sundayOnOrAfter(10, 1); // first Sunday in November
+  const dateKey = year * 10000 + month * 100 + day;
+  const startKey = year * 10000 + 3 * 100 + dstStartDay;
+  const endKey = year * 10000 + 11 * 100 + dstEndDay;
+  const dst = dateKey > startKey && dateKey < endKey ||
+    dateKey === startKey && hour >= 2 ||
+    dateKey === endKey && hour < 2;
+  const offsetHours = dst ? -4 : -5;
+  const localAsUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+  const timestamp = localAsUtc - offsetHours * 60 * 60 * 1000;
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function timstreamsSplitParticipants(title) {
+  const parts = timstreamsText(title).split(/\s+(?:vs?\.?|@)\s+/i);
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return [];
+  return [{name: parts[0]}, {name: parts[1]}];
+}
+
+function timstreamsStreamUrl(value) {
+  const url = timstreamsText(value);
+  return /^https?:\/\/[^\s]+$/i.test(url) ? url : null;
+}
+
+function timstreamsEventKey(event, index) {
+  const slug = timstreamsText(event && event.url);
+  return slug || `${timstreamsText(event && event.name)}:${index}`;
+}
+
+function timstreamsSourceId(event, channelIndex) {
+  return `${TIMSTREAMS_PROVIDER_KEY}:${timstreamsBase64({
+    e: timstreamsEventKey(event, 0),
+    c: channelIndex,
+  })}`;
+}
+
+function timstreamsEventStatus(startsAt, nowMs, title, sportName) {
+  if (!Number.isFinite(startsAt)) return 'scheduled';
+  const end = startsAt + (
+    typeof eventDurationMinutes === 'function'
+      ? eventDurationMinutes(sportName, title) * 60 * 1000
+      : TIMSTREAMS_EVENT_DURATION_MS
+  );
+  if (nowMs >= end) return 'ended';
+  return startsAt <= nowMs ? 'live' : 'scheduled';
+}
+
+function timstreamsRelevant(startsAt, nowMs) {
+  if (!Number.isFinite(startsAt)) return true;
+  return startsAt - nowMs <= TIMSTREAMS_UPCOMING_WINDOW_MS &&
+    nowMs - startsAt <= TIMSTREAMS_RECENT_WINDOW_MS;
+}
+
+function timstreamsCatalogEntry(event, index, genreMap, nowMs) {
+  if (event == null || typeof event !== 'object') return null;
+  const streams = Array.isArray(event.streams) ? event.streams : [];
+  const playable = streams.filter((stream) =>
+    stream != null && stream.vip !== true && timstreamsStreamUrl(stream.url) != null,
+  );
+  if (playable.length === 0) return null;
+
+  const title = timstreamsText(event.name) || `TimStreams Event ${index + 1}`;
+  const sportName = timstreamsGenreLabel(event, genreMap);
+  const startsAt = timstreamsLocalDateMs(event.time);
+  if (!timstreamsRelevant(startsAt, nowMs)) return null;
+  const state = timstreamsEventStatus(startsAt, nowMs, title, sportName);
+  const item = {
+    ref: {
+      extensionId: globalThis.__nimoraExtensionId || 'nimora',
+      providerId: 'nimora.matches',
+      id: `timstreams:${timstreamsBase64({
+        e: timstreamsEventKey(event, index),
+        t: title,
+        k: Number.isFinite(startsAt) ? new Date(startsAt).toISOString() : null,
+      })}`,
+    },
+    kind: 'event',
+    title,
+    subtitle: sportName,
+    schedule: typeof eventSchedule === 'function'
+      ? eventSchedule(startsAt == null ? nowMs : startsAt, state, sportName, title)
+      : {
+          startsAt: new Date(startsAt == null ? nowMs : startsAt).toISOString(),
+          endsAt: new Date((startsAt == null ? nowMs : startsAt) + TIMSTREAMS_EVENT_DURATION_MS).toISOString(),
+          state,
+        },
+  };
+  const participants = timstreamsSplitParticipants(title);
+  if (participants.length === 2) item.participants = participants;
+  const artwork = timstreamsStreamUrl(event.logo);
+  if (artwork != null) item.artwork = {landscape: {url: artwork}};
+  if (event.featured === true) item.rating = 8;
+  return {
+    sportId: typeof sportIdOf === 'function' ? sportIdOf(sportName) : sportName,
+    sportName,
+    live: state === 'live',
+    item,
+  };
+}
+
+async function timstreamsSportEntries(nowMs = Date.now()) {
+  try {
+    const data = await timstreamsFetchJson();
+    const genreMap = timstreamsGenreMap(data.genres);
+    return (Array.isArray(data.events) ? data.events : [])
+      .map((event, index) => timstreamsCatalogEntry(event, index, genreMap, nowMs))
+      .filter((entry) => entry != null);
+  } catch (_) {
+    return [];
+  }
+}
+
+function timstreamsEventFromSourceId(sourceId) {
+  const prefix = `${TIMSTREAMS_PROVIDER_KEY}:`;
+  if (!timstreamsText(sourceId).startsWith(prefix)) {
+    throw new Error(`Invalid TimStreams source id: ${sourceId}`);
+  }
+  const payload = timstreamsDecodeBase64(sourceId.slice(prefix.length));
+  if (payload == null || !payload.e || !Number.isInteger(payload.c) || payload.c < 0) {
+    throw new Error('Invalid TimStreams source payload');
+  }
+  return payload;
+}
+
+function timstreamsFindEvent(events, item) {
+  const itemId = timstreamsText(item && item.ref && item.ref.id);
+  if (itemId.startsWith('timstreams:')) {
+    try {
+      const payload = timstreamsDecodeBase64(itemId.slice('timstreams:'.length));
+      const direct = events.find((event, index) =>
+        timstreamsEventKey(event, index) === payload.e,
+      );
+      if (direct != null) return direct;
+    } catch (_) {}
+  }
+  const title = timstreamsText(item && item.title).toLowerCase()
+    .replace(/\s+/g, ' ').replace(/\s+vs?\.?\s+/g, ' vs ')
+    .trim();
+  if (title) {
+    const exact = events.find((event) => timstreamsText(event.name).toLowerCase()
+      .replace(/\s+/g, ' ').replace(/\s+vs?\.?\s+/g, ' vs ').trim() === title);
+    if (exact != null) return exact;
+  }
+  if (Array.isArray(item && item.participants) && item.participants.length === 2) {
+    const names = item.participants.map((participant) => timstreamsText(participant.name).toLowerCase());
+    return events.find((event) => {
+      const participants = timstreamsSplitParticipants(event.name);
+      if (participants.length !== 2) return false;
+      const eventNames = participants.map((participant) => participant.name.toLowerCase());
+      return eventNames[0] === names[0] && eventNames[1] === names[1] ||
+        eventNames[0] === names[1] && eventNames[1] === names[0];
+    });
+  }
+  return null;
+}
+
+async function timstreamsSources(args) {
+  if (args.enabledProviders != null &&
+      !args.enabledProviders.includes(TIMSTREAMS_PROVIDER_ID)) {
+    return {sources: []};
+  }
+  const item = args.item || {};
+  if (!item.ref || item.ref.providerId !== 'nimora.matches') return {sources: []};
+  try {
+    const data = await timstreamsFetchJson();
+    const events = Array.isArray(data.events) ? data.events : [];
+    const event = timstreamsFindEvent(events, item);
+    if (event == null) return {sources: []};
+    const sources = (Array.isArray(event.streams) ? event.streams : [])
+      .map((stream, index) => ({stream, index}))
+      .filter(({stream}) => stream != null && stream.vip !== true && timstreamsStreamUrl(stream.url) != null)
+      .map(({stream, index}) => ({
+        id: timstreamsSourceId(event, index),
+        label: `TimStreams · ${timstreamsText(stream.name) || `Stream ${index + 1}`}`,
+        provider: 'Nimora',
+        providerId: TIMSTREAMS_PROVIDER_ID,
+      }));
+    return {sources};
+  } catch (_) {
+    return {sources: []};
+  }
+}
+
+function timstreamsDecodeObfuscatedScript(html) {
+  const body = timstreamsText(html);
+  const arrayMatch = body.match(/var\s+[A-Za-z0-9_$]+\s*=\s*\[([\d,]+)\]/);
+  if (arrayMatch == null) return null;
+  const formulaMatch = body.match(
+    /String\.fromCharCode\(\(\([\w\[\]]+\s*\^\s*(\w+)\)\s*-\s*(\w+)\s*\+\s*256\)\s*(?:%|&)\s*(?:256|255)\)/,
+  );
+  if (formulaMatch == null) return null;
+  const xorMatch = body.match(new RegExp(`${formulaMatch[1]}\\s*=\\s*(\\d+)`));
+  const subMatch = body.match(new RegExp(`${formulaMatch[2]}\\s*=\\s*(\\d+)`));
+  if (xorMatch == null || subMatch == null) return null;
+  const xor = Number(xorMatch[1]);
+  const sub = Number(subMatch[1]);
+  return arrayMatch[1].split(',')
+    .map(Number)
+    .map((value) => String.fromCharCode(((value ^ xor) - sub + 256) & 255))
+    .join('');
+}
+
+function timstreamsExtractM3u8(html) {
+  const decoded = timstreamsDecodeObfuscatedScript(html);
+  if (!decoded) return null;
+  const match = decoded.match(/https?:\/\/[^"'<>\s]+\.m3u8(?:\?[^"'<>\s]*)?/i);
+  return match == null ? null : match[0];
+}
+
+async function timstreamsResolve(sourceId) {
+  const payload = timstreamsEventFromSourceId(sourceId);
+  const data = await timstreamsFetchJson();
+  const events = Array.isArray(data.events) ? data.events : [];
+  const event = events.find((candidate, index) =>
+    timstreamsEventKey(candidate, index) === payload.e,
+  );
+  const stream = event && Array.isArray(event.streams) ? event.streams[payload.c] : null;
+  const embedUrl = stream && stream.vip !== true ? timstreamsStreamUrl(stream.url) : null;
+  if (!embedUrl) throw new Error('TimStreams event or stream changed; refresh sources');
+
+  const response = await fetch(embedUrl, {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+      Referer: `${TIMSTREAMS_ORIGIN}/`,
+      'User-Agent': TIMSTREAMS_USER_AGENT,
+    },
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`TimStreams embed request failed: ${response.status}`);
+  }
+  const url = timstreamsExtractM3u8(response.body);
+  if (!url) throw new Error('TimStreams embed has no HLS playlist');
+
+  const playlist = await fetch(url, {
+    headers: {
+      Accept: 'application/vnd.apple.mpegurl,application/x-mpegURL,*/*',
+      Referer: embedUrl,
+      'User-Agent': TIMSTREAMS_USER_AGENT,
+    },
+  });
+  if (playlist.status < 200 || playlist.status >= 300 ||
+      !timstreamsText(playlist.body).startsWith('#EXTM3U')) {
+    throw new Error('TimStreams returned an invalid HLS playlist');
+  }
+  return {
+    url,
+    headers: {
+      Referer: embedUrl,
+      'User-Agent': TIMSTREAMS_USER_AGENT,
+    },
+    format: 'hls',
+    label: `TimStreams · ${timstreamsText(stream.name) || 'HLS'}`,
+  };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__timstreamsSportEntries = timstreamsSportEntries;
+globalThis.__streamProviders.push({
+  providerKey: TIMSTREAMS_PROVIDER_KEY,
+  sources: timstreamsSources,
+  resolve: timstreamsResolve,
 });
 
 // League channel catalog.

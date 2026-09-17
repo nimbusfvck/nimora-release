@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.93",
+  "version": "1.0.94",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -43,6 +43,13 @@
     {
       "id": "nimora.timesoccer",
       "name": "Time Soccer TV",
+      "roles": [
+        "stream"
+      ]
+    },
+    {
+      "id": "nimora.timstreams",
+      "name": "TimStreams",
       "roles": [
         "stream"
       ]

@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.81",
+      "version": "1.0.82",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added TimStreams live-event sources and reused its event artwork in the existing sports catalog while preserving FotMob as football metadata authority.",
         "Restored Football Highlights on Home and the All category by wiring the Time Soccer catalog bridge.",
         "Restored Febbox fixed-quality variants so 720p and 360p remain available alongside the adaptive HLS source.",
         "Grouped Febbox quality links into one Auto source with fixed resolutions as playback variants, while keeping master HLS adaptive.",
@@ -98,7 +99,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "e9358a9fd415ca2f7ab8bf0dd1b99380fc1dd7667206e0201ccc4044ec0ba5f4"
+      "bundleSha256": "89b412c5253c5747c79346a02bd1da4f9780fd63a10bc7c50430e9289cf399cb"
     }
   ]
 }
