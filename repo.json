@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.95",
+      "version": "1.0.96",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Febbox quality switching so 1080p remains available after selecting 720p or 360p, and deduplicated cached source labels during refresh.",
         "Restored Febbox 360p and 720p variants when quality playlists are individually returned as HLS masters, and simplified the source label to the provider name.",
         "Added TimStreams live-event sources and reused its event artwork in the existing sports catalog while preserving FotMob as football metadata authority.",
         "Restored Football Highlights on Home and the All category by wiring the Time Soccer catalog bridge.",
@@ -240,7 +241,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "c3a5ad3817b60b77924d09c024081445ce67c23d45134db629992a5533c917ab"
+      "bundleSha256": "9f39af2240b03fc5f48257baf604ef23c35df1dedfee52e865efbb6b3203101e"
     }
   ]
 }

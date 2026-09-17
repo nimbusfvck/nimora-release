@@ -4610,18 +4610,25 @@ async function showboxResolveSource(sourceId) {
   const masterPlaylist = await showboxMasterPlaylist(selectedEntries);
   if (masterPlaylist != null) {
     const master = masterPlaylist.entry;
-    // Keep the adaptive master as the source URL, but don't discard Febbox's
-    // separate fixed-quality playlists. Those remain explicit choices in the
-    // app quality picker (not separate source rows).
+    // Keep the adaptive master as the source URL, but don't discard the
+    // quality-list entry that produced it or Febbox's separate fixed-quality
+    // playlists. All quality choices belong in one source's picker. This is
+    // important when the master itself is the 1080p entry: after switching to
+    // a fixed 360p/720p URL, the native player no longer reports 1080p.
     // A quality-list entry can itself return an HLS playlist. Do not discard
     // those explicit 1080p/720p/360p choices just because the playlist probe
     // classified them as masters too; the 1.0.88 behavior exposed them as
     // selectable variants, and the quality label is the provider's choice.
-    const fixedQualityEntries = selectedEntries.filter((entry) =>
-      entry.url !== master.url &&
-      showboxVariantHeight(entry) != null,
-    );
-    const variants = showboxStreamVariants(fixedQualityEntries, headers);
+    const variantEntries = selectedEntries.length > 1
+      ? [
+          ...(showboxVariantHeight(master) == null ? [] : [master]),
+          ...selectedEntries.filter((entry) =>
+            entry.url !== master.url &&
+            showboxVariantHeight(entry) != null,
+          ),
+        ]
+      : [];
+    const variants = showboxStreamVariants(variantEntries, headers);
     return {
       url: master.url,
       format: 'hls',
