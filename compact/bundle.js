@@ -3278,11 +3278,10 @@ async function showboxListSources(args) {
     sourcePayload.e = parsed.episode;
   }
   const id = showboxSourceId(sourcePayload);
-  const suffix = entry.size ? ' · ' + entry.size : '';
   return {
     sources: [{
       id,
-      label: 'Febbox' + (hasCookie ? ' ⚡' : '') + ' · Auto' + suffix,
+      label: 'Febbox' + (hasCookie ? ' ⚡' : ''),
       provider: 'Nimora',
       providerId: SHOWBOX_PROVIDER_ID,
     }],
@@ -3340,7 +3339,11 @@ async function showboxResolveSource(sourceId) {
     // Keep the adaptive master as the source URL, but don't discard Febbox's
     // separate fixed-quality playlists. Those remain explicit choices in the
     // app quality picker (not separate source rows).
-    const fixedQualityEntries = masterPlaylist.otherEntries.filter((entry) =>
+    // A quality-list entry can itself return an HLS playlist. Do not discard
+    // those explicit 1080p/720p/360p choices just because the playlist probe
+    // classified them as masters too; the 1.0.88 behavior exposed them as
+    // selectable variants, and the quality label is the provider's choice.
+    const fixedQualityEntries = selectedEntries.filter((entry) =>
       entry.url !== master.url &&
       showboxVariantHeight(entry) != null,
     );
