@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.86",
+      "version": "1.0.87",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Improved Indonesian Movies and Korean movie/series rows by removing the 180-day cutoff, and increased TMDB poster artwork to w780 for sharper mobile heroes.",
         "Fixed Football Highlights pagination so the All-category shelf collects enough playable posts for See more.",
         "Added TMDB list metadata for overview, original titles and languages, genres, countries, and rating vote counts.",
         "Fixed Febbox quality switching so 1080p remains available after selecting 720p or 360p, and deduplicated cached source labels during refresh.",
@@ -103,7 +104,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "42f599713f3ae7b79d9418b225289518df4e5badea17ada52c6570c5614f5c78"
+      "bundleSha256": "604bef494f7a9fe40c60662d7e7ed0aa046d9a82b5c2f83d0f5ad55a3d93c2e4"
     }
   ]
 }

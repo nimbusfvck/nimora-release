@@ -5934,7 +5934,7 @@ function tmdbToMediaItem(result, mediaType) {
   const imdbId = tmdbImdbIdOf(result);
   if (imdbId != null) mediaItem.imdbId = imdbId;
   const artwork = {};
-  if (result.poster_path) artwork.portrait = { url: `${TMDB_IMAGE_BASE}/w500${result.poster_path}` };
+  if (result.poster_path) artwork.portrait = { url: `${TMDB_IMAGE_BASE}/w780${result.poster_path}` };
   if (result.backdrop_path) artwork.landscape = { url: `${TMDB_IMAGE_BASE}/w1280${result.backdrop_path}` };
   const titleLogo = tmdbTitleLogo(result.images);
   if (titleLogo) artwork.logo = { url: `${TMDB_IMAGE_BASE}/w300${titleLogo.file_path}` };
@@ -6322,16 +6322,10 @@ async function fetchCountryCategoryPage(country, mediaType, page) {
 async function fetchRecentCountryPage(country, mediaType, page) {
   const requestedPage = tmdbRequestedPage(page);
   const todayDate = new Date();
-  const oldestDate = new Date(todayDate);
-  oldestDate.setUTCDate(oldestDate.getUTCDate() - 180);
   const today = todayDate.toISOString().slice(0, 10);
-  const oldest = oldestDate.toISOString().slice(0, 10);
   const dateParam = mediaType === 'movie'
     ? 'primary_release_date.lte'
     : 'first_air_date.lte';
-  const oldestDateParam = mediaType === 'movie'
-    ? 'primary_release_date.gte'
-    : 'first_air_date.gte';
   const releaseParams = mediaType === 'movie'
     ? {
         region: country.originCountry,
@@ -6355,7 +6349,6 @@ async function fetchRecentCountryPage(country, mediaType, page) {
     ...releaseParams,
     ...ratingParams,
     ...voteCountParams,
-    [oldestDateParam]: oldest,
     [dateParam]: today,
   }, requestedPage);
   const discover = await discoverRequest;
