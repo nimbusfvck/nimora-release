@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.97",
+      "version": "1.0.98",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed Football Highlights pagination so the All-category shelf collects enough playable posts for See more.",
         "Added TMDB list metadata for overview, original titles and languages, genres, countries, and rating vote counts.",
         "Fixed Febbox quality switching so 1080p remains available after selecting 720p or 360p, and deduplicated cached source labels during refresh.",
         "Restored Febbox 360p and 720p variants when quality playlists are individually returned as HLS masters, and simplified the source label to the provider name.",
@@ -242,7 +243,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "7e9c1c9621b9aa019a18492cce695972bf6d5155b1b16c7b6d2799cdd8586054"
+      "bundleSha256": "437a1c4df3198d3d5c0758f94ffee9c88efb12b0e531842dd518d3d5622a0a0a"
     }
   ]
 }

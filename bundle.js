@@ -7553,8 +7553,6 @@ const TMDB_WATCH_REGION = globalThis.__tmdbWatchRegion || 'US';
 // Popular Today follows TMDB's paid streaming tab. Rent and purchase offers
 // are separate categories on TMDB and are intentionally not included here.
 const TMDB_STREAMING_TYPES = 'flatrate';
-const TMDB_LEAKS_BASE = globalThis.__flystreamBaseUrl || 'https://flystream.net';
-const TMDB_LEAKS_TTL_MS = 15 * 60 * 1000;
 const SHEGU_TRAILER_TIMEOUT_MS = 1500;
 const OMDB_BASE = globalThis.__omdbBaseUrl || TMDB_BASE.replace(/\/3\/?$/, '/omdb/title');
 const OMDB_TTL_MS = 24 * 60 * 60 * 1000;
@@ -7566,11 +7564,8 @@ const OMDB_ICON_URLS = {
   metacritic: 'https://cdn.simpleicons.org/metacritic/000000',
 };
 
-let tmdbLeaksMemo = null;
 const tmdbImagesMemo = new Map();
 const TMDB_TITLE_LOGO_CONCURRENCY = 4;
-const TMDB_TRENDING_RANKS_TTL_MS = 15 * 60 * 1000;
-const tmdbTrendingRanksMemo = new Map();
 const TMDB_ANIME_ARTWORK_TTL_MS = 24 * 60 * 60 * 1000;
 // Season endpoints return every episode, including stills. Keep long-running
 // anime detail pages responsive; AniList still supplies the complete guide
@@ -7760,137 +7755,6 @@ async function omdbGetJson(imdbId) {
 }
 
 globalThis.__omdbGetJson = omdbGetJson;
-
-// FlyStream's leak feed is metadata enrichment, not a playback source. Keep
-// the fetch behind the existing FlyStream cookie/gate when the bundle has
-// loaded flystream.js, and keep a direct fallback for isolated unit tests.
-async function tmdbFetchLeaks() {
-  const url = `${TMDB_LEAKS_BASE}/api/leaks`;
-  if (typeof flystreamRequestJson === 'function') {
-    return flystreamRequestJson(url);
-  }
-  try {
-    const response = await fetch(url, {
-      headers: { Accept: 'application/json' },
-    });
-    if (response.status < 200 || response.status >= 300) return null;
-    return JSON.parse(response.body);
-  } catch (_) {
-    return null;
-  }
-}
-
-const TMDB_MONTHS = [
-  'January',
-  'February',
-  'March',
-  'April',
-  'May',
-  'June',
-  'July',
-  'August',
-  'September',
-  'October',
-  'November',
-  'December',
-];
-
-function tmdbDigitalDateFromBody(body, year) {
-  if (typeof body !== 'string' || !Number.isInteger(year)) return null;
-  const match = /\bon\s+digital\s+([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?\b/i.exec(body);
-  if (match == null) return null;
-  const month = TMDB_MONTHS.findIndex(
-    (value) => value.toLowerCase() === match[1].toLowerCase(),
-  );
-  const day = Number(match[2]);
-  if (month < 0 || day < 1 || day > 31) return null;
-  const date = new Date(Date.UTC(year, month, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month ||
-    date.getUTCDate() !== day
-  ) {
-    return null;
-  }
-  return {
-    iso: `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
-    display: `${TMDB_MONTHS[month]} ${day}, ${year}`,
-  };
-}
-
-function tmdbLeakKey(mediaType, tmdbId) {
-  return `${mediaType}:${tmdbId}`;
-}
-
-function tmdbLeakIndexFromResponse(data) {
-  if (data == null || !Array.isArray(data.items)) return null;
-  const index = new Map();
-  for (const entry of data.items) {
-    if (entry == null || typeof entry !== 'object') continue;
-    const mediaType = entry.mediaType === 'movie' || entry.mediaType === 'tv'
-      ? entry.mediaType
-      : null;
-    const tmdbId = Number(entry.tmdbId);
-    if (mediaType == null || !Number.isInteger(tmdbId) || tmdbId < 1) continue;
-    const key = tmdbLeakKey(mediaType, tmdbId);
-    const status = index.get(key) || {
-      onDigital: false,
-      leak: false,
-      digitalDate: null,
-    };
-    const kind = typeof entry.kind === 'string' ? entry.kind.toLowerCase() : '';
-    if (kind === 'digital') status.onDigital = true;
-    if (kind === 'leak') status.leak = true;
-    if (kind === 'upcoming') {
-      const year = Number(entry.year);
-      const date = tmdbDigitalDateFromBody(entry.body, year);
-      if (
-        date != null &&
-        (status.digitalDate == null || date.iso < status.digitalDate.iso)
-      ) {
-        status.digitalDate = date;
-      }
-    }
-    index.set(key, status);
-  }
-  return index;
-}
-
-function tmdbLeakIndex() {
-  const now = Date.now();
-  if (
-    tmdbLeaksMemo != null &&
-    now - tmdbLeaksMemo.fetchedAt < TMDB_LEAKS_TTL_MS
-  ) {
-    return tmdbLeaksMemo.promise;
-  }
-  const promise = tmdbFetchLeaks()
-    .then(tmdbLeakIndexFromResponse)
-    .catch(() => null);
-  tmdbLeaksMemo = { fetchedAt: now, promise };
-  return promise;
-}
-
-async function tmdbLeakMetadata(tmdbId, mediaType) {
-  const index = await tmdbLeakIndex();
-  return index == null ? null : index.get(tmdbLeakKey(mediaType, tmdbId)) || null;
-}
-
-function tmdbApplyLeakMetadata(detail, metadata) {
-  if (metadata == null) return detail;
-  const tags = Array.isArray(detail.tags) ? detail.tags.slice() : [];
-  if (metadata.onDigital && !tags.includes('On Digital')) tags.push('On Digital');
-  if (metadata.leak && !tags.includes('Leak')) tags.push('Leak');
-  if (tags.length > 0) detail.tags = tags;
-  if (metadata.digitalDate != null) {
-    const facts = Array.isArray(detail.facts) ? detail.facts.slice() : [];
-    if (!facts.some((fact) => fact && fact.label === 'Digital release')) {
-      facts.push({ label: 'Digital release', value: metadata.digitalDate.display });
-    }
-    detail.facts = facts;
-  }
-  return detail;
-}
 
 async function sheguGetJson(slug, limit) {
   const url = `${SHEGU_LISTS_BASE}/${slug}?limit=${limit}`;
@@ -8303,30 +8167,6 @@ async function fetchTrending(mediaType) {
   return enrichTrendingBackdrops(results, items, mediaType);
 }
 
-function fetchTrendingRanks(mediaType) {
-  const now = Date.now();
-  const existing = tmdbTrendingRanksMemo.get(mediaType);
-  if (existing != null &&
-      now - existing.fetchedAt < TMDB_TRENDING_RANKS_TTL_MS) {
-    return existing.promise;
-  }
-  const request = tmdbGetJson(`/trending/${mediaType}/day`, { include_adult: 'false' })
-    .then((data) => {
-      const results = Array.isArray(data.results) ? data.results : [];
-      const ranks = new Map();
-      results.forEach((result, index) => {
-        const rating = result && result.vote_average;
-        if (result == null || result.id == null ||
-            typeof rating !== 'number' || rating <= 0) return;
-        ranks.set(`${mediaType === 'movie' ? 'movie' : 'series'}:${result.id}`, index);
-      });
-      return ranks;
-    })
-    .catch(() => new Map());
-  tmdbTrendingRanksMemo.set(mediaType, { fetchedAt: now, promise: request });
-  return request;
-}
-
 // A future-dated result isn't guaranteed to actually be one — TMDB's flat
 // `release_date`/`first_air_date` field can carry a stale, long-past date
 // (region rerelease quirks and the like) even when a feed calls the title
@@ -8476,14 +8316,14 @@ const CATEGORY_COUNTRY_SHELVES = {
       name: 'Indonesian Movies',
       originCountry: 'ID',
       originalLanguage: 'id',
-      indomaxCountry: 'indonesia',
+      minVoteCount: 5,
     },
     {
       id: 'korean_movie',
       name: 'Korean Movies',
       originCountry: 'KR',
       originalLanguage: 'ko',
-      sortByRatingPopularity: true,
+      minVoteCount: 5,
     },
   ],
   tv: [
@@ -8492,26 +8332,12 @@ const CATEGORY_COUNTRY_SHELVES = {
       name: 'Korean Series',
       originCountry: 'KR',
       originalLanguage: 'ko',
-      sortByRatingPopularity: true,
-      minVoteCount: 10,
+      minVoteCount: 5,
     },
   ],
 };
 
 async function fetchCountryCategoryPage(country, mediaType, page) {
-  if (mediaType === 'movie' && country.indomaxCountry != null &&
-      typeof globalThis.__indomaxCountryMoviePage === 'function') {
-    try {
-      const indomaxPage = await globalThis.__indomaxCountryMoviePage(
-        country.indomaxCountry,
-        page,
-      );
-      if (indomaxPage != null && Array.isArray(indomaxPage.items) &&
-          indomaxPage.items.length > 0) {
-        return indomaxPage;
-      }
-    } catch (_) {}
-  }
   const discover = await fetchRecentCountryPage(country, mediaType, page);
   return {
     items: discover.items,
@@ -8560,34 +8386,9 @@ async function fetchRecentCountryPage(country, mediaType, page) {
     [oldestDateParam]: oldest,
     [dateParam]: today,
   }, requestedPage);
-  const trendingRanksRequest = !country.sortByRatingPopularity &&
-      (mediaType === 'movie' || mediaType === 'tv')
-    ? fetchTrendingRanks(mediaType)
-    : Promise.resolve(null);
-  const [discover, trendingRanks] = await Promise.all([
-    discoverRequest,
-    trendingRanksRequest,
-  ]);
-  // Korean country rows are intentionally independent of the daily trending
-  // feed: rating is the primary order, with popularity breaking equal ratings.
-  const items = country.sortByRatingPopularity
-    ? discover.entries
-        .slice()
-        .sort((a, b) => {
-          const aRating = typeof a.item.rating === 'number' ? a.item.rating : 0;
-          const bRating = typeof b.item.rating === 'number' ? b.item.rating : 0;
-          return bRating - aRating || b.popularity - a.popularity || a.index - b.index;
-        })
-        .map((entry) => entry.item)
-    : trendingRanks == null
-      ? discover.items
-      : discover.items.slice().sort((a, b) => {
-          const aRank = trendingRanks.get(a.ref.id) ?? Number.MAX_SAFE_INTEGER;
-          const bRank = trendingRanks.get(b.ref.id) ?? Number.MAX_SAFE_INTEGER;
-          return aRank - bRank;
-        });
+  const discover = await discoverRequest;
   return {
-    items,
+    items: discover.items,
     page: discover.page,
     totalPages: discover.totalPages,
   };
@@ -9902,15 +9703,13 @@ async function tmdbMovieMeta(tmdbId) {
   if (credits.length > 0) detail.credits = credits;
   const trailers = tmdbTrailers(data);
   const collectionId = data.belongs_to_collection && data.belongs_to_collection.id;
-  const [leakMetadata, previewResponse, recommendations, collection, omdb] = await Promise.all([
-    tmdbLeakMetadata(tmdbId, 'movie'),
+  const [previewResponse, recommendations, collection, omdb] = await Promise.all([
     sheguVideoTrailer(tmdbId, 'movie'),
     tmdbRecommendationsOf(tmdbId, 'movie'),
     tmdbCollectionOf(collectionId),
     omdbGetJson(tmdbImdbIdOf(data)),
   ]);
   tmdbApplyOmdbMetadata(detail, omdb);
-  tmdbApplyLeakMetadata(detail, leakMetadata);
   const preview = sheguPreviewWithThumbnail(previewResponse, trailers);
   if (preview != null) trailers.unshift(preview);
   if (trailers.length > 0) detail.trailers = trailers;
@@ -9934,14 +9733,12 @@ async function tmdbTvMeta(tmdbId) {
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;
   const trailers = tmdbTrailers(data);
-  const [leakMetadata, previewResponse, recommendations, omdb] = await Promise.all([
-    tmdbLeakMetadata(tmdbId, 'tv'),
+  const [previewResponse, recommendations, omdb] = await Promise.all([
     sheguVideoTrailer(tmdbId, 'tv'),
     tmdbRecommendationsOf(tmdbId, 'tv'),
     omdbGetJson(tmdbImdbIdOf(data)),
   ]);
   tmdbApplyOmdbMetadata(detail, omdb);
-  tmdbApplyLeakMetadata(detail, leakMetadata);
   const preview = sheguPreviewWithThumbnail(previewResponse, trailers);
   if (preview != null) trailers.unshift(preview);
   if (trailers.length > 0) detail.trailers = trailers;
@@ -12974,12 +12771,6 @@ function indomaxCategoryUrl(base, categoryId, page) {
   return page > 1 ? `${base}${path}page/${page}/` : `${base}${path}`;
 }
 
-function indomaxCountryUrl(base, countrySlug, page) {
-  const slug = String(countrySlug || '').replace(/^\/+|\/+$/g, '');
-  const path = `/country/${slug}/`;
-  return page > 1 ? `${base}${path}page/${page}/` : `${base}${path}`;
-}
-
 function indomaxHasNextPage(html) {
   return /<a\b[^>]*\bclass\s*=\s*["'][^"']*\bnext\b[^"']*["'][^>]*>/i.test(html || '');
 }
@@ -13000,44 +12791,6 @@ function indomaxCatalogItem(result, categoryId) {
   if (result.poster) item.artwork = { portrait: { url: result.poster } };
   if (Number.isFinite(result.rating)) item.rating = result.rating;
   return item;
-}
-
-function indomaxCountryMovieItem(result) {
-  const item = indomaxCatalogItem(result, 'indonesian_movie');
-  const yearMatch = /^(.*?)(?:\s*\((\d{4})\))?$/.exec(item.title);
-  const title = yearMatch == null ? item.title : yearMatch[1].trim();
-  const year = yearMatch == null || yearMatch[2] == null
-    ? null
-    : Number(yearMatch[2]);
-  item.title = title || item.title;
-  if (Number.isInteger(year) && year > 0) item.releaseYear = year;
-  return item;
-}
-
-async function indomaxCountryMoviePage(countrySlug, page) {
-  const base = await indomaxActiveBase();
-  const requestedPage = Number(page);
-  const currentPage = Number.isInteger(requestedPage) && requestedPage > 0
-    ? requestedPage
-    : 1;
-  const candidates = [
-    base,
-    ...INDOMAX_CATALOG_FALLBACK_BASES.filter((candidate) => candidate !== base),
-  ];
-  for (const candidate of candidates) {
-    const url = indomaxCountryUrl(candidate, countrySlug, currentPage);
-    const response = await indomaxGet(url, `${candidate}/`);
-    if (response == null) continue;
-    const results = indomaxSearchResults(response.body, candidate)
-      .filter((result) => !/\/tv\//i.test(result.url))
-      .filter((result) => Number.isFinite(result.rating) && result.rating > 0)
-      .map(indomaxCountryMovieItem);
-    if (results.length === 0) continue;
-    const result = { items: results };
-    if (indomaxHasNextPage(response.body)) result.nextPage = String(currentPage + 1);
-    return result;
-  }
-  return null;
 }
 
 async function indomaxCategoryCatalog(query, categoryId, title, subCategories) {
@@ -13830,8 +13583,6 @@ globalThis.__catalogProviders.push({
   catalogId: INDOMAX_NSFW_CATALOG_ID,
   catalog: indomaxNsfwCatalog,
 });
-
-globalThis.__indomaxCountryMoviePage = indomaxCountryMoviePage;
 
 globalThis.__extension = globalThis.__extension || {};
 const indomaxPreviousSearch = globalThis.__extension.search;
@@ -18893,6 +18644,70 @@ function timesoccerHasNextPage(response, page, rawPosts) {
   return Array.isArray(rawPosts) && rawPosts.length >= TIMESOCCER_PAGE_SIZE;
 }
 
+function timesoccerPostsUrl(page) {
+  return timesoccerWithQuery(
+    `${TIMESOCCER_BASE}/wp-json/wp/v2/posts`,
+    {
+      categories: String(TIMESOCCER_VIDEO_CATEGORY),
+      per_page: String(TIMESOCCER_PAGE_SIZE),
+      page: String(page),
+      orderby: 'date',
+      order: 'desc',
+      _embed: '1',
+      _fields: 'id,date,modified,slug,link,title,content,featured_media,_embedded,_links',
+    },
+  );
+}
+
+async function timesoccerFetchPostsPage(page) {
+  const response = await timesoccerFetchJson(timesoccerPostsUrl(page));
+  return {posts: response.data, response};
+}
+
+// The mixed Home highlights shelf has a stricter playable-item filter than
+// the WordPress collection: many recent posts use embeds we cannot resolve.
+// Fill a catalog page from consecutive WP pages so the Home row does not
+// look short and hide its See more action just because the first raw page
+// contained non-Videa posts.
+async function timesoccerHighlightCatalogPage(requestedPage) {
+  const requested = requestedPage == null ? 1 : Number(requestedPage);
+  let page = Number.isFinite(requested) && requested > 0
+    ? Math.floor(requested)
+    : 1;
+  const items = [];
+  const seen = new Set();
+  let hasNext = false;
+
+  while (items.length < TIMESOCCER_PAGE_SIZE) {
+    let result;
+    try {
+      result = await timesoccerFetchPostsPage(page);
+    } catch (_) {
+      break;
+    }
+    const rawPosts = result.posts;
+    for (const item of timesoccerPostsToItems(rawPosts)) {
+      if (seen.has(item.ref.id)) continue;
+      seen.add(item.ref.id);
+      items.push(item);
+    }
+
+    const totalPages = Number(
+      timesoccerResponseHeader(result.response, 'x-wp-totalpages'),
+    );
+    hasNext = Number.isInteger(totalPages) && totalPages > 0
+      ? page < totalPages
+      : Array.isArray(rawPosts) && rawPosts.length >= TIMESOCCER_PAGE_SIZE;
+    if (!hasNext) break;
+    page += 1;
+  }
+
+  return {
+    items,
+    ...(hasNext ? {nextPage: String(page + 1)} : {}),
+  };
+}
+
 async function timesoccerCatalog(query) {
   if (
     query.category !== 'all' &&
@@ -18905,24 +18720,12 @@ async function timesoccerCatalog(query) {
   const page = Number.isFinite(requestedPage) && requestedPage > 0
     ? Math.floor(requestedPage)
     : 1;
-  const url = timesoccerWithQuery(
-    `${TIMESOCCER_BASE}/wp-json/wp/v2/posts`,
-    {
-      categories: String(TIMESOCCER_VIDEO_CATEGORY),
-      per_page: String(TIMESOCCER_PAGE_SIZE),
-      page: String(page),
-      orderby: 'date',
-      order: 'desc',
-      _embed: '1',
-      _fields: 'id,date,modified,slug,link,title,content,featured_media,_embedded,_links',
-    },
-  );
-
   let posts;
   let response;
   try {
-    response = await timesoccerFetchJson(url);
-    posts = response.data;
+    const result = await timesoccerFetchPostsPage(page);
+    posts = result.posts;
+    response = result.response;
   } catch (_) {
     return { sections: [] };
   }
@@ -18938,16 +18741,10 @@ async function timesoccerCatalog(query) {
   return result;
 }
 
-// The mixed TMDB highlights catalog reuses this page loader so the same
-// Time Soccer posts can appear on Home and in the All category. Keep the
-// standalone catalog above as the source of truth for pagination and mapping.
+// The mixed TMDB highlights catalog uses the filled page loader so the same
+// playable Time Soccer posts can appear on Home and in the All category.
 globalThis.__timesoccerHighlightPage = async (page) => {
-  const result = await timesoccerCatalog({category: 'all', page});
-  const section = result.sections[0];
-  return {
-    items: section == null ? [] : section.items,
-    ...(result.nextPage == null ? {} : {nextPage: result.nextPage}),
-  };
+  return timesoccerHighlightCatalogPage(page);
 };
 
 async function timesoccerSources(args) {
