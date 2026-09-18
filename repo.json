@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.99",
+      "version": "1.0.100",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added a minimum TMDB rating of 6 to the Korean Series row so low-rated or unrated titles are excluded.",
         "Improved Indonesian Movies and Korean movie/series rows by removing the 180-day cutoff, and increased TMDB poster artwork to w780 for sharper mobile heroes.",
         "Fixed Football Highlights pagination so the All-category shelf collects enough playable posts for See more.",
         "Added TMDB list metadata for overview, original titles and languages, genres, countries, and rating vote counts.",
@@ -244,7 +245,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "a124b156bbbcf9520cb173843e0a13cda6a6e9196c689b8802e529a1045a9956"
+      "bundleSha256": "83b2aa93a17bd63bfe3d0f065e06a0a6a4f345db0d98f25ce295eda5f7633804"
     }
   ]
 }

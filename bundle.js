@@ -8333,6 +8333,7 @@ const CATEGORY_COUNTRY_SHELVES = {
       originCountry: 'KR',
       originalLanguage: 'ko',
       minVoteCount: 5,
+      minVoteAverage: 6,
     },
   ],
 };
@@ -8364,7 +8365,9 @@ async function fetchRecentCountryPage(country, mediaType, page) {
         'vote_average.gte': 0.1,
       }
     : {};
-  const ratingParams = { 'vote_average.gte': 0.1 };
+  const ratingParams = {
+    'vote_average.gte': country.minVoteAverage ?? 0.1,
+  };
   const voteCountParams = country.minVoteCount == null
     ? {}
     : { 'vote_count.gte': country.minVoteCount };
