@@ -7556,6 +7556,15 @@ const TMDB_STREAMING_TYPES = 'flatrate';
 const TMDB_LEAKS_BASE = globalThis.__flystreamBaseUrl || 'https://flystream.net';
 const TMDB_LEAKS_TTL_MS = 15 * 60 * 1000;
 const SHEGU_TRAILER_TIMEOUT_MS = 1500;
+const OMDB_BASE = globalThis.__omdbBaseUrl || TMDB_BASE.replace(/\/3\/?$/, '/omdb/title');
+const OMDB_TTL_MS = 24 * 60 * 60 * 1000;
+const OMDB_KEY_RATE_LIMIT_COOLDOWN_MS = 60 * 1000;
+const OMDB_KEY_FAILURE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const OMDB_ICON_URLS = {
+  imdb: 'https://cdn.simpleicons.org/imdb/F5C518',
+  rottenTomatoes: 'https://cdn.simpleicons.org/rottentomatoes/FA320A',
+  metacritic: 'https://cdn.simpleicons.org/metacritic/000000',
+};
 
 let tmdbLeaksMemo = null;
 const tmdbImagesMemo = new Map();
@@ -7574,6 +7583,10 @@ const TMDB_KEY_RATE_LIMIT_COOLDOWN_MS = 60 * 1000;
 const tmdbKeyCooldownUntil = new Map();
 const tmdbInFlightKeys = new Set();
 let tmdbActiveKeyIndex = 0;
+const omdbMemo = new Map();
+const omdbKeyCooldownUntil = new Map();
+const omdbInFlightKeys = new Set();
+let omdbActiveKeyIndex = 0;
 
 // --- fetch helpers ---
 
@@ -7657,6 +7670,96 @@ async function tmdbGetJson(path, query, options) {
 // metadata. Keeping key selection here prevents one stale key from making
 // only the anime artwork or subtitle path fail while the main catalog works.
 globalThis.__tmdbGetJson = tmdbGetJson;
+
+function omdbApiKeys() {
+  const configured = globalThis.__omdbApiKeys;
+  if (Array.isArray(configured)) {
+    const keys = [...new Set(configured.map(String).map((key) => key.trim()).filter(Boolean))];
+    if (keys.length > 0) return keys;
+  }
+  const single = globalThis.__omdbApiKey;
+  if (typeof single === 'string' && single.trim()) return [single.trim()];
+  // The default OMDb base is the Nimora proxy, which owns the secret and
+  // accepts a request without a client-side API key.
+  return [null];
+}
+
+function omdbKeyCandidate(keys) {
+  const now = Date.now();
+  for (let offset = 0; offset < keys.length; offset++) {
+    const index = (omdbActiveKeyIndex + offset) % keys.length;
+    const key = keys[index];
+    if ((omdbKeyCooldownUntil.get(key) || 0) <= now && !omdbInFlightKeys.has(key)) {
+      return index;
+    }
+  }
+  return omdbActiveKeyIndex % keys.length;
+}
+
+function omdbUrl(imdbId, apiKey) {
+  const params = [
+    `i=${encodeURIComponent(imdbId)}`,
+    'r=json',
+  ];
+  if (apiKey != null) params.unshift(`apikey=${encodeURIComponent(apiKey)}`);
+  return `${OMDB_BASE}?${params.join('&')}`;
+}
+
+async function omdbGetJson(imdbId) {
+  if (typeof imdbId !== 'string' || !/^tt\d+$/.test(imdbId)) return null;
+  const keys = omdbApiKeys();
+  if (keys.length === 0) return null;
+  const existing = omdbMemo.get(imdbId);
+  if (existing && Date.now() - existing.fetchedAt < OMDB_TTL_MS) return existing.promise;
+
+  const entry = { fetchedAt: Date.now(), promise: null };
+  entry.promise = (async () => {
+    let lastError = null;
+    for (let attempt = 0; attempt < keys.length; attempt++) {
+      const index = omdbKeyCandidate(keys);
+      const apiKey = keys[index];
+      omdbInFlightKeys.add(apiKey);
+      let response;
+      try {
+        response = await fetch(omdbUrl(imdbId, apiKey), {
+          headers: { Accept: 'application/json' },
+          timeoutMs: 4000,
+        });
+      } catch (error) {
+        lastError = error;
+        omdbKeyCooldownUntil.set(apiKey, Date.now() + OMDB_KEY_FAILURE_COOLDOWN_MS);
+        omdbActiveKeyIndex = (index + 1) % keys.length;
+        omdbInFlightKeys.delete(apiKey);
+        continue;
+      }
+      omdbInFlightKeys.delete(apiKey);
+      let body = null;
+      try {
+        body = JSON.parse(response.body);
+      } catch (_) {
+        body = null;
+      }
+      if (response.status >= 200 && response.status < 300 && body && body.Response !== 'False') {
+        omdbActiveKeyIndex = index;
+        return body;
+      }
+      const errorText = body && typeof body.Error === 'string' ? body.Error : '';
+      const rateLimited = response.status === 429 || /limit|too many/i.test(errorText);
+      omdbKeyCooldownUntil.set(
+        apiKey,
+        Date.now() + (rateLimited ? OMDB_KEY_RATE_LIMIT_COOLDOWN_MS : OMDB_KEY_FAILURE_COOLDOWN_MS),
+      );
+      omdbActiveKeyIndex = (index + 1) % keys.length;
+      lastError = new Error(errorText || `Request failed: ${response.status}`);
+    }
+    if (lastError != null) throw lastError;
+    return null;
+  })().catch(() => null);
+  omdbMemo.set(imdbId, entry);
+  return entry.promise;
+}
+
+globalThis.__omdbGetJson = omdbGetJson;
 
 // FlyStream's leak feed is metadata enrichment, not a playback source. Keep
 // the fetch behind the existing FlyStream cookie/gate when the bundle has
@@ -7867,6 +7970,81 @@ function parseTmdbRef(refId) {
 
 // --- mapping ---
 
+const TMDB_MOVIE_GENRES = {
+  28: 'Action',
+  12: 'Adventure',
+  16: 'Animation',
+  35: 'Comedy',
+  80: 'Crime',
+  99: 'Documentary',
+  18: 'Drama',
+  10751: 'Family',
+  14: 'Fantasy',
+  36: 'History',
+  27: 'Horror',
+  10402: 'Music',
+  9648: 'Mystery',
+  10749: 'Romance',
+  878: 'Science Fiction',
+  10770: 'TV Movie',
+  53: 'Thriller',
+  10752: 'War',
+  37: 'Western',
+};
+
+const TMDB_TV_GENRES = {
+  10759: 'Action & Adventure',
+  16: 'Animation',
+  35: 'Comedy',
+  80: 'Crime',
+  99: 'Documentary',
+  18: 'Drama',
+  10751: 'Family',
+  10762: 'Kids',
+  9648: 'Mystery',
+  10763: 'News',
+  10764: 'Reality',
+  10765: 'Sci-Fi & Fantasy',
+  10766: 'Soap',
+  10767: 'Talk',
+  10768: 'War & Politics',
+  37: 'Western',
+};
+
+function tmdbListStrings(values) {
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values
+    .filter((value) => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter(Boolean))];
+}
+
+function tmdbGenreNamesOf(result, mediaType) {
+  if (Array.isArray(result && result.genres)) {
+    const named = result.genres
+      .map((genre) => genre && genre.name)
+      .filter((name) => typeof name === 'string');
+    if (named.length > 0) return tmdbListStrings(named);
+  }
+  const genreMap = mediaType === 'movie' ? TMDB_MOVIE_GENRES : TMDB_TV_GENRES;
+  return tmdbListStrings((Array.isArray(result && result.genre_ids)
+    ? result.genre_ids : [])
+    .map((id) => genreMap[id])
+    .filter(Boolean));
+}
+
+function tmdbCountryCodesOf(result) {
+  const origin = Array.isArray(result && result.origin_country)
+    ? result.origin_country
+    : [];
+  const production = Array.isArray(result && result.production_countries)
+    ? result.production_countries
+        .map((country) => country && country.iso_3166_1)
+        .filter((code) => typeof code === 'string')
+    : [];
+  return tmdbListStrings([...origin, ...production]);
+}
+
 // Works for both a search-result-shaped object (trending/top_rated/discover
 // `results[]`) and a detail-shaped one (`/movie/{id}`, `/tv/{id}`) — the
 // fields this reads are the same in both.
@@ -7879,6 +8057,19 @@ function tmdbToMediaItem(result, mediaType) {
     typeof result.vote_average === 'number' && result.vote_average > 0
       ? result.vote_average
       : null;
+  const ratingVotes =
+    Number.isInteger(result.vote_count) && result.vote_count > 0
+      ? result.vote_count
+      : null;
+  const overview = typeof result.overview === 'string'
+      ? result.overview.trim()
+      : '';
+  const originalTitle = result.original_title || result.original_name;
+  const originalLanguage = typeof result.original_language === 'string'
+      ? result.original_language.trim()
+      : '';
+  const genres = tmdbGenreNamesOf(result, mediaType);
+  const countries = tmdbCountryCodesOf(result);
   const mediaItem = {
     ref: {
       extensionId: EXTENSION_ID,
@@ -7889,12 +8080,23 @@ function tmdbToMediaItem(result, mediaType) {
     title,
     tags: [mediaType === 'movie' ? 'movie' : 'tv'],
   };
+  if (overview) mediaItem.overview = overview;
+  if (typeof originalTitle === 'string' && originalTitle.trim() &&
+      originalTitle.trim() !== title.trim()) {
+    mediaItem.originalTitle = originalTitle.trim();
+  }
+  if (originalLanguage) mediaItem.originalLanguage = originalLanguage;
+  if (genres.length > 0) mediaItem.genres = genres;
+  if (countries.length > 0) mediaItem.countries = countries;
   if (Number.isInteger(releaseYear) && releaseYear > 0) {
     mediaItem.releaseYear = releaseYear;
   }
   const releaseDate = tmdbReleaseDateIso(dateStr);
   if (releaseDate) mediaItem.releaseDate = releaseDate;
   if (rating != null) mediaItem.rating = rating;
+  if (ratingVotes != null) mediaItem.ratingVotes = ratingVotes;
+  const imdbId = tmdbImdbIdOf(result);
+  if (imdbId != null) mediaItem.imdbId = imdbId;
   const artwork = {};
   if (result.poster_path) artwork.portrait = { url: `${TMDB_IMAGE_BASE}/w500${result.poster_path}` };
   if (result.backdrop_path) artwork.landscape = { url: `${TMDB_IMAGE_BASE}/w1280${result.backdrop_path}` };
@@ -7909,6 +8111,11 @@ function tmdbToMediaItem(result, mediaType) {
   if (backdrops.length > 0) artwork.backdrops = backdrops;
   if (Object.keys(artwork).length > 0) mediaItem.artwork = artwork;
   return mediaItem;
+}
+
+function tmdbImdbIdOf(data) {
+  const value = data && (data.imdb_id || (data.external_ids && data.external_ids.imdb_id));
+  return typeof value === 'string' && /^tt\d+$/.test(value.trim()) ? value.trim() : null;
 }
 
 // TMDB dates are plain calendar days (no timezone); the app requires a full
@@ -9132,6 +9339,106 @@ function tmdbTvFacts(data) {
   return facts;
 }
 
+function omdbRatingSource(source) {
+  const normalized = String(source || '').toLowerCase();
+  if (normalized.includes('internet movie database') || normalized === 'imdb') return 'imdb';
+  if (normalized.includes('rotten tomatoes')) return 'rottenTomatoes';
+  if (normalized.includes('metacritic')) return 'metacritic';
+  return null;
+}
+
+function omdbScore(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(?:\/\s*(\d+(?:\.\d+)?)|%)$/);
+  if (!match) return null;
+  const score = Number(match[1]);
+  const scale = match[2] == null ? 100 : Number(match[2]);
+  return Number.isFinite(score) && Number.isFinite(scale) && scale > 0 && score <= scale
+    ? { score, scale }
+    : null;
+}
+
+function omdbRatings(data) {
+  const values = Array.isArray(data && data.Ratings) ? data.Ratings : [];
+  const ratings = [];
+  const seen = new Set();
+  for (const entry of values) {
+    const source = omdbRatingSource(entry && entry.Source);
+    const parsed = omdbScore(entry && entry.Value);
+    if (source == null || parsed == null || seen.has(source)) continue;
+    seen.add(source);
+    ratings.push({
+      source,
+      score: parsed.score,
+      scale: parsed.scale,
+      icon: { url: OMDB_ICON_URLS[source] },
+      ...(source === 'imdb' && data.imdbVotes
+        ? { votes: Number(String(data.imdbVotes).replace(/,/g, '')) }
+        : {}),
+    });
+  }
+  if (!seen.has('imdb')) {
+    const parsed = omdbScore(`${data && data.imdbRating}/10`);
+    if (parsed != null) {
+      ratings.unshift({
+        source: 'imdb',
+        score: parsed.score,
+        scale: parsed.scale,
+        icon: { url: OMDB_ICON_URLS.imdb },
+        ...(data.imdbVotes
+          ? { votes: Number(String(data.imdbVotes).replace(/,/g, '')) }
+          : {}),
+      });
+    }
+  }
+  return ratings.filter((rating) => !rating.votes || Number.isInteger(rating.votes));
+}
+
+function omdbNames(value) {
+  if (typeof value !== 'string') return [];
+  return value.split(',').map((name) => name.trim()).filter(Boolean);
+}
+
+function tmdbApplyOmdbMetadata(detail, data) {
+  if (!data || data.Response === 'False') return detail;
+  const imdbId = typeof data.imdbID === 'string' && /^tt\d+$/.test(data.imdbID)
+    ? data.imdbID
+    : null;
+  if (imdbId != null) detail.item.imdbId = imdbId;
+  const ratings = [...(detail.item.ratings || []), ...omdbRatings(data)];
+  if (ratings.length > 0) {
+    const bySource = new Set();
+    detail.item.ratings = ratings.filter((rating) => {
+      if (bySource.has(rating.source)) return false;
+      bySource.add(rating.source);
+      return true;
+    });
+  }
+  if (!detail.description && typeof data.Plot === 'string' && data.Plot !== 'N/A') {
+    detail.description = data.Plot;
+  }
+  const facts = detail.facts || (detail.facts = []);
+  tmdbFact(facts, 'Awards', data.Awards);
+  tmdbFact(facts, 'Box office', data.BoxOffice);
+  tmdbFact(facts, 'Country', data.Country);
+  const credits = detail.credits || (detail.credits = []);
+  const existingNames = new Set(credits.map((credit) => credit.name));
+  for (const name of omdbNames(data.Director)) {
+    if (!existingNames.has(name)) {
+      credits.unshift({ name, role: 'Director' });
+      existingNames.add(name);
+    }
+  }
+  for (const name of omdbNames(data.Writer)) {
+    if (!existingNames.has(name)) {
+      credits.unshift({ name, role: 'Writer' });
+      existingNames.add(name);
+    }
+  }
+  if (credits.length === 0) delete detail.credits;
+  return detail;
+}
+
 function tmdbEpisodeRef(tvId, seasonNumber, episodeNumber) {
   return {
     extensionId: EXTENSION_ID,
@@ -9581,7 +9888,7 @@ async function tmdbRecommendationsOf(tmdbId, mediaType) {
 
 async function tmdbMovieMeta(tmdbId) {
   const data = await tmdbGetJson(`/movie/${tmdbId}`, {
-    append_to_response: 'credits,release_dates,images,videos',
+    append_to_response: 'credits,release_dates,images,videos,external_ids',
     include_image_language: 'en,null',
     include_video_language: 'en,null',
   });
@@ -9595,12 +9902,14 @@ async function tmdbMovieMeta(tmdbId) {
   if (credits.length > 0) detail.credits = credits;
   const trailers = tmdbTrailers(data);
   const collectionId = data.belongs_to_collection && data.belongs_to_collection.id;
-  const [leakMetadata, previewResponse, recommendations, collection] = await Promise.all([
+  const [leakMetadata, previewResponse, recommendations, collection, omdb] = await Promise.all([
     tmdbLeakMetadata(tmdbId, 'movie'),
     sheguVideoTrailer(tmdbId, 'movie'),
     tmdbRecommendationsOf(tmdbId, 'movie'),
     tmdbCollectionOf(collectionId),
+    omdbGetJson(tmdbImdbIdOf(data)),
   ]);
+  tmdbApplyOmdbMetadata(detail, omdb);
   tmdbApplyLeakMetadata(detail, leakMetadata);
   const preview = sheguPreviewWithThumbnail(previewResponse, trailers);
   if (preview != null) trailers.unshift(preview);
@@ -9612,7 +9921,7 @@ async function tmdbMovieMeta(tmdbId) {
 
 async function tmdbTvMeta(tmdbId) {
   const data = await tmdbGetJson(`/tv/${tmdbId}`, {
-    append_to_response: 'credits,content_ratings,images,videos',
+    append_to_response: 'credits,content_ratings,images,videos,external_ids',
     include_image_language: 'en,null',
     include_video_language: 'en,null',
   });
@@ -9625,11 +9934,13 @@ async function tmdbTvMeta(tmdbId) {
   const credits = tmdbCreditsOf(data);
   if (credits.length > 0) detail.credits = credits;
   const trailers = tmdbTrailers(data);
-  const [leakMetadata, previewResponse, recommendations] = await Promise.all([
+  const [leakMetadata, previewResponse, recommendations, omdb] = await Promise.all([
     tmdbLeakMetadata(tmdbId, 'tv'),
     sheguVideoTrailer(tmdbId, 'tv'),
     tmdbRecommendationsOf(tmdbId, 'tv'),
+    omdbGetJson(tmdbImdbIdOf(data)),
   ]);
+  tmdbApplyOmdbMetadata(detail, omdb);
   tmdbApplyLeakMetadata(detail, leakMetadata);
   const preview = sheguPreviewWithThumbnail(previewResponse, trailers);
   if (preview != null) trailers.unshift(preview);

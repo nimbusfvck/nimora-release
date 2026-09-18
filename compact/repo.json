@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.84",
+      "version": "1.0.85",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added TMDB list metadata for overview, original titles and languages, genres, countries, and rating vote counts.",
         "Fixed Febbox quality switching so 1080p remains available after selecting 720p or 360p, and deduplicated cached source labels during refresh.",
         "Restored Febbox 360p and 720p variants when quality playlists are individually returned as HLS masters, and simplified the source label to the provider name.",
         "Added TimStreams live-event sources and reused its event artwork in the existing sports catalog while preserving FotMob as football metadata authority.",
@@ -101,7 +102,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "114a3f8124d6968a396d746c3dae770ff5ab157a0b72b7dfe21b78aaf7dd14ca"
+      "bundleSha256": "23daa2c42c9660481bc86c3a76de7df54064e7fb5d6b147039935ef04c55d878"
     }
   ]
 }
