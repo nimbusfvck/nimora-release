@@ -17845,6 +17845,445 @@ globalThis.__streamProviders.push({
   resolve: timstreamsResolve,
 });
 
+// DaddyLive is a stream-only provider. FotMob/Nimora owns event identity,
+// schedule, participants, and status; this module contributes channel sources
+// only after a user selects a FotMob event.
+const DADDYLIVE_PROVIDER_ID = 'nimora.daddylive';
+const DADDYLIVE_PROVIDER_KEY = 'daddylive';
+const DADDYLIVE_ORIGIN = globalThis.__daddyliveOrigin || 'https://dlive.sx';
+const DADDYLIVE_PLAYERS = ['stream', 'cast', 'watch', 'plus', 'casting', 'player'];
+const DADDYLIVE_MAX_CHANNELS = 3;
+const DADDYLIVE_MATCH_PROFILE = {
+  aliases: {
+    'man utd': 'manchester united', 'man united': 'manchester united',
+    'man city': 'manchester city', spurs: 'tottenham hotspur',
+    psg: 'paris saint germain', barca: 'barcelona', inter: 'internazionale',
+    juve: 'juventus', atleti: 'atletico madrid', wolves: 'wolverhampton wanderers',
+    'west brom': 'west bromwich albion', 'west bromwich': 'west bromwich albion',
+  },
+  stopTokens: ['fc', 'afc', 'cf', 'sc', 'ac', 'cd', 'club'],
+  ambiguousAlone: ['united', 'city', 'town', 'rovers', 'wanderers', 'albion', 'athletic', 'county', 'real', 'atletico', 'sporting', 'dynamo', 'racing', 'olympique'],
+};
+const DADDYLIVE_UA =
+  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36';
+let daddyliveScheduleCache = null;
+let daddyliveSchedulePending = null;
+
+function daddyliveText(value) { return value == null ? '' : String(value).trim(); }
+function daddyliveDecodeEntities(value) {
+  return daddyliveText(value)
+    .replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([\da-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
+}
+function daddyliveAttrs(source) {
+  const result = {};
+  const re = /([^\s=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+)))?/g;
+  let match;
+  while ((match = re.exec(source)) != null) {
+    result[match[1].toLowerCase()] = daddyliveDecodeEntities(match[2] || match[3] || match[4] || '');
+  }
+  return result;
+}
+function daddyliveParseUrl(value) {
+  const match = daddyliveText(value).match(/^(https?):\/\/([^/?#]+)([^?#]*)(?:\?([^#]*))?(?:#.*)?$/i);
+  if (!match) return null;
+  return {protocol: match[1].toLowerCase(), host: match[2], hostname: match[2].replace(/:\d+$/, '').toLowerCase(),
+    path: match[3] || '/', query: match[4] || '', origin: `${match[1].toLowerCase()}://${match[2]}`,
+    href: `${match[1].toLowerCase()}://${match[2]}${match[3] || '/'}${match[4] ? `?${match[4]}` : ''}`};
+}
+function daddyliveResolveUrl(value, base) {
+  const reference = daddyliveDecodeEntities(value).trim();
+  if (/^https?:\/\//i.test(reference)) return daddyliveParseUrl(reference)?.href || null;
+  const parent = daddyliveParseUrl(base);
+  if (!parent) return null;
+  if (reference.startsWith('//')) return daddyliveParseUrl(`${parent.protocol}:${reference}`)?.href || null;
+  const path = reference.startsWith('/') ? reference : `${parent.path.slice(0, parent.path.lastIndexOf('/') + 1)}${reference}`;
+  const normalized = [];
+  for (const segment of path.split('/')) {
+    if (segment === '..') normalized.pop();
+    else if (segment && segment !== '.') normalized.push(segment);
+  }
+  return `${parent.origin}/${normalized.join('/')}`;
+}
+function daddyliveParseHtml(html) {
+  const root = {tag: 'root', attrs: {}, parent: null, children: []};
+  const stack = [root];
+  const token = /<!--[\s\S]*?-->|<![^>]*>|<\/?[a-zA-Z][^>]*>|[^<]+/g;
+  let match;
+  while ((match = token.exec(html)) != null) {
+    const value = match[0];
+    if (value[0] !== '<') { stack[stack.length - 1].children.push(daddyliveDecodeEntities(value)); continue; }
+    if (value.startsWith('<!--') || value.startsWith('<!')) continue;
+    const close = value.match(/^<\/\s*([\w:-]+)/);
+    if (close) {
+      for (let i = stack.length - 1; i > 0; i--) {
+        if (stack[i].tag === close[1].toLowerCase()) { stack.length = i; break; }
+      }
+      continue;
+    }
+    const open = value.match(/^<([\w:-]+)\b([^>]*)>/);
+    if (!open) continue;
+    const tag = open[1].toLowerCase();
+    if (tag === 'script' || tag === 'style') {
+      const rest = html.slice(token.lastIndex);
+      const end = rest.toLowerCase().indexOf(`</${tag}`);
+      if (end >= 0) {
+        const closeEnd = html.indexOf('>', token.lastIndex + end);
+        if (closeEnd >= 0) token.lastIndex = closeEnd + 1;
+      }
+      continue;
+    }
+    const node = {tag, attrs: daddyliveAttrs(open[2] || ''), parent: stack[stack.length - 1], children: []};
+    node.parent.children.push(node);
+    if (!/^(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/.test(tag) && !/\/\s*>$/.test(value)) stack.push(node);
+  }
+  return root;
+}
+function daddyliveWalk(node, out) {
+  out.push(node);
+  for (const child of node.children) if (typeof child !== 'string') daddyliveWalk(child, out);
+}
+function daddyliveNodeText(node, memo) {
+  if (memo.has(node)) return memo.get(node);
+  const text = node.children.map((child) => typeof child === 'string' ? child : daddyliveNodeText(child, memo)).join(' ')
+    .replace(/\s+/g, ' ').trim();
+  memo.set(node, text);
+  return text;
+}
+function daddyliveWatchLink(node, memo) {
+  if (node.tag !== 'a' || !node.attrs.href) return null;
+  try {
+    const raw = node.attrs.href.trim();
+    const match = raw.match(/^(?:https?:\/\/([^/?#]+))?\/watch\.php(?:\?([^#]*))?(?:#.*)?$/i);
+    if (!match) return null;
+    if (match[1]) {
+      const linkHost = match[1].toLowerCase().replace(/:\d+$/, '');
+      const siteHost = daddyliveParseUrl(DADDYLIVE_ORIGIN).hostname;
+      if (linkHost !== siteHost) return null;
+    }
+    const idMatch = (match[2] || '').match(/(?:^|&)id=(\d+)(?:&|$)/i);
+    const id = Number(idMatch && idMatch[1]);
+    if (!Number.isSafeInteger(id) || id < 1) return null;
+    return {node, id, name: daddyliveNodeText(node, memo) || `Channel ${id}`};
+  } catch (_) { return null; }
+}
+function daddyliveParseSchedule(html) {
+  const root = daddyliveParseHtml(html);
+  const nodes = [];
+  daddyliveWalk(root, nodes);
+  const order = new Map(nodes.map((node, i) => [node, i]));
+  const memo = new Map();
+  const links = nodes.map((node) => daddyliveWatchLink(node, memo)).filter(Boolean);
+  const linksByAncestor = new Map();
+  for (const link of links) {
+    for (let parent = link.node.parent; parent && parent.tag !== 'root'; parent = parent.parent) {
+      const list = linksByAncestor.get(parent) || [];
+      list.push(link);
+      linksByAncestor.set(parent, list);
+    }
+  }
+  const blocks = new Set(['article', 'div', 'li', 'p', 'section', 'td', 'tr']);
+  const groups = new Map();
+  for (const link of links) {
+    let chosen = link.node;
+    for (let parent = link.node.parent; parent && parent.tag !== 'root'; parent = parent.parent) {
+      if (!blocks.has(parent.tag)) continue;
+      const text = daddyliveNodeText(parent, memo);
+      if (text.length > 700) break;
+      chosen = parent;
+      if ((text.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/g) || []).length === 1 &&
+          (linksByAncestor.get(parent) || []).length <= 12) break;
+    }
+    const group = groups.get(chosen) || [];
+    group.push(link);
+    groups.set(chosen, group);
+  }
+  const headings = nodes.filter((node) => /^h[1-6]$/.test(node.tag))
+    .map((node) => ({node, text: daddyliveNodeText(node, memo)}))
+    .filter((entry) => entry.text && entry.text.length < 100 && !/schedule time|^schedule$/i.test(entry.text));
+  const events = [];
+  for (const [container, group] of groups) {
+    const channels = [...new Map(group.map((link) => [link.id, link])).values()]
+      .map((link) => ({id: link.id, name: link.name}));
+    const raw = daddyliveNodeText(container, memo);
+    const time = (raw.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/) || [''])[0];
+    let title = raw.replace(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/g, ' ');
+    for (const name of [...new Set(channels.map((channel) => channel.name))].sort((a, b) => b.length - a.length)) {
+      title = title.replace(name, ' ');
+    }
+    title = title.replace(/[|·•:–—-]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const position = order.get(container) || 0;
+    let category = '';
+    for (const heading of headings) if ((order.get(heading.node) || 0) < position) category = heading.text;
+    events.push({category: category || 'Schedule', time, title, channels});
+  }
+  return events.filter((event) => event.channels.length > 0);
+}
+async function daddyliveFetchSchedule() {
+  if (daddyliveScheduleCache && daddyliveScheduleCache.until > Date.now()) return daddyliveScheduleCache.events;
+  if (daddyliveSchedulePending) return daddyliveSchedulePending;
+  daddyliveSchedulePending = (async () => {
+    const response = await fetch(`${DADDYLIVE_ORIGIN}/`, {
+      headers: {Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', Referer: `${DADDYLIVE_ORIGIN}/`, 'User-Agent': DADDYLIVE_UA},
+    });
+    if (response.status < 200 || response.status >= 300) throw new Error(`DaddyLive schedule failed: ${response.status}`);
+    const events = daddyliveParseSchedule(response.body || '');
+    daddyliveScheduleCache = {events, until: Date.now() + 90 * 1000};
+    return events;
+  })();
+  try { return await daddyliveSchedulePending; }
+  finally { daddyliveSchedulePending = null; }
+}
+
+function daddyliveNormalizeTeam(value) {
+  let text = daddyliveDecodeEntities(value).toLowerCase();
+  try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (_) {}
+  text = text.replace(/\b(inter milan|fc internazionale|internazionale milano)\b/g, 'internazionale')
+    .replace(/\b(barca|fc barcelona)\b/g, 'barcelona')
+    .replace(/\b(man utd|man united)\b/g, 'manchester united')
+    .replace(/\b(man city)\b/g, 'manchester city')
+    .replace(/\b(psg)\b/g, 'paris saint germain')
+    .replace(/\b(fc|afc|cf|sc|ac|club)\b/g, ' ');
+  return text.replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function daddyliveSides(value) {
+  const parts = daddyliveText(value).split(/\s+(?:vs?\.?|@)\s+/i);
+  return parts.length === 2 ? parts.map(daddyliveNormalizeTeam) : [];
+}
+function daddyliveEventSides(item) {
+  if (Array.isArray(item && item.participants) && item.participants.length === 2) {
+    return item.participants.map((team) => daddyliveNormalizeTeam(team && team.name));
+  }
+  return daddyliveSides(item && item.title);
+}
+function daddyliveTeamMatches(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = shorter === a ? b : a;
+  return shorter.length >= 7 && longer.startsWith(`${shorter} `);
+}
+function daddyliveFindEvent(events, item) {
+  if (!Array.isArray(item && item.participants) || item.participants.length !== 2) return null;
+  const result = host.match.resolve({
+    teamA: item.participants[0].name,
+    teamB: item.participants[1].name,
+    teamAShort: item.participants[0].shortName || null,
+    teamBShort: item.participants[1].shortName || null,
+    kickoff: item.schedule && item.schedule.startsAt || null,
+  }, events.map((event) => {
+    const sides = daddyliveSides(event.title);
+    return {teamA: sides[0] || '', teamB: sides[1] || '', startsAt: null};
+  }), {profile: DADDYLIVE_MATCH_PROFILE});
+  return result && events[result.index] || null;
+}
+function daddyliveEncode(value) {
+  return host.codec.textToBase64(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+function daddyliveDecode(value) {
+  let encoded = daddyliveText(value).replace(/-/g, '+').replace(/_/g, '/');
+  while (encoded.length % 4) encoded += '=';
+  return JSON.parse(host.codec.base64ToText(encoded));
+}
+function daddyliveSourceId(channel) {
+  return `${DADDYLIVE_PROVIDER_KEY}:${daddyliveEncode({id: channel.id, name: channel.name})}`;
+}
+async function daddyliveSources(args) {
+  if (args.enabledProviders && !args.enabledProviders.includes(DADDYLIVE_PROVIDER_ID)) return {sources: []};
+  const item = args.item || {};
+  if (!item.ref || item.ref.providerId !== 'nimora.matches' || item.kind !== 'event') return {sources: []};
+  try {
+    const event = daddyliveFindEvent(await daddyliveFetchSchedule(), item);
+    if (!event) return {sources: []};
+    return {sources: event.channels.slice(0, DADDYLIVE_MAX_CHANNELS).map((channel) => ({
+      id: daddyliveSourceId(channel), label: channel.name, provider: 'DaddyLive', providerId: DADDYLIVE_PROVIDER_ID,
+    }))};
+  } catch (_) { return {sources: []}; }
+}
+
+function daddyliveFrame(html, baseUrl) {
+  const frames = [...html.matchAll(/<iframe\b([^>]*)>/gi)].map((match) => ({
+    attrs: daddyliveAttrs(match[1] || ''),
+  }));
+  const selected = frames.find((frame) => frame.attrs.id === 'thatframe') ||
+    frames.filter((frame) => /video/i.test(frame.attrs.class || '')).slice(-1)[0] ||
+    frames[0];
+  const src = selected && selected.attrs.src;
+  if (!src || /^(?:javascript:|data:|about:)/i.test(src)) return null;
+  return daddyliveResolveUrl(src, baseUrl);
+}
+function daddyliveBinaryFromBase64(value) {
+  const hex = host.codec.base64ToHex(value);
+  let out = '';
+  for (let i = 0; i + 1 < hex.length; i += 2) out += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
+  return out;
+}
+function daddyliveBinaryToHex(value) {
+  let out = '';
+  for (let i = 0; i < value.length; i++) out += value.charCodeAt(i).toString(16).padStart(2, '0');
+  return out;
+}
+function daddyliveEconfigUrl(html) {
+  const encoded = html.match(/window\._econfig\s*=\s*'([^']+)'/)?.[1];
+  if (!encoded) return null;
+  try {
+    const raw = daddyliveBinaryFromBase64(encoded);
+    const size = Math.ceil(raw.length / 4);
+    const chunks = [raw.slice(0, size), raw.slice(size, size * 2), raw.slice(size * 2, size * 3), raw.slice(size * 3)];
+    const order = [2, 0, 3, 1];
+    const reordered = [];
+    for (let i = 0; i < 4; i++) {
+      const piece = chunks[i].slice(0, 3) + chunks[i].slice(4);
+      reordered[order[i]] = daddyliveBinaryFromBase64(piece);
+    }
+    const configB64 = host.codec.hexToBase64(daddyliveBinaryToHex(reordered.join('')));
+    const config = JSON.parse(host.codec.base64ToText(configB64));
+    const url = config.p2p === false || config.url_nop2p ? config.stream_url_nop2p || config.stream_url : config.stream_url || config.stream_url_nop2p;
+    return /^https?:\/\//i.test(url || '') && /\.m3u8(?:[?#]|$)/i.test(url) ? url : null;
+  } catch (_) { return null; }
+}
+function daddyliveExtractXor(html) {
+  const match = html.match(/var\s+_gr\w+=\[([0-9,\s]+)\],_mz\d+=(\d+),_mz\d+=(\d+)/) ||
+    html.match(/var\s+_\w+=\[([^\]]+)\],_\w+=(\d+),_\w+=(\d+)/);
+  if (!match) return '';
+  return match[1].split(',').map((n) => String.fromCharCode(((Number(n.trim()) ^ Number(match[2])) - Number(match[3]) + 256) & 255)).join('');
+}
+function daddyliveExtractUrl(html) {
+  const plain = daddyliveExtractXor(html) || html;
+  const econfig = daddyliveEconfigUrl(html);
+  if (econfig) return econfig;
+  const wide = plain.match(/streamUrl:\s*"((?:\\\/|[^"])+)"/)?.[1];
+  if (wide) return wide.replace(/\\\//g, '/');
+  const signed = plain.match(/(?:SIGNED_URL|url)\s*=\s*"(https?:[^"\s]+\.m3u8[^"\s]*)"/)?.[1];
+  if (signed) return signed;
+  const direct = plain.match(/https?:\/\/[^"'`<>\s]+\.m3u8(?:\?[^"'`<>\s]*)?/i)?.[0];
+  if (direct) return direct;
+  const cdnDecoder = html.match(/function (\w+)\(s\)\{[^}]*atob/)?.[1];
+  if (cdnDecoder) {
+    const assignment = html.match(new RegExp(`var (\\w+)=((?:${cdnDecoder}\\(\\w+\\)\\+?)+);\\s*var _p2pMode`));
+    if (assignment) {
+      const vars = new Map();
+      let part;
+      const varPattern = /var (\w+)='([A-Za-z0-9+/=_-]+)'/g;
+      while ((part = varPattern.exec(html)) != null) vars.set(part[1], part[2]);
+      const pieces = [...assignment[2].matchAll(new RegExp(`${cdnDecoder}\\((\\w+)\\)`, 'g'))];
+      const decoded = pieces.map((piece) => {
+        let encoded = vars.get(piece[1]) || '';
+        encoded = encoded.replace(/-/g, '+').replace(/_/g, '/');
+        while (encoded.length % 4) encoded += '=';
+        try { return host.codec.base64ToText(encoded); } catch (_) { return ''; }
+      }).join('');
+      const url = decoded.match(/https?:\/\/[^"'`<>\s]+\.m3u8[^"'`<>\s]*/i)?.[0];
+      if (url) return url;
+    }
+  }
+  const igniteFn = html.match(/player\.load\(\{source:\s*(\w+)\(\)/)?.[1];
+  if (igniteFn) {
+    const body = html.match(new RegExp(`function ${igniteFn}\\(\\)\\s*\\{([\\s\\S]*?)\\n\\s*\\}`))?.[1] || '';
+    const chars = body.match(/return\(\[([^\]]+)\]/)?.[1] || '';
+    const base = [...chars.matchAll(/"([^"]*)"/g)].map((match) => match[1]).join('');
+    const spanId = body.match(/getElementById\("([^"]+)"\)/)?.[1];
+    const span = spanId ? html.match(new RegExp(`id=["']${spanId}["'][^>]*>([^<]*)`))?.[1] || '' : '';
+    const url = (base + span).replace(/\\\//g, '/');
+    if (/^https?:\/\//i.test(url) && /\.m3u8/i.test(url)) return url;
+  }
+  const hub = html.match(/const ENCRYPTED_CONFIG = \{[\s\S]*?cipher:\s*'([^']+)'[\s\S]*?key:\s*'([^']+)'[\s\S]*?iv:\s*'([^']+)'/);
+  if (hub) {
+    try {
+      const plainConfig = host.crypto.aesCbcDecrypt(
+        host.codec.textToBase64(hub[2]), host.codec.textToBase64(hub[3]), hub[1],
+      );
+      const config = JSON.parse(host.codec.base64ToText(plainConfig));
+      if (/^https?:\/\//i.test(config.initialVideoUrl || '') && /\.m3u8/i.test(config.initialVideoUrl)) return config.initialVideoUrl;
+      if (config.baseUrl && config.initialToken && config.initialCode && config.streamId) {
+        const url = `${config.baseUrl}/${config.initialToken}/${config.initialCode}/${config.streamId}/webm/`;
+        if (/\.m3u8/i.test(url)) return url;
+      }
+    } catch (_) {}
+  }
+  const b64 = plain.match(/atob\('([^']+)'\)/)?.[1];
+  if (b64) {
+    try {
+      const decoded = host.codec.base64ToText(b64);
+      if (/^https?:\/\//i.test(decoded) && /\.m3u8/i.test(decoded)) return decoded;
+    } catch (_) {}
+  }
+  return null;
+}
+async function daddyliveFetchPage(url, referer) {
+  const response = await fetch(url, {headers: {Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', Referer: referer, 'User-Agent': DADDYLIVE_UA}});
+  if (response.status < 200 || response.status >= 300) throw new Error(`DaddyLive page failed: ${response.status}`);
+  return response;
+}
+async function daddyliveValidateHls(url, referer) {
+  const headers = {Accept: 'application/vnd.apple.mpegurl,application/x-mpegURL,*/*', Referer: referer, 'User-Agent': DADDYLIVE_UA};
+  const root = await fetch(url, {headers});
+  if (root.status < 200 || root.status >= 300 || !daddyliveText(root.body).trimStart().startsWith('#EXTM3U')) return false;
+  const rootText = daddyliveText(root.body);
+  const child = rootText.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith('#'));
+  if (!child) return /#EXTINF|#EXT-X-PART/.test(rootText);
+  let childUrl;
+  childUrl = daddyliveResolveUrl(child, root.url || url);
+  if (!childUrl) return false;
+  if (/\.m3u8(?:[?#]|$)/i.test(childUrl) || /#EXT-X-STREAM-INF/.test(rootText)) {
+    const variant = await fetch(childUrl, {headers});
+    if (variant.status < 200 || variant.status >= 300 || !daddyliveText(variant.body).trimStart().startsWith('#EXTM3U')) return false;
+    const mediaLine = daddyliveText(variant.body).split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith('#'));
+    if (!mediaLine) return /#EXTINF|#EXT-X-PART/.test(daddyliveText(variant.body));
+    childUrl = daddyliveResolveUrl(mediaLine, variant.url || childUrl);
+    if (!childUrl) return false;
+  }
+  const segment = await fetch(childUrl, {headers: {...headers, Range: 'bytes=0-0'}});
+  return segment.status >= 200 && segment.status < 300 && (segment.body || '').length > 0;
+}
+async function daddyliveResolve(sourceId) {
+  const prefix = `${DADDYLIVE_PROVIDER_KEY}:`;
+  if (!daddyliveText(sourceId).startsWith(prefix)) throw new Error('Invalid DaddyLive source ID');
+  const channel = daddyliveDecode(sourceId.slice(prefix.length));
+  if (!Number.isSafeInteger(Number(channel.id)) || Number(channel.id) < 1) throw new Error('Invalid DaddyLive channel ID');
+  const watchUrl = `${DADDYLIVE_ORIGIN}/watch.php?id=${Number(channel.id)}`;
+  let lastError = null;
+  for (const player of DADDYLIVE_PLAYERS) {
+    try {
+      const pageUrl = `${DADDYLIVE_ORIGIN}/${player}/stream-${Number(channel.id)}.php`;
+      const page = await daddyliveFetchPage(pageUrl, watchUrl);
+      let currentUrl = page.url || pageUrl;
+      let html = page.body || '';
+      const firstFrame = daddyliveFrame(html, currentUrl);
+      if (!firstFrame) throw new Error('player has no embed frame');
+      let embedUrl = firstFrame;
+      let playableUrl = null;
+      for (let depth = 0; depth < 6; depth++) {
+        const embed = await daddyliveFetchPage(embedUrl, currentUrl);
+        currentUrl = embed.url || embedUrl;
+        html = embed.body || '';
+        playableUrl = daddyliveExtractUrl(html);
+        if (playableUrl) break;
+        const inner = daddyliveFrame(html, currentUrl);
+        if (!inner || inner === currentUrl) break;
+        embedUrl = inner;
+      }
+      if (!playableUrl) throw new Error('no HLS URL in player chain');
+      const hostname = daddyliveParseUrl(playableUrl).hostname;
+      const referer = /7odxv0l067ka|tiestep/i.test(hostname)
+        ? 'https://tiestep.top/'
+        : /bluetier|wideiptv/i.test(hostname) ? '' : embedUrl;
+      if (!await daddyliveValidateHls(playableUrl, referer)) throw new Error('playlist or first media segment is invalid');
+      const headers = {'User-Agent': DADDYLIVE_UA};
+      if (referer) { headers.Referer = referer; headers.Origin = daddyliveParseUrl(referer).origin; }
+      return {url: playableUrl, headers, format: 'hls', label: daddyliveText(channel.name) || 'DaddyLive'};
+    } catch (error) { lastError = error; }
+  }
+  throw new Error(`DaddyLive channel ${channel.name || channel.id} could not resolve: ${lastError && lastError.message || 'no playable player'}`);
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({providerKey: DADDYLIVE_PROVIDER_KEY, sources: daddyliveSources, resolve: daddyliveResolve});
+
 // League channel catalog.
 //
 // This is an editorial mapping of channel labels to the seven requested

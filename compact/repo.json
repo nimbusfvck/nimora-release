@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.93",
+      "version": "1.0.94",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added DaddyLive channel streams to FotMob events and validated the HLS playlist and first media segment before playback.",
         "Matched TimStreams football events to FotMob by event ID so alternate team names do not create duplicate cards under Other Leagues.",
         "Moved CDNLiveTV event-feed requests out of Home catalog refresh while keeping CDNLiveTV available as an on-demand stream provider.",
         "Removed Live and Schedule categories; Sports is the only sports category.",
@@ -110,7 +111,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "6cef1497a01f67f651a72aa55405056301b0403544fb90a0956b180a93f982d5"
+      "bundleSha256": "5c6cc780f5a186ccc3d6b8a317ba6f56ab420c06a2c84eb9e265eb604eb971ba"
     }
   ]
 }

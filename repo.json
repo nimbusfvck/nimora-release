@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.105",
+      "version": "1.0.106",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added DaddyLive channel streams to FotMob events and validated the HLS playlist and first media segment before playback.",
         "Matched TimStreams football events to FotMob by event ID so alternate team names do not create duplicate cards under Other Leagues.",
         "Moved CDNLiveTV event-feed requests out of Home catalog refresh while keeping CDNLiveTV available as an on-demand stream provider.",
         "Removed the Live category; Sports is the only sports category.",
@@ -250,7 +251,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "a64a7153174a99d0a75a911d1ed71e3a8c2d04236e453e0357084277bed40fd0"
+      "bundleSha256": "62793cbcc217229143613cc821762333e9eab51899e6922d4ad344adf15213ea"
     }
   ]
 }
