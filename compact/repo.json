@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.88",
+      "version": "1.0.89",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Added Sports as a league-grouped row catalog, improved football name matching, and hid ended matches from the Sport catalog.",
         "Added a minimum TMDB rating of 6 to the Korean Series row so low-rated or unrated titles are excluded.",
         "Improved Indonesian Movies and Korean movie/series rows by removing the 180-day cutoff, and increased TMDB poster artwork to w780 for sharper mobile heroes.",
         "Fixed Football Highlights pagination so the All-category shelf collects enough playable posts for See more.",
@@ -105,7 +106,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "07fee2cc252e2a3f5f5b8702e084b65e039a59471b69bb7be80eccf9246d63bf"
+      "bundleSha256": "6c16990eaa1932845478a5966083a2ae3243512b92e86ab24b33551c3e81f72f"
     }
   ]
 }

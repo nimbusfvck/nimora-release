@@ -43,6 +43,7 @@ const PROVIDER_ID = 'nimora.matches';
 // sports catalog entries.
 const CATALOG_ID = 'fixtures';
 const SCHEDULE_CATALOG_ID = 'fixtures_schedule';
+const SPORT_CATALOG_ID = 'fixtures_sport';
 const FEATURED_CATALOG_ID = 'fixtures_featured';
 const LIVE_CATEGORY = 'live';
 const ALL_CATEGORY = 'all';
@@ -774,6 +775,9 @@ const FOOTBALL_DEDUPE_WINDOW_MS = 6 * 60 * 60 * 1000;
 function footballNameKey(value) {
   return `${value || ''}`
     .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/ß/g, 'ss')
     .replace(/&amp;/g, '&')
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\b(fc|afc|cf|sc|ac|cd)\b/g, ' ')
@@ -789,29 +793,40 @@ const AMBIGUOUS_FOOTBALL_NAMES = new Set([
 const FOOTBALL_NAME_ALIASES = new Map([
   ['atleti', 'atletico madrid'],
   ['barca', 'barcelona'],
+  ['bayern munchen', 'bayern munich'],
   ['birmingham', 'birmingham city'],
+  ['cologne', '1 koln'],
   ['derby', 'derby county'],
+  ['gladbach', 'borussia monchengladbach'],
   ['hsv', 'hamburger sv'],
+  ['hull', 'hull city'],
   ['inter', 'internazionale'],
   ['juve', 'juventus'],
+  ['koln', '1 koln'],
   ['leipzig', 'rb leipzig'],
   ['man city', 'manchester city'],
   ['man united', 'manchester united'],
   ['man utd', 'manchester united'],
+  ['m gladbach', 'borussia monchengladbach'],
+  ['mgladbach', 'borussia monchengladbach'],
+  ['monchengladbach', 'borussia monchengladbach'],
   ['nottm forest', 'nottingham forest'],
   ['psg', 'paris saint germain'],
   ['qpr', 'queens park rangers'],
   ['sheff utd', 'sheffield united'],
   ['sheffield utd', 'sheffield united'],
   ['spurs', 'tottenham hotspur'],
+  ['koeln', '1 koln'],
   ['west brom', 'west bromwich albion'],
   ['west bromwich', 'west bromwich albion'],
   ['wolves', 'wolverhampton wanderers'],
 ]);
 
 function footballNameMatches(first, second) {
-  first = FOOTBALL_NAME_ALIASES.get(first) || first;
-  second = FOOTBALL_NAME_ALIASES.get(second) || second;
+  const firstKey = footballNameKey(first);
+  const secondKey = footballNameKey(second);
+  first = FOOTBALL_NAME_ALIASES.get(firstKey) || firstKey;
+  second = FOOTBALL_NAME_ALIASES.get(secondKey) || secondKey;
   if (first === second) return true;
   const shorter = first.length <= second.length ? first : second;
   const longer = first.length <= second.length ? second : first;
@@ -825,16 +840,20 @@ function footballNameMatches(first, second) {
 }
 
 function footballParticipantsMatch(first, second) {
-  if (!Array.isArray(first?.participants) ||
-      !Array.isArray(second?.participants) ||
-      first.participants.length !== 2 ||
-      second.participants.length !== 2) {
-    return false;
-  }
-  const firstNames = first.participants.map((participant) =>
-    footballNameKey(participant?.name));
-  const secondNames = second.participants.map((participant) =>
-    footballNameKey(participant?.name));
+  const namesFor = (item) => {
+    if (Array.isArray(item?.participants) && item.participants.length === 2) {
+      const names = item.participants.map((participant) =>
+        footballNameKey(participant?.name));
+      if (names.every((name) => name.length > 0)) return names;
+    }
+    const titleParts = `${item?.title || ''}`.split(/\s+(?:v(?:s\.?)?|versus)\s+/i);
+    return titleParts.length === 2
+      ? titleParts.map(footballNameKey)
+      : null;
+  };
+  const firstNames = namesFor(first);
+  const secondNames = namesFor(second);
+  if (firstNames == null || secondNames == null) return false;
   return (
     footballNameMatches(firstNames[0], secondNames[0]) &&
     footballNameMatches(firstNames[1], secondNames[1])
@@ -922,6 +941,75 @@ function footballCatalogItems(
     (first, second) => Date.parse(first.schedule?.startsAt) -
       Date.parse(second.schedule?.startsAt),
   );
+}
+
+const PROMINENT_FOOTBALL_LEAGUE_ROWS = [
+  {
+    id: 'premier-league',
+    title: 'Premier League',
+    match: /^(?:english )?premier league$/i,
+  },
+  {
+    id: 'champions-league',
+    title: 'UEFA Champions League',
+    match: /^(?:uefa )?champions league$|^ucl$/i,
+  },
+  {
+    id: 'la-liga',
+    title: 'LaLiga',
+    match: /^(?:spanish )?la\s*liga$/i,
+  },
+  {
+    id: 'bundesliga',
+    title: 'Bundesliga',
+    match: /^(?:german )?bundesliga$/i,
+  },
+  {
+    id: 'serie-a',
+    title: 'Serie A',
+    match: /^serie a$/i,
+  },
+  {
+    id: 'ligue-1',
+    title: 'Ligue 1',
+    match: /^(?:french )?ligue 1$/i,
+  },
+];
+
+function footballSportSections(footballItems, providerOnlyItems) {
+  const grouped = new Map(
+    PROMINENT_FOOTBALL_LEAGUE_ROWS.map((league) => [league.id, []]),
+  );
+  const otherItems = [...providerOnlyItems];
+  for (const item of footballItems) {
+    const leagueName = `${item.subtitle || ''}`.trim();
+    const league = PROMINENT_FOOTBALL_LEAGUE_ROWS.find((entry) =>
+      entry.match.test(leagueName));
+    if (league == null) {
+      otherItems.push(item);
+      continue;
+    }
+    grouped.get(league.id).push(item);
+  }
+
+  const sections = [];
+  for (const league of PROMINENT_FOOTBALL_LEAGUE_ROWS) {
+    const items = grouped.get(league.id);
+    if (items.length === 0) continue;
+    sections.push({
+      id: `sport:football:${league.id}`,
+      title: league.title,
+      items,
+    });
+  }
+  if (otherItems.length > 0) {
+    sections.push({
+      id: 'sport:football:other-leagues',
+      title: 'Other Leagues',
+      items: otherItems,
+    });
+  }
+  return sections;
 }
 
 function cricfyArtworkUrl(value) {
@@ -1183,13 +1271,29 @@ function buildPage(
   knownFotmobMatches = matches,
 ) {
   const liveCategory = query.category === LIVE_CATEGORY;
-  const excludeEnded = liveCategory && query.catalogId !== SCHEDULE_CATALOG_ID;
+  const excludeEnded = query.catalogId === SPORT_CATALOG_ID ||
+    (liveCategory && query.catalogId !== SCHEDULE_CATALOG_ID);
   providerEntries = providerEntries.map((entry) =>
     normalizeProviderEntry(entry, nowMs));
+  const selectedFootballLeagueId = typeof query.subCategory === 'string' &&
+    query.subCategory.startsWith('sport:football:')
+    ? query.subCategory.slice('sport:football:'.length)
+    : null;
+  const selectedSportName = typeof query.subCategory === 'string' &&
+    query.subCategory.startsWith('sport:')
+    ? query.subCategory.slice('sport:'.length)
+    : query.subCategory;
   const selected = query.subCategory == null
     ? null
-    : sportIdOf(query.subCategory);
-  const subCategories = sportsOf(matches, providerEntries);
+    : selectedFootballLeagueId != null
+      ? FOOTBALL.id
+      : sportIdOf(selectedSportName);
+  const subCategories = sportsOf(
+    excludeEnded ? matches.filter((match) => !isFinishedMatch(match)) : matches,
+    excludeEnded
+      ? providerEntries.filter((entry) => entry.item?.schedule?.state !== 'ended')
+      : providerEntries,
+  );
 
   // Home's Featured Hero loads catalogs registered for the global `all`
   // category. Keep this separate from the Live Now catalog: a scheduled
@@ -1213,6 +1317,30 @@ function buildPage(
       sections: items.length === 0
         ? []
         : [{ id: 'featured:sports', title: 'Featured Sports', items }],
+      subCategories,
+    };
+  }
+
+  if (selectedFootballLeagueId != null) {
+    const footballItems = footballCatalogItems(
+      matches,
+      providerEntries,
+      nowMs,
+      brandingByLeague,
+      false,
+      knownFotmobMatches,
+    ).filter((item) => !excludeEnded || item.schedule?.state !== 'ended');
+    const sections = footballSportSections(
+      footballItems.filter(isFotmobItem),
+      footballItems.filter((item) => !isFotmobItem(item)).map((item) => ({
+        ...item,
+        subtitle: 'Other',
+      })),
+    );
+    return {
+      sections: sections.filter(
+        (section) => section.id === query.subCategory,
+      ),
       subCategories,
     };
   }
@@ -1301,12 +1429,7 @@ function buildPage(
     ...item,
     subtitle: 'Other',
   }));
-  if (footballItems.length > 0) {
-    sections.push({ id: `sport:${FOOTBALL.id}`, title: FOOTBALL.name, items: footballItems });
-  }
-  if (otherFootballItems.length > 0) {
-    sections.push({ id: 'sport:other-football', title: 'Other', items: otherFootballItems });
-  }
+  sections.push(...footballSportSections(footballItems, otherFootballItems));
   for (const sport of subCategories) {
     if (sport.id === FOOTBALL.id) continue;
     const items = providerEntries
@@ -1380,6 +1503,10 @@ globalThis.__catalogProviders.push({
 });
 globalThis.__catalogProviders.push({
   catalogId: SCHEDULE_CATALOG_ID,
+  catalog: fixturesCatalog,
+});
+globalThis.__catalogProviders.push({
+  catalogId: SPORT_CATALOG_ID,
   catalog: fixturesCatalog,
 });
 globalThis.__catalogProviders.push({
