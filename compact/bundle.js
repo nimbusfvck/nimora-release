@@ -872,6 +872,12 @@ function sameFootballEvent(first, second) {
     Math.abs(firstKickoff - secondKickoff) <= FOOTBALL_DEDUPE_WINDOW_MS;
 }
 
+function sameFootballEntry(item, entry) {
+  if (sameFootballEvent(item, entry?.item)) return true;
+  const fotmobId = leagueIdKey(entry?.fotmobId);
+  return fotmobId != null && item?.ref?.id === fotmobRefId(fotmobId);
+}
+
 function isFootballEntry(entry) {
   return sportIdOf(entry.sportName || entry.sportId) === FOOTBALL.id;
 }
@@ -920,19 +926,19 @@ function footballCatalogItems(
     .filter((item) => item != null);
   if (requireProviderMatch) {
     items = items.filter((item) =>
-      entries.some((entry) => sameFootballEvent(item, entry.item)));
+      entries.some((entry) => sameFootballEntry(item, entry)));
   }
   for (const entry of entries.filter(isFootballEntry)) {
     const item = entry.item;
     const matchingIndex = items.findIndex((existing) =>
-      sameFootballEvent(existing, item));
+      sameFootballEntry(existing, entry));
     if (matchingIndex !== -1) {
       items[matchingIndex] = mergeProviderArtwork(items[matchingIndex], item);
       continue;
     }
     if (
       item == null ||
-      knownFotmobItems.some((existing) => sameFootballEvent(existing, item))
+      knownFotmobItems.some((existing) => sameFootballEntry(existing, entry))
     ) {
       continue;
     }
@@ -1235,6 +1241,7 @@ function dedupeProviderEntries(entries, nowMs = Date.now()) {
         },
       };
     }
+    if (merged.fotmobId == null) merged.fotmobId = entry.fotmobId;
     result[existingIndex] = merged;
   }
   return result;
@@ -17546,6 +17553,46 @@ function timstreamsSplitParticipants(title) {
   return [{name: parts[0]}, {name: parts[1]}];
 }
 
+function timstreamsNormalizeTeamName(value) {
+  let text = timstreamsText(value).toLowerCase();
+  try {
+    text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  } catch (_) {}
+  text = text
+    .replace(/&amp;/gi, '&')
+    .replace(/&/g, ' and ')
+    .replace(/\band\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text;
+}
+
+function timstreamsMatchKey(names) {
+  if (!Array.isArray(names) || names.length !== 2) return null;
+  const normalized = names.map(timstreamsNormalizeTeamName);
+  if (normalized.some((name) => !name)) return null;
+  return normalized.sort().join('|');
+}
+
+function timstreamsEventMatchKey(title) {
+  const participants = timstreamsSplitParticipants(title);
+  return timstreamsMatchKey(participants.map((participant) => participant.name));
+}
+
+function timstreamsItemMatchKeys(item) {
+  const keys = new Set();
+  const titleKey = timstreamsEventMatchKey(item && item.title);
+  if (titleKey) keys.add(titleKey);
+  if (Array.isArray(item && item.participants)) {
+    const participantKey = timstreamsMatchKey(
+      item.participants.map((participant) => participant && participant.name),
+    );
+    if (participantKey) keys.add(participantKey);
+  }
+  return keys;
+}
+
 function timstreamsStreamUrl(value) {
   const url = timstreamsText(value);
   return /^https?:\/\/[^\s]+$/i.test(url) ? url : null;
@@ -17554,6 +17601,22 @@ function timstreamsStreamUrl(value) {
 function timstreamsEventKey(event, index) {
   const slug = timstreamsText(event && event.url);
   return slug || `${timstreamsText(event && event.name)}:${index}`;
+}
+
+function timstreamsFotmobId(value) {
+  const text = timstreamsText(value);
+  const match = text.match(/^(?:fotmob:)?(\d+)$/i);
+  return match == null ? null : match[1];
+}
+
+function timstreamsEventFotmobId(event) {
+  const values = [event && event.url, event && event.id, event && event.eventId];
+  for (const value of values) {
+    const text = timstreamsText(value).split(/[?#]/, 1)[0].replace(/\/+$/, '');
+    const match = text.match(/(?:^|[-/])(\d+)$/);
+    if (match != null) return match[1];
+  }
+  return null;
 }
 
 function timstreamsSourceId(event, channelIndex) {
@@ -17623,6 +17686,7 @@ function timstreamsCatalogEntry(event, index, genreMap, nowMs) {
     sportId: typeof sportIdOf === 'function' ? sportIdOf(sportName) : sportName,
     sportName,
     live: state === 'live',
+    fotmobId: timstreamsEventFotmobId(event),
     item,
   };
 }
@@ -17662,25 +17726,16 @@ function timstreamsFindEvent(events, item) {
       if (direct != null) return direct;
     } catch (_) {}
   }
-  const title = timstreamsText(item && item.title).toLowerCase()
-    .replace(/\s+/g, ' ').replace(/\s+vs?\.?\s+/g, ' vs ')
-    .trim();
-  if (title) {
-    const exact = events.find((event) => timstreamsText(event.name).toLowerCase()
-      .replace(/\s+/g, ' ').replace(/\s+vs?\.?\s+/g, ' vs ').trim() === title);
-    if (exact != null) return exact;
+  const fotmobId = timstreamsFotmobId(itemId);
+  if (fotmobId != null) {
+    const byId = events.find((event) =>
+      timstreamsEventFotmobId(event) === fotmobId,
+    );
+    if (byId != null) return byId;
   }
-  if (Array.isArray(item && item.participants) && item.participants.length === 2) {
-    const names = item.participants.map((participant) => timstreamsText(participant.name).toLowerCase());
-    return events.find((event) => {
-      const participants = timstreamsSplitParticipants(event.name);
-      if (participants.length !== 2) return false;
-      const eventNames = participants.map((participant) => participant.name.toLowerCase());
-      return eventNames[0] === names[0] && eventNames[1] === names[1] ||
-        eventNames[0] === names[1] && eventNames[1] === names[0];
-    });
-  }
-  return null;
+  const matchKeys = timstreamsItemMatchKeys(item);
+  if (matchKeys.size === 0) return null;
+  return events.find((event) => matchKeys.has(timstreamsEventMatchKey(event && event.name)));
 }
 
 async function timstreamsSources(args) {
