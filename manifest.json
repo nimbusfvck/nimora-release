@@ -2,14 +2,13 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.101",
+  "version": "1.0.102",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
   "entry": "bundle.js",
   "categories": [
     "all",
-    "live",
     "sport",
     "movie",
     "tv",
@@ -27,7 +26,7 @@
         {
           "id": "fixtures_schedule",
           "name": "Live Timeline",
-          "categories": ["live"],
+          "categories": [],
           "kind": "liveEvent",
           "display": "timeline"
         },
@@ -201,7 +200,7 @@
         {
           "id": "league_channels",
           "name": "League Channels",
-          "categories": ["live"],
+          "categories": [],
           "kind": "channel",
           "display": "row"
         }

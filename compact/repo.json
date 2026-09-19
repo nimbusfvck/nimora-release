@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.89",
+      "version": "1.0.90",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Hid the Live category from Nimora catalogs; Compact keeps its separate Schedule category.",
         "Added Sports as a league-grouped row catalog, improved football name matching, and hid ended matches from the Sport catalog.",
         "Added a minimum TMDB rating of 6 to the Korean Series row so low-rated or unrated titles are excluded.",
         "Improved Indonesian Movies and Korean movie/series rows by removing the 180-day cutoff, and increased TMDB poster artwork to w780 for sharper mobile heroes.",

@@ -2,14 +2,13 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.89",
+  "version": "1.0.90",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
   "entry": "bundle.js",
   "categories": [
     "all",
-    "live",
     "schedule",
     "sport",
     "movie",
@@ -25,7 +24,7 @@
         {
           "id": "fixtures_schedule",
           "name": "Sports Schedule",
-          "categories": ["live", "schedule"],
+          "categories": ["schedule"],
           "kind": "liveEvent",
           "display": "timeline"
         },
@@ -84,7 +83,7 @@
         {
           "id": "league_channels",
           "name": "League Channels",
-          "categories": ["live"],
+          "categories": [],
           "kind": "channel",
           "display": "row"
         }
