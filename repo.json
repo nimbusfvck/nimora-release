@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.103",
+      "version": "1.0.104",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Moved CDNLiveTV event-feed requests out of Home catalog refresh while keeping CDNLiveTV available as an on-demand stream provider.",
         "Removed the Live category; Sports is the only sports category.",
         "Hid the Live category from Nimora catalogs; Compact kept its separate Schedule category.",
         "Added Sports as a league-grouped row catalog, improved football name matching, and hid ended matches from the Sport catalog.",
@@ -248,7 +249,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "edacd36969cbf2d8d9d3c64225266f951c2b03b85601b65b6c8346d694bcae46"
+      "bundleSha256": "e077d55a04cab322bbcf23657344be8626fa9f551bb917a89ca496c50775a29b"
     }
   ]
 }

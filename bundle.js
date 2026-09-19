@@ -1120,15 +1120,6 @@ async function getRoxieSportEntries(nowMs) {
   }
 }
 
-async function getCdnLiveTvSportEntries(nowMs) {
-  if (typeof globalThis.__cdnLiveTvSportEntries !== 'function') return [];
-  try {
-    return await globalThis.__cdnLiveTvSportEntries(nowMs);
-  } catch (_) {
-    return [];
-  }
-}
-
 async function getTimstreamsSportEntries(nowMs) {
   if (typeof globalThis.__timstreamsSportEntries !== 'function') return [];
   try {
@@ -1453,11 +1444,10 @@ async function fixturesCatalog(query) {
   // and the other catalog entries are judged against the same "now".
   const nowMs = Date.now();
 
-  let [matches, popularLeagues, roxieEntries, cdnLiveTvEntries, timstreamsEntries] = await Promise.all([
+  let [matches, popularLeagues, roxieEntries, timstreamsEntries] = await Promise.all([
     fetchFixturesMemo(nowMs),
     fetchPopularLeaguesMemo(),
     getRoxieSportEntries(nowMs),
-    getCdnLiveTvSportEntries(nowMs),
     getTimstreamsSportEntries(nowMs),
   ]);
   // Keep the complete FotMob feed as the identity authority for provider
@@ -1479,7 +1469,6 @@ async function fixturesCatalog(query) {
   providerEntries = dedupeProviderEntries([
     ...providerEntries,
     ...roxieEntries,
-    ...cdnLiveTvEntries,
     ...timstreamsEntries,
   ], nowMs);
   return buildPage(
@@ -20151,7 +20140,7 @@ globalThis.__streamProviders.push({
   resolve: roxieResolve,
 });
 
-// CDNLiveTV football event contributor and pure-JS HLS resolver.
+// CDNLiveTV stream resolver for football events from nimora.matches.
 //
 // The upstream API exposes event metadata and a channel player page. The
 // player page builds its playlist URL from base64-encoded chunks, so the
@@ -20166,9 +20155,6 @@ const CDN_LIVE_TV_ORIGIN = 'https://cdnlivetv.tv';
 const CDN_LIVE_TV_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36';
-const CDN_LIVE_TV_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const CDN_LIVE_TV_RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
-const CDN_LIVE_TV_EVENT_DURATION_MS = 3 * 60 * 60 * 1000;
 
 const CDN_LIVE_TV_MATCH_PROFILE = {
   aliases: {
@@ -20228,21 +20214,6 @@ function cdnLiveTvDate(value) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
-function cdnLiveTvStatus(value, startsAt, endsAt, nowMs) {
-  const status = cdnLiveTvNormalize(value);
-  if (/\b(live|in|playing|on air|on)\b/.test(status)) return 'live';
-  if (/\b(end|ended|finished|complete|completed|closed)\b/.test(status)) {
-    return 'ended';
-  }
-  const kickoff = Date.parse(startsAt);
-  const end = Date.parse(endsAt);
-  if (Number.isFinite(end) && nowMs >= end) return 'ended';
-  if (Number.isFinite(kickoff) && nowMs - kickoff >= CDN_LIVE_TV_EVENT_DURATION_MS) {
-    return 'ended';
-  }
-  return 'scheduled';
-}
-
 function cdnLiveTvEventId(item) {
   const gameId = cdnLiveTvText(item && item.gameID);
   if (gameId) return gameId;
@@ -20257,7 +20228,6 @@ function cdnLiveTvMapEvent(item) {
   const home = cdnLiveTvText(item.homeTeam);
   const away = cdnLiveTvText(item.awayTeam);
   const startsAt = cdnLiveTvDate(item.start);
-  const endsAt = cdnLiveTvDate(item.end);
   if (!home || !away || !startsAt) return null;
   const channels = Array.isArray(item.channels)
     ? item.channels
@@ -20275,8 +20245,6 @@ function cdnLiveTvMapEvent(item) {
     away,
     title: `${home} vs ${away}`,
     startsAt,
-    endsAt,
-    status: cdnLiveTvText(item.status),
     channels,
   };
 }
@@ -20311,59 +20279,6 @@ async function cdnLiveTvFetchJson() {
   }
   const body = response && typeof response.body === 'string' ? response.body : '';
   return cdnLiveTvEvents(JSON.parse(body));
-}
-
-function cdnLiveTvRelevant(event, nowMs) {
-  const startsAt = Date.parse(event.startsAt);
-  return Number.isFinite(startsAt) &&
-    startsAt - nowMs <= CDN_LIVE_TV_UPCOMING_WINDOW_MS &&
-    nowMs - startsAt <= CDN_LIVE_TV_RECENT_WINDOW_MS;
-}
-
-function cdnLiveTvCatalogEntry(event, nowMs = Date.now()) {
-  const state = cdnLiveTvStatus(event.status, event.startsAt, event.endsAt, nowMs);
-  const item = {
-    ref: {
-      extensionId: globalThis.__nimoraExtensionId || 'nimora',
-      providerId: 'nimora.matches',
-      id: `cdnlivetv:${event.id}`,
-    },
-    kind: 'event',
-    title: event.title,
-    subtitle: 'Football',
-    schedule: typeof eventSchedule === 'function'
-      ? eventSchedule(
-          Date.parse(event.startsAt),
-          state,
-          'Football',
-          event.title,
-          event.endsAt,
-        )
-      : {
-          startsAt: event.startsAt,
-          endsAt: event.endsAt || new Date(
-            Date.parse(event.startsAt) + CDN_LIVE_TV_EVENT_DURATION_MS,
-          ).toISOString(),
-          state,
-        },
-    participants: [{ name: event.home }, { name: event.away }],
-  };
-  return {
-    sportId: 'football',
-    sportName: 'Football',
-    live: state === 'live',
-    item,
-  };
-}
-
-async function cdnLiveTvSportEntries(nowMs = Date.now()) {
-  try {
-    return (await cdnLiveTvFetchJson())
-      .filter((event) => cdnLiveTvRelevant(event, nowMs))
-      .map((event) => cdnLiveTvCatalogEntry(event, nowMs));
-  } catch (_) {
-    return [];
-  }
 }
 
 function cdnLiveTvSourceId(payload) {
@@ -20571,7 +20486,6 @@ async function cdnLiveTvResolve(sourceId) {
 }
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
-globalThis.__cdnLiveTvSportEntries = cdnLiveTvSportEntries;
 globalThis.__streamProviders.push({
   providerKey: CDN_LIVE_TV_PROVIDER_KEY,
   sources: cdnLiveTvSources,
