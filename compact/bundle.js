@@ -17853,6 +17853,8 @@ const DADDYLIVE_PROVIDER_KEY = 'daddylive';
 const DADDYLIVE_ORIGIN = globalThis.__daddyliveOrigin || 'https://dlive.sx';
 const DADDYLIVE_PLAYERS = ['stream', 'cast', 'watch', 'plus', 'casting', 'player'];
 const DADDYLIVE_MAX_CHANNELS = 3;
+const DADDYLIVE_CANDIDATE_WINDOW = 5;
+const DADDYLIVE_RESOLVE_CACHE_MS = 15000;
 const DADDYLIVE_MATCH_PROFILE = {
   aliases: {
     'man utd': 'manchester united', 'man united': 'manchester united',
@@ -17869,6 +17871,7 @@ const DADDYLIVE_UA =
   '(KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36';
 let daddyliveScheduleCache = null;
 let daddyliveSchedulePending = null;
+const daddyliveResolveCache = new Map();
 
 function daddyliveText(value) { return value == null ? '' : String(value).trim(); }
 function daddyliveDecodeEntities(value) {
@@ -18099,9 +18102,18 @@ async function daddyliveSources(args) {
   try {
     const event = daddyliveFindEvent(await daddyliveFetchSchedule(), item);
     if (!event) return {sources: []};
-    return {sources: event.channels.slice(0, DADDYLIVE_MAX_CHANNELS).map((channel) => ({
+    const candidates = event.channels.slice(0, DADDYLIVE_CANDIDATE_WINDOW).map((channel) => ({
       id: daddyliveSourceId(channel), label: channel.name, provider: 'DaddyLive', providerId: DADDYLIVE_PROVIDER_ID,
-    }))};
+    }));
+    const validated = await Promise.all(candidates.map(async (source) => {
+      try {
+        await daddyliveResolve(source.id);
+        return source;
+      } catch (_) {
+        return null;
+      }
+    }));
+    return {sources: validated.filter(Boolean).slice(0, DADDYLIVE_MAX_CHANNELS)};
   } catch (_) { return {sources: []}; }
 }
 
@@ -18240,7 +18252,7 @@ async function daddyliveValidateHls(url, referer) {
   const segment = await fetch(childUrl, {headers: {...headers, Range: 'bytes=0-0'}});
   return segment.status >= 200 && segment.status < 300 && (segment.body || '').length > 0;
 }
-async function daddyliveResolve(sourceId) {
+async function daddyliveResolveFresh(sourceId) {
   const prefix = `${DADDYLIVE_PROVIDER_KEY}:`;
   if (!daddyliveText(sourceId).startsWith(prefix)) throw new Error('Invalid DaddyLive source ID');
   const channel = daddyliveDecode(sourceId.slice(prefix.length));
@@ -18279,6 +18291,25 @@ async function daddyliveResolve(sourceId) {
     } catch (error) { lastError = error; }
   }
   throw new Error(`DaddyLive channel ${channel.name || channel.id} could not resolve: ${lastError && lastError.message || 'no playable player'}`);
+}
+
+async function daddyliveResolve(sourceId) {
+  const cached = daddyliveResolveCache.get(sourceId);
+  if (cached && cached.until > Date.now()) return cached.result;
+  if (cached) daddyliveResolveCache.delete(sourceId);
+  const result = await daddyliveResolveFresh(sourceId);
+  const now = Date.now();
+  for (const [key, entry] of daddyliveResolveCache) {
+    if (entry.until <= now) daddyliveResolveCache.delete(key);
+  }
+  while (daddyliveResolveCache.size >= 40) {
+    daddyliveResolveCache.delete(daddyliveResolveCache.keys().next().value);
+  }
+  daddyliveResolveCache.set(sourceId, {
+    result,
+    until: now + DADDYLIVE_RESOLVE_CACHE_MS,
+  });
+  return result;
 }
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
