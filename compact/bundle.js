@@ -18762,7 +18762,7 @@ const DADDYLIVE_PROVIDER_KEY = 'daddylive';
 const DADDYLIVE_ORIGIN = globalThis.__daddyliveOrigin || 'https://dlive.sx';
 const DADDYLIVE_PLAYERS = ['stream', 'cast', 'watch', 'plus', 'casting', 'player'];
 const DADDYLIVE_MAX_CHANNELS = 3;
-const DADDYLIVE_CANDIDATE_WINDOW = 5;
+const DADDYLIVE_PROBE_CONCURRENCY = 3;
 const DADDYLIVE_HANDOFF_CACHE_MS = 2500;
 const DADDYLIVE_MATCH_PROFILE = {
   aliases: {
@@ -19020,21 +19020,51 @@ async function daddyliveSources(args) {
   try {
     const event = daddyliveFindEvent(await daddyliveFetchSchedule(), item);
     if (!event) return {sources: []};
-    const candidates = event.channels.slice(0, DADDYLIVE_CANDIDATE_WINDOW).map((channel) => ({
+    // Keep the complete event list available. The bounded probe below still
+    // opens only three channels at a time and stops as soon as three valid
+    // sources are found, so larger events do not create a request fan-out.
+    const candidates = event.channels.map((channel) => ({
       id: daddyliveSourceId(channel), label: channel.name, provider: 'DaddyLive', providerId: DADDYLIVE_PROVIDER_ID,
     }));
     const validated = [];
+    let nextIndex = 0;
+    let active = 0;
     let settled = 0;
+    let validCount = 0;
     await new Promise((resolve) => {
+      let finished = false;
       const finish = () => {
-        if (validated.length >= DADDYLIVE_MAX_CHANNELS || settled >= candidates.length) resolve();
+        if (finished) return;
+        if (validCount >= DADDYLIVE_MAX_CHANNELS || settled >= candidates.length) {
+          finished = true;
+          resolve();
+        }
       };
-      candidates.forEach((source, index) => {
-        daddyliveResolve(source.id)
-          .then(() => { validated[index] = source; })
-          .catch(() => {})
-          .then(() => { settled += 1; finish(); });
-      });
+      const launch = () => {
+        while (
+          !finished &&
+          active < DADDYLIVE_PROBE_CONCURRENCY &&
+          nextIndex < candidates.length
+        ) {
+          const index = nextIndex++;
+          const source = candidates[index];
+          active += 1;
+          daddyliveResolve(source.id)
+            .then(() => {
+              validated[index] = source;
+              validCount += 1;
+            })
+            .catch(() => {})
+            .then(() => {
+              active -= 1;
+              settled += 1;
+              finish();
+              launch();
+            });
+        }
+        finish();
+      };
+      launch();
     });
     return {sources: validated.filter(Boolean).slice(0, DADDYLIVE_MAX_CHANNELS)};
   } catch (_) { return {sources: []}; }

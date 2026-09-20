@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.114",
+      "version": "1.0.115",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Probe the full DaddyLive event channel list lazily, using three concurrent checks and stopping as soon as three playable sources are found.",
         "Start live playback from the first playable provider, keep slower providers as background fallbacks, and make DaddyLive and Cloudflare-blocked channels fail fast.",
         "Refresh DaddyLive playback URLs on every renewal while deduplicating only concurrent resolves, so expired live tokens are not reused.",
         "Reduced the Sports catalog upcoming window to three days and limited FotMob date fetches accordingly, with Roxie and TimStreams using the same window.",
@@ -259,7 +260,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "3e1fa992e866940f6e80811c53b27b1a5c469816508b837bbc9ec46364daec0a"
+      "bundleSha256": "2a6504831e233c46807412418990d2f847a13b0d16e6d20d29894a464900a5ee"
     }
   ]
 }

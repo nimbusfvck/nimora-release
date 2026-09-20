@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.102",
+      "version": "1.0.103",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Probe the full DaddyLive event channel list lazily, using three concurrent checks and stopping as soon as three playable sources are found.",
         "Start live playback from the first playable provider, keep slower providers as background fallbacks, and make DaddyLive and Cloudflare-blocked channels fail fast.",
         "Refresh DaddyLive playback URLs on every renewal while deduplicating only concurrent resolves, so expired live tokens are not reused.",
         "Reduced the Sports catalog upcoming window to three days and limited FotMob date fetches accordingly, with Roxie and TimStreams using the same window.",
@@ -119,7 +120,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "8ce149ef0babb99f12e68046843e1e354fd1d21159f6d32b927ca4e23f2edcba"
+      "bundleSha256": "c4a268ac207d743460ce5c6b2f131606d45347db3634f24422f104c755d230d1"
     }
   ]
 }
