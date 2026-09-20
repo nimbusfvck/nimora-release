@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.110",
+      "version": "1.0.111",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed DaddyLive schedule grouping for crowded events so channels map to the correct football match before HLS validation.",
         "Avoided opening the Cloudflare WebView for VidCore and skip VidCore quickly when its page is blocked; VidRock now rejects unavailable HLS playlists before playback fallback.",
         "Added VidCore as a multi-resolution HLS provider with Wyzie subtitle enrichment and reordered VOD provider priority based on observed resolve speed.",
         "Added VidFast as a fresh multi-resolution HLS provider with server fallback and optional subtitle tracks.",
@@ -255,7 +256,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "56c05fb89192d427dec1d76346c4717887c235b5995ceda3a689982702f1b422"
+      "bundleSha256": "41afae70d1c1cf82bd5faac0d0d7e825be9abcb446fa27cc28d41e47347f533f"
     }
   ]
 }

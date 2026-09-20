@@ -18875,6 +18875,12 @@ function daddyliveWatchLink(node, memo) {
     return {node, id, name: daddyliveNodeText(node, memo) || `Channel ${id}`};
   } catch (_) { return null; }
 }
+function daddyliveScheduleEventContainer(node) {
+  for (let parent = node && node.parent; parent && parent.tag !== 'root'; parent = parent.parent) {
+    if (/(^|\s)schedule__event(?:\s|$)/.test(parent.attrs.class || '')) return parent;
+  }
+  return null;
+}
 function daddyliveParseSchedule(html) {
   const root = daddyliveParseHtml(html);
   const nodes = [];
@@ -18893,14 +18899,16 @@ function daddyliveParseSchedule(html) {
   const blocks = new Set(['article', 'div', 'li', 'p', 'section', 'td', 'tr']);
   const groups = new Map();
   for (const link of links) {
-    let chosen = link.node;
-    for (let parent = link.node.parent; parent && parent.tag !== 'root'; parent = parent.parent) {
-      if (!blocks.has(parent.tag)) continue;
-      const text = daddyliveNodeText(parent, memo);
-      if (text.length > 700) break;
-      chosen = parent;
-      if ((text.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/g) || []).length === 1 &&
-          (linksByAncestor.get(parent) || []).length <= 12) break;
+    let chosen = daddyliveScheduleEventContainer(link.node) || link.node;
+    if (chosen === link.node) {
+      for (let parent = link.node.parent; parent && parent.tag !== 'root'; parent = parent.parent) {
+        if (!blocks.has(parent.tag)) continue;
+        const text = daddyliveNodeText(parent, memo);
+        if (text.length > 700) break;
+        chosen = parent;
+        if ((text.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/g) || []).length === 1 &&
+            (linksByAncestor.get(parent) || []).length <= 12) break;
+      }
     }
     const group = groups.get(chosen) || [];
     group.push(link);
