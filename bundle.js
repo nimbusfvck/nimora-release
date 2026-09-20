@@ -2277,6 +2277,45 @@ function vidfastSubtitles(streamData) {
     }));
 }
 
+function vidfastSubtitleLookupUrl(media) {
+  const params = [`id=${encodeURIComponent(media.tmdbId)}`];
+  if (media.kind === 'tv') {
+    params.push(`season=${encodeURIComponent(media.season)}`);
+    params.push(`episode=${encodeURIComponent(media.episode)}`);
+  }
+  return `${VIDFAST_BASE}/wyzie?${params.join('&')}`;
+}
+
+async function vidfastExternalSubtitles(media) {
+  const entries = await vidfastJson(vidfastSubtitleLookupUrl(media));
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((entry) => entry && typeof entry.url === 'string')
+    .map((entry) => ({
+      language: entry.language || entry.display || '',
+      url: entry.url,
+      label: entry.display || entry.language || '',
+    }));
+}
+
+function vidfastMergeSubtitles(...subtitleLists) {
+  const merged = [];
+  const seen = new Set();
+  for (const subtitles of subtitleLists) {
+    for (const subtitle of subtitles || []) {
+      const url = String(subtitle.url || '').trim();
+      const label = String(subtitle.label || subtitle.language || '')
+        .trim()
+        .toLowerCase();
+      const key = label.length > 0 ? `label:${label}` : `url:${url}`;
+      if (url.length === 0 || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(subtitle);
+    }
+  }
+  return merged;
+}
+
 async function vidfastCandidate(server, streamBase, csrfToken) {
   if (server == null || typeof server.data !== 'string') return null;
   const streamUrl = `${String(streamBase).replace(/\/$/, '')}/${server.data}`;
@@ -2352,11 +2391,12 @@ async function vidfastResolveMedia(media) {
   if (selected == null) {
     throw new Error('VidFast: no multi-resolution HLS server');
   }
+  const externalSubtitles = await vidfastExternalSubtitles(media);
   return {
     url: selected.url,
     format: 'hls',
     headers: vidfastHeaders(),
-    subtitles: selected.subtitles,
+    subtitles: vidfastMergeSubtitles(selected.subtitles, externalSubtitles),
   };
 }
 
@@ -2408,6 +2448,712 @@ globalThis.__streamProviders.push({
   providerKey: VIDFAST_PROVIDER_KEY,
   sources: vidfastSources,
   resolve: vidfastResolveSource,
+});
+
+// VidCore multi-resolution HLS provider. Resolved URLs and bootstrap tokens
+// are deliberately kept out of source ids and refreshed for every resolve.
+
+const VIDCORE_BASE = globalThis.__vidcoreBaseUrl || 'https://vidcore.io';
+const VIDCORE_ENCDEC_BASE =
+  globalThis.__vidcoreEncDecBaseUrl || 'https://enc-dec.app/api';
+const VIDCORE_PROVIDER_KEY = 'vidcore';
+const VIDCORE_PROVIDER_ID = 'nimora.vidcore';
+const VIDCORE_UA =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36';
+
+function vidcoreHeaders(extra) {
+  return {
+    Accept: '*/*',
+    Origin: VIDCORE_BASE,
+    Referer: `${VIDCORE_BASE}/`,
+    'User-Agent': VIDCORE_UA,
+    'X-Requested-With': 'XMLHttpRequest',
+    ...(extra || {}),
+  };
+}
+
+function vidcoreMediaRef(refId) {
+  if (typeof refId !== 'string') return null;
+  if (refId.startsWith('movie:')) {
+    const tmdbId = refId.slice('movie:'.length);
+    return tmdbId.length > 0 ? {kind: 'movie', tmdbId} : null;
+  }
+  const match = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
+  return match == null
+    ? null
+    : {
+        kind: 'tv',
+        tmdbId: match[1],
+        season: match[2],
+        episode: match[3],
+      };
+}
+
+function encodeVidcoreSourceId(media) {
+  return encodeURIComponent(JSON.stringify(media));
+}
+
+function decodeVidcoreSourceId(encoded) {
+  try {
+    return JSON.parse(decodeURIComponent(encoded));
+  } catch (_) {
+    return null;
+  }
+}
+
+function vidcorePageUrl(media) {
+  if (media.kind === 'movie') {
+    return `${VIDCORE_BASE}/movie/${encodeURIComponent(media.tmdbId)}`;
+  }
+  return `${VIDCORE_BASE}/tv/${encodeURIComponent(media.tmdbId)}/` +
+    `${encodeURIComponent(media.season)}/${encodeURIComponent(media.episode)}`;
+}
+
+async function vidcoreFetch(url, options) {
+  try {
+    return await fetch(url, options);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function vidcoreJson(url, options) {
+  const response = await vidcoreFetch(url, options);
+  if (response == null || response.status < 200 || response.status >= 300) {
+    return null;
+  }
+  try {
+    return JSON.parse(response.body);
+  } catch (_) {
+    return null;
+  }
+}
+
+function vidcoreTokenFromPage(body) {
+  if (typeof body !== 'string') return null;
+  const match = /\\?"(?:en|token)\\?"\s*:\s*\\?"([^"\\]+)\\?"/.exec(body);
+  return match == null ? null : match[1];
+}
+
+async function vidcoreDecrypt(text) {
+  if (typeof text !== 'string' || text.length === 0) return null;
+  const data = await vidcoreJson(`${VIDCORE_ENCDEC_BASE}/dec-vidcore`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text}),
+  });
+  return data && data.status === 200 ? data.result : null;
+}
+
+function vidcoreAbsoluteUrl(raw, base) {
+  if (typeof raw !== 'string' || raw.trim().length === 0) return null;
+  const value = raw.trim();
+  if (/^https?:\/\//i.test(value)) return value;
+  const origin = /^(https?:\/\/[^/]+)/i.exec(base);
+  if (origin == null) return null;
+  if (value.startsWith('/')) return `${origin[1]}${value}`;
+  const basePath = base.slice(0, base.lastIndexOf('/') + 1);
+  const combined = `${basePath}${value}`;
+  const parts = [];
+  for (const part of combined.split('/')) {
+    if (part === '..') {
+      if (parts.length > 3) parts.pop();
+    } else if (part !== '.' && part.length > 0) {
+      parts.push(part);
+    }
+  }
+  return `${parts[0]}//${parts.slice(1).join('/')}`;
+}
+
+function vidcorePlaylistReferences(body) {
+  if (typeof body !== 'string') return [];
+  return body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'));
+}
+
+function vidcoreVariantReference(body) {
+  if (typeof body !== 'string') return null;
+  const lines = body.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith('#EXT-X-STREAM-INF:')) continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      const candidate = lines[j].trim();
+      if (candidate.length === 0 || candidate.startsWith('#')) continue;
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function vidcoreHasMultipleResolutions(body) {
+  if (typeof body !== 'string' || !body.startsWith('#EXTM3U')) return false;
+  const resolutions = [...body.matchAll(
+    /#EXT-X-STREAM-INF:[^\r\n]*RESOLUTION=(\d+x\d+)/g,
+  )].map((match) => match[1]);
+  return new Set(resolutions).size >= 2;
+}
+
+async function vidcoreProbeMultiResolution(url) {
+  const headers = vidcoreHeaders();
+  const masterResponse = await vidcoreFetch(url, {headers});
+  if (
+    masterResponse == null ||
+    masterResponse.status < 200 ||
+    masterResponse.status >= 300
+  ) {
+    return false;
+  }
+  const master = masterResponse.body;
+  if (!vidcoreHasMultipleResolutions(master)) return false;
+
+  const variantReference = vidcoreVariantReference(master);
+  const variantUrl = vidcoreAbsoluteUrl(variantReference, url);
+  if (variantUrl == null) return false;
+  const variantResponse = await vidcoreFetch(variantUrl, {headers});
+  if (
+    variantResponse == null ||
+    variantResponse.status < 200 ||
+    variantResponse.status >= 300 ||
+    typeof variantResponse.body !== 'string' ||
+    !variantResponse.body.startsWith('#EXTM3U')
+  ) {
+    return false;
+  }
+
+  const segmentReference = vidcorePlaylistReferences(variantResponse.body)[0];
+  const segmentUrl = vidcoreAbsoluteUrl(segmentReference, variantUrl);
+  if (segmentUrl == null) return false;
+  const segmentResponse = await vidcoreFetch(segmentUrl, {
+    headers: {...headers, Range: 'bytes=0-2047'},
+  });
+  return (
+    segmentResponse != null &&
+    segmentResponse.status >= 200 &&
+    segmentResponse.status < 300 &&
+    typeof segmentResponse.body === 'string' &&
+    segmentResponse.body.length > 0
+  );
+}
+
+function vidcoreSubtitles(streamData) {
+  const tracks = streamData && Array.isArray(streamData.tracks)
+    ? streamData.tracks
+    : [];
+  const subtitles = [];
+  const seen = new Set();
+  for (const track of tracks) {
+    if (track == null || typeof (track.file || track.url) !== 'string') {
+      continue;
+    }
+    const url = track.file || track.url;
+    const label = track.label || track.language || track.lang || 'Subtitle';
+    const key = String(label).trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    subtitles.push({
+      language: track.language || track.lang || label,
+      url,
+      label,
+    });
+  }
+  return subtitles;
+}
+
+function vidcoreSubtitleLookupUrl(media) {
+  const params = [`id=${encodeURIComponent(media.tmdbId)}`];
+  if (media.kind === 'tv') {
+    params.push(`season=${encodeURIComponent(media.season)}`);
+    params.push(`episode=${encodeURIComponent(media.episode)}`);
+  }
+  return `${VIDCORE_BASE}/wyzie?${params.join('&')}`;
+}
+
+async function vidcoreExternalSubtitles(media) {
+  const entries = await vidcoreJson(vidcoreSubtitleLookupUrl(media));
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((entry) => entry && typeof entry.url === 'string')
+    .map((entry) => ({
+      language: entry.language || entry.display || '',
+      url: entry.url,
+      label: entry.display || entry.language || '',
+    }));
+}
+
+function vidcoreMergeSubtitles(...subtitleLists) {
+  const merged = [];
+  const seen = new Set();
+  for (const subtitles of subtitleLists) {
+    for (const subtitle of subtitles || []) {
+      const url = String(subtitle.url || '').trim();
+      const label = String(subtitle.label || subtitle.language || '')
+        .trim()
+        .toLowerCase();
+      const key = label.length > 0 ? `label:${label}` : `url:${url}`;
+      if (url.length === 0 || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(subtitle);
+    }
+  }
+  return merged;
+}
+
+async function vidcoreCandidate(server, streamBase, csrfToken) {
+  if (server == null || typeof server.data !== 'string') return null;
+  const streamUrl = `${String(streamBase).replace(/\/$/, '')}/${server.data}`;
+  const encryptedResponse = await vidcoreFetch(streamUrl, {
+    method: 'POST',
+    headers: vidcoreHeaders(
+      csrfToken ? {'X-CSRF-Token': csrfToken} : {},
+    ),
+  });
+  if (
+    encryptedResponse == null ||
+    encryptedResponse.status < 200 ||
+    encryptedResponse.status >= 300
+  ) {
+    return null;
+  }
+  const streamData = await vidcoreDecrypt(encryptedResponse.body);
+  const url = vidcoreAbsoluteUrl(streamData && streamData.url, streamUrl);
+  if (url == null || !(await vidcoreProbeMultiResolution(url))) return null;
+  return {url, subtitles: vidcoreSubtitles(streamData)};
+}
+
+async function vidcoreResolveMedia(media) {
+  const pageResponse = await vidcoreFetch(vidcorePageUrl(media), {
+    headers: vidcoreHeaders(),
+  });
+  if (
+    pageResponse == null ||
+    pageResponse.status < 200 ||
+    pageResponse.status >= 300
+  ) {
+    throw new Error('VidCore: page request failed');
+  }
+  const encodedToken = vidcoreTokenFromPage(pageResponse.body);
+  if (encodedToken == null) throw new Error('VidCore: page token missing');
+
+  const encodedData = await vidcoreJson(
+    `${VIDCORE_ENCDEC_BASE}/enc-vidcore?text=${encodeURIComponent(encodedToken)}`,
+  );
+  const decoded = encodedData && encodedData.status === 200
+    ? encodedData.result
+    : null;
+  if (
+    decoded == null ||
+    typeof decoded.servers !== 'string' ||
+    typeof decoded.stream !== 'string'
+  ) {
+    throw new Error('VidCore: server bootstrap failed');
+  }
+
+  const csrfToken = typeof decoded.token === 'string' ? decoded.token : null;
+  const serversResponse = await vidcoreFetch(decoded.servers, {
+    method: 'POST',
+    headers: vidcoreHeaders(
+      csrfToken ? {'X-CSRF-Token': csrfToken} : {},
+    ),
+  });
+  if (
+    serversResponse == null ||
+    serversResponse.status < 200 ||
+    serversResponse.status >= 300
+  ) {
+    throw new Error('VidCore: server list request failed');
+  }
+  const servers = await vidcoreDecrypt(serversResponse.body);
+  if (!Array.isArray(servers) || servers.length === 0) {
+    throw new Error('VidCore: no servers returned');
+  }
+
+  const candidates = await Promise.all(
+    servers.map((server) => vidcoreCandidate(server, decoded.stream, csrfToken)),
+  );
+  const selected = candidates.find((candidate) => candidate != null);
+  if (selected == null) {
+    throw new Error('VidCore: no multi-resolution HLS server');
+  }
+  const externalSubtitles = await vidcoreExternalSubtitles(media);
+  return {
+    url: selected.url,
+    format: 'hls',
+    headers: vidcoreHeaders(),
+    subtitles: vidcoreMergeSubtitles(selected.subtitles, externalSubtitles),
+  };
+}
+
+async function vidcoreSources(args) {
+  const enabled = args.enabledProviders;
+  if (enabled != null && enabled.indexOf(VIDCORE_PROVIDER_ID) === -1) {
+    return {sources: []};
+  }
+  const item = args.item || {};
+  const refId = (item.ref && item.ref.id) || item.id || '';
+  const media = vidcoreMediaRef(refId);
+  if (media == null) return {sources: []};
+  return {
+    sources: [{
+      id: `${VIDCORE_PROVIDER_KEY}:${encodeVidcoreSourceId(media)}`,
+      label: 'VidCore · Multi-Resolution',
+      provider: 'Nimora',
+      providerId: VIDCORE_PROVIDER_ID,
+    }],
+  };
+}
+
+async function vidcoreResolveSource(sourceId) {
+  const prefix = `${VIDCORE_PROVIDER_KEY}:`;
+  if (!sourceId.startsWith(prefix)) {
+    throw new Error(`Invalid VidCore sourceId: ${sourceId}`);
+  }
+  const media = decodeVidcoreSourceId(sourceId.slice(prefix.length));
+  const validMovie = media != null &&
+    media.kind === 'movie' &&
+    typeof media.tmdbId === 'string' &&
+    media.tmdbId.length > 0;
+  const validEpisode = media != null &&
+    media.kind === 'tv' &&
+    typeof media.tmdbId === 'string' &&
+    media.tmdbId.length > 0 &&
+    typeof media.season === 'string' &&
+    media.season.length > 0 &&
+    typeof media.episode === 'string' &&
+    media.episode.length > 0;
+  if (!validMovie && !validEpisode) {
+    throw new Error('VidCore: malformed source id');
+  }
+  return vidcoreResolveMedia(media);
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: VIDCORE_PROVIDER_KEY,
+  sources: vidcoreSources,
+  resolve: vidcoreResolveSource,
+});
+
+// VidEasy stream provider, in JS on the host `fetch`/`codec` API.
+//
+// VidEasy (player.videasy.to) sources streams from api.speedracelight.com,
+// which returns seed-encrypted JSON. We decrypt via enc-dec.app/api/dec-videasy.
+//
+// Servers available (language info from EncDecEndpoints README):
+//   cdn        -> Original (may have 4K)
+//   m4uhd      -> Original
+//   vsrc       -> Original
+//   hdmovie    -> Original (EN quality) / Hindi (quality == "Hindi")
+//   meine      -> German
+//   lamovie    -> Spanish
+//   superflix  -> Portuguese
+//
+// Matches TMDB-backed items through their movie/series reference prefix.
+
+const VIDEASY_SPEEDRACE_BASE =
+  globalThis.__videasySpeedraceBaseUrl || 'https://api.speedracelight.com';
+const VIDEASY_ENCDEC_BASE =
+  globalThis.__videasyEncDecBaseUrl || 'https://enc-dec.app/api';
+
+const VIDEASY_PROVIDER_KEY = 'videasy';
+const VIDEASY_PROVIDER_ID = 'nimora.videasy';
+
+const VIDEASY_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
+
+// Servers exposed as stream sources. The key is the speedracelight.com path
+// segment (e.g. /cdn/sources-with-title).
+//
+// Several, because which ones answer changes per *title*, not just per day:
+// checked live, a film resolved only on `downloader2` while an episode of a
+// series resolved only on `m4uhd`, `cdn` and `lamovie` — every other server
+// returned 500 for that same request. Listing one server, or a short list
+// that happens to miss the right one, reads to the viewer as "VidEasy has
+// nothing" when it simply wasn't asked in the right place.
+//
+// Listing costs nothing: `videasyListSources` doesn't call these, it only
+// names them. The requests happen when a source is resolved.
+//
+// Servers that answered 404 for every request (`myflixerzupcloud`, `jett`,
+// `tejo`, `ym`) are left out — a 404 here is the path segment not existing,
+// so those are wasted round trips rather than a server being down.
+const VIDEASY_SERVERS = [
+  { key: 'vsrc', label: 'VidEasy Original', quality: '' },
+  { key: 'cdn', label: 'VidEasy Yoru', quality: '' },
+  { key: 'downloader2', label: 'VidEasy Kite', quality: '' },
+  { key: 'm4uhd', label: 'VidEasy Breach', quality: '' },
+  { key: 'hdmovie', label: 'VidEasy Vyse', quality: '' },
+  { key: 'lamovie', label: 'VidEasy Aura', quality: '' },
+  { key: 'superflix', label: 'VidEasy Solstice', quality: '' },
+  { key: 'neon2', label: 'VidEasy Neon', quality: '' },
+];
+
+function videasyHeaders() {
+  return {
+    Accept: '*/*',
+    Origin: 'https://player.videasy.to',
+    Referer: 'https://player.videasy.to/',
+    'User-Agent': VIDEASY_UA,
+  };
+}
+
+// Reads a `movie:<tmdbId>` reference.
+function parseMovieRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const prefix = 'movie:';
+  if (!refId.startsWith(prefix)) return null;
+  const id = refId.slice(prefix.length);
+  return id.length > 0 ? id : null;
+}
+
+// Reads a `series:<tmdbId>` reference.
+function parseSeriesRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const prefix = 'series:';
+  if (!refId.startsWith(prefix)) return null;
+  const id = refId.slice(prefix.length);
+  return id.length > 0 ? id : null;
+}
+
+function parseVideasyEpisodeRef(refId) {
+  if (typeof refId !== 'string') return null;
+  const match = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
+  return match == null
+    ? null
+    : { tmdbId: match[1], season: match[2], episode: match[3] };
+}
+
+// Source id encodes everything resolve() needs in base64url.
+function encodeVideasySourceId(payload) {
+  const json = JSON.stringify({
+    s: payload.server,
+    m: payload.tmdbId,
+    t: payload.type,         // 'movie' or 'tv'
+    se: payload.seed,
+    ti: payload.title,
+    y: payload.year,
+    i: payload.imdbId,
+    // season/episode only for TV
+    ...(payload.season != null ? { sn: payload.season, ep: payload.episode } : {}),
+  });
+  return host.codec.textToBase64(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function decodeVideasySourceId(sourceId) {
+  // Restore standard base64 padding
+  let b64 = sourceId.replace(/-/g, '+').replace(/_/g, '/');
+  const rem = b64.length % 4;
+  if (rem !== 0) b64 += '='.repeat(4 - rem);
+  try {
+    return JSON.parse(host.codec.base64ToText(b64));
+  } catch (_) {
+    return null;
+  }
+}
+
+// Fetch the seed for a given tmdbId. Required to decrypt the response.
+async function fetchSeed(tmdbId) {
+  let response;
+  try {
+    response = await fetch(
+      `${VIDEASY_SPEEDRACE_BASE}/seed?mediaId=${encodeURIComponent(tmdbId)}`,
+      { headers: videasyHeaders() },
+    );
+  } catch (_) {
+    return null;
+  }
+  if (response.status < 200 || response.status >= 300) return null;
+  try {
+    const data = JSON.parse(response.body);
+    return data.seed != null ? String(data.seed) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Double-encodes the title per VidEasy convention.
+function doubleEncodeTitle(title) {
+  return encodeURIComponent(encodeURIComponent(title));
+}
+
+// Returns the raw encrypted text from speedracelight.
+async function fetchEncryptedSources(serverKey, query) {
+  const params = Object.entries(query)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
+  const url = `${VIDEASY_SPEEDRACE_BASE}/${serverKey}/sources-with-title?${params}`;
+  let response;
+  try {
+    response = await fetch(url, { headers: videasyHeaders() });
+  } catch (_) {
+    return null;
+  }
+  if (response.status < 200 || response.status >= 300) return null;
+  return response.body;
+}
+
+// Decrypts the encrypted text via enc-dec.app.
+async function decryptVideasy(encryptedText, tmdbId, seed) {
+  let response;
+  try {
+    response = await fetch(`${VIDEASY_ENCDEC_BASE}/dec-videasy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: encryptedText, id: tmdbId, seed }),
+    });
+  } catch (_) {
+    return null;
+  }
+  if (response.status < 200 || response.status >= 300) return null;
+  try {
+    const data = JSON.parse(response.body);
+    if (data.status !== 200) return null;
+    return data.result;
+  } catch (_) {
+    return null;
+  }
+}
+
+// sources() — lists one source entry per server for a given movie/series item.
+// We list them by server without fetching (that happens on resolve()), so this
+// is fast and doesn't hit the network per-server.
+async function videasyListSources(args) {
+  const item = args.item || {};
+  const refId = (item.ref && item.ref.id) || item.id || '';
+
+  const isMovie = parseMovieRef(refId) !== null;
+  const episodeRef = parseVideasyEpisodeRef(refId);
+  const isSeries = episodeRef !== null;
+  if (!isMovie && !isSeries) return { sources: [] };
+
+  const tmdbId = isMovie ? parseMovieRef(refId) : episodeRef.tmdbId;
+  const title = typeof item.title === 'string' && item.title.trim().length > 0
+    ? item.title.trim()
+    : typeof item.originalTitle === 'string' && item.originalTitle.trim().length > 0
+      ? item.originalTitle.trim()
+      : tmdbId;
+  const year = Number.isInteger(item.releaseYear) && item.releaseYear > 0
+    ? item.releaseYear
+    : null;
+  const imdbId = typeof item.imdbId === 'string' && /^tt\d+$/.test(item.imdbId)
+    ? item.imdbId
+    : null;
+
+  // For series, require season + episode in item.extra.
+  // Fetch the seed now (one request) so resolve() can use it without a
+  // redundant trip.
+  const seed = await fetchSeed(tmdbId);
+  if (!seed) return { sources: [] };
+
+  const sources = VIDEASY_SERVERS.map((srv) => {
+    const id = `${VIDEASY_PROVIDER_KEY}:${encodeVideasySourceId({
+      server: srv.key,
+      tmdbId,
+      type: isMovie ? 'movie' : 'tv',
+      seed,
+      title,
+      year,
+      imdbId,
+      season: isSeries ? episodeRef.season : null,
+      episode: isSeries ? episodeRef.episode : null,
+    })}`;
+    return { id, label: srv.label, provider: 'Nimora', providerId: 'nimora.videasy' };
+  });
+
+  return { sources };
+}
+
+// resolve() — fetches and decrypts the actual stream URL for the chosen server.
+async function videasyResolveSource(sourceId) {
+  const prefix = `${VIDEASY_PROVIDER_KEY}:`;
+  if (!sourceId.startsWith(prefix)) {
+    throw new Error(`Invalid VidEasy sourceId: ${sourceId}`);
+  }
+  const payload = decodeVideasySourceId(sourceId.slice(prefix.length));
+  if (!payload) throw new Error('Malformed VidEasy source id');
+
+  const {
+    s: server,
+    m: tmdbId,
+    t: type,
+    se: seed,
+    ti: title,
+    y: year,
+    i: imdbId,
+    sn: season,
+    ep: episode,
+  } = payload;
+
+  // Build the speedracelight query.
+  const query = {
+    tmdbId,
+    mediaType: type,
+    enc: '2',
+    seed,
+    // The web player sends an encoded title and the request serializer
+    // encodes it once more. VidEasy expects that double-encoded value.
+    title: encodeURIComponent(String(title || tmdbId)),
+    year: year == null ? '' : year,
+    imdbId: imdbId || '',
+  };
+  if (type === 'tv') {
+    query.seasonId = season;
+    query.episodeId = episode;
+  }
+
+  const encrypted = await fetchEncryptedSources(server, query);
+  if (!encrypted) throw new Error('VidEasy: failed to fetch encrypted sources');
+
+  const decrypted = await decryptVideasy(encrypted, tmdbId, seed);
+  if (!decrypted) throw new Error('VidEasy: decryption failed');
+
+  // Decrypted is `{ sources: [{url, quality}], subtitles: [...] }`.
+  //
+  // Not `{file, type}` / `tracks`, which is what this read for until it was
+  // checked against a live response — so even a server that answered fell
+  // over here with "no stream URL". `quality` is a server nickname
+  // ("playhq", "bk"), not a resolution, so it isn't treated as one.
+  let parsed;
+  try {
+    parsed = typeof decrypted === 'string' ? JSON.parse(decrypted) : decrypted;
+  } catch (_) {
+    throw new Error('VidEasy: invalid decrypted JSON');
+  }
+
+  const sourcesArr = Array.isArray(parsed.sources) ? parsed.sources : [];
+  const entry = sourcesArr.find((s) => s && typeof s.url === 'string' && s.url);
+  if (!entry) throw new Error('VidEasy: no stream URL in decrypted payload');
+
+  const rawSubs = Array.isArray(parsed.subtitles) ? parsed.subtitles : [];
+  const subtitles = rawSubs
+    .filter((t) => t && (t.url || t.file))
+    .map((t) => ({
+      language: t.language || t.label || t.lang || '',
+      url: t.url || t.file,
+      label: t.label || t.language || t.lang || '',
+    }));
+
+  return {
+    url: entry.url,
+    // These come back as both .m3u8 and .mp4 depending on the server.
+    format: entry.url.includes('.m3u8') ? 'hls' : 'other',
+    headers: {
+      Origin: 'https://player.videasy.to',
+      Referer: 'https://player.videasy.to/',
+      'User-Agent': VIDEASY_UA,
+    },
+    subtitles,
+  };
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: VIDEASY_PROVIDER_KEY,
+  sources: videasyListSources,
+  resolve: videasyResolveSource,
 });
 
 // FlyStream as a stream provider, over the host `fetch` API.
@@ -3053,296 +3799,6 @@ if (!globalThis.__extension.sources) {
     return provider.resolve(sourceId);
   };
 }
-
-// VidEasy stream provider, in JS on the host `fetch`/`codec` API.
-//
-// VidEasy (player.videasy.to) sources streams from api.speedracelight.com,
-// which returns seed-encrypted JSON. We decrypt via enc-dec.app/api/dec-videasy.
-//
-// Servers available (language info from EncDecEndpoints README):
-//   cdn        -> Original (may have 4K)
-//   m4uhd      -> Original
-//   vsrc       -> Original
-//   hdmovie    -> Original (EN quality) / Hindi (quality == "Hindi")
-//   meine      -> German
-//   lamovie    -> Spanish
-//   superflix  -> Portuguese
-//
-// Matches TMDB-backed items through their movie/series reference prefix.
-
-const VIDEASY_SPEEDRACE_BASE =
-  globalThis.__videasySpeedraceBaseUrl || 'https://api.speedracelight.com';
-const VIDEASY_ENCDEC_BASE =
-  globalThis.__videasyEncDecBaseUrl || 'https://enc-dec.app/api';
-
-const VIDEASY_PROVIDER_KEY = 'videasy';
-const VIDEASY_PROVIDER_ID = 'nimora.videasy';
-
-const VIDEASY_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
-
-// Servers exposed as stream sources. The key is the speedracelight.com path
-// segment (e.g. /cdn/sources-with-title).
-//
-// Several, because which ones answer changes per *title*, not just per day:
-// checked live, a film resolved only on `downloader2` while an episode of a
-// series resolved only on `m4uhd`, `cdn` and `lamovie` — every other server
-// returned 500 for that same request. Listing one server, or a short list
-// that happens to miss the right one, reads to the viewer as "VidEasy has
-// nothing" when it simply wasn't asked in the right place.
-//
-// Listing costs nothing: `videasyListSources` doesn't call these, it only
-// names them. The requests happen when a source is resolved.
-//
-// Servers that answered 404 for every request (`myflixerzupcloud`, `jett`,
-// `tejo`, `ym`) are left out — a 404 here is the path segment not existing,
-// so those are wasted round trips rather than a server being down.
-const VIDEASY_SERVERS = [
-  { key: 'cdn', label: 'VidEasy Yoru', quality: '' },
-  { key: 'downloader2', label: 'VidEasy Kite', quality: '' },
-  { key: 'm4uhd', label: 'VidEasy Breach', quality: '' },
-  { key: 'hdmovie', label: 'VidEasy Vyse', quality: '' },
-  { key: 'lamovie', label: 'VidEasy Aura', quality: '' },
-  { key: 'superflix', label: 'VidEasy Solstice', quality: '' },
-  { key: 'neon2', label: 'VidEasy Neon', quality: '' },
-];
-
-function videasyHeaders() {
-  return {
-    Accept: '*/*',
-    Origin: 'https://player.videasy.to',
-    Referer: 'https://player.videasy.to/',
-    'User-Agent': VIDEASY_UA,
-  };
-}
-
-// Reads a `movie:<tmdbId>` reference.
-function parseMovieRef(refId) {
-  if (typeof refId !== 'string') return null;
-  const prefix = 'movie:';
-  if (!refId.startsWith(prefix)) return null;
-  const id = refId.slice(prefix.length);
-  return id.length > 0 ? id : null;
-}
-
-// Reads a `series:<tmdbId>` reference.
-function parseSeriesRef(refId) {
-  if (typeof refId !== 'string') return null;
-  const prefix = 'series:';
-  if (!refId.startsWith(prefix)) return null;
-  const id = refId.slice(prefix.length);
-  return id.length > 0 ? id : null;
-}
-
-function parseVideasyEpisodeRef(refId) {
-  if (typeof refId !== 'string') return null;
-  const match = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
-  return match == null
-    ? null
-    : { tmdbId: match[1], season: match[2], episode: match[3] };
-}
-
-// Source id encodes everything resolve() needs in base64url.
-function encodeVideasySourceId(payload) {
-  const json = JSON.stringify({
-    s: payload.server,
-    m: payload.tmdbId,
-    t: payload.type,         // 'movie' or 'tv'
-    se: payload.seed,
-    // season/episode only for TV
-    ...(payload.season != null ? { sn: payload.season, ep: payload.episode } : {}),
-  });
-  return host.codec.textToBase64(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-function decodeVideasySourceId(sourceId) {
-  // Restore standard base64 padding
-  let b64 = sourceId.replace(/-/g, '+').replace(/_/g, '/');
-  const rem = b64.length % 4;
-  if (rem !== 0) b64 += '='.repeat(4 - rem);
-  try {
-    return JSON.parse(host.codec.base64ToText(b64));
-  } catch (_) {
-    return null;
-  }
-}
-
-// Fetch the seed for a given tmdbId. Required to decrypt the response.
-async function fetchSeed(tmdbId) {
-  let response;
-  try {
-    response = await fetch(
-      `${VIDEASY_SPEEDRACE_BASE}/seed?mediaId=${encodeURIComponent(tmdbId)}`,
-      { headers: videasyHeaders() },
-    );
-  } catch (_) {
-    return null;
-  }
-  if (response.status < 200 || response.status >= 300) return null;
-  try {
-    const data = JSON.parse(response.body);
-    return data.seed != null ? String(data.seed) : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-// Double-encodes the title per VidEasy convention.
-function doubleEncodeTitle(title) {
-  return encodeURIComponent(encodeURIComponent(title));
-}
-
-// Returns the raw encrypted text from speedracelight.
-async function fetchEncryptedSources(serverKey, query) {
-  const params = Object.entries(query)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join('&');
-  const url = `${VIDEASY_SPEEDRACE_BASE}/${serverKey}/sources-with-title?${params}`;
-  let response;
-  try {
-    response = await fetch(url, { headers: videasyHeaders() });
-  } catch (_) {
-    return null;
-  }
-  if (response.status < 200 || response.status >= 300) return null;
-  return response.body;
-}
-
-// Decrypts the encrypted text via enc-dec.app.
-async function decryptVideasy(encryptedText, tmdbId, seed) {
-  let response;
-  try {
-    response = await fetch(`${VIDEASY_ENCDEC_BASE}/dec-videasy`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: encryptedText, id: tmdbId, seed }),
-    });
-  } catch (_) {
-    return null;
-  }
-  if (response.status < 200 || response.status >= 300) return null;
-  try {
-    const data = JSON.parse(response.body);
-    if (data.status !== 200) return null;
-    return data.result;
-  } catch (_) {
-    return null;
-  }
-}
-
-// sources() — lists one source entry per server for a given movie/series item.
-// We list them by server without fetching (that happens on resolve()), so this
-// is fast and doesn't hit the network per-server.
-async function videasyListSources(args) {
-  const item = args.item || {};
-  const refId = (item.ref && item.ref.id) || item.id || '';
-
-  const isMovie = parseMovieRef(refId) !== null;
-  const episodeRef = parseVideasyEpisodeRef(refId);
-  const isSeries = episodeRef !== null;
-  if (!isMovie && !isSeries) return { sources: [] };
-
-  const tmdbId = isMovie ? parseMovieRef(refId) : episodeRef.tmdbId;
-
-  // For series, require season + episode in item.extra.
-  // Fetch the seed now (one request) so resolve() can use it without a
-  // redundant trip.
-  const seed = await fetchSeed(tmdbId);
-  if (!seed) return { sources: [] };
-
-  const sources = VIDEASY_SERVERS.map((srv) => {
-    const id = `${VIDEASY_PROVIDER_KEY}:${encodeVideasySourceId({
-      server: srv.key,
-      tmdbId,
-      type: isMovie ? 'movie' : 'tv',
-      seed,
-      season: isSeries ? episodeRef.season : null,
-      episode: isSeries ? episodeRef.episode : null,
-    })}`;
-    return { id, label: srv.label, provider: 'Nimora', providerId: 'nimora.videasy' };
-  });
-
-  return { sources };
-}
-
-// resolve() — fetches and decrypts the actual stream URL for the chosen server.
-async function videasyResolveSource(sourceId) {
-  const prefix = `${VIDEASY_PROVIDER_KEY}:`;
-  if (!sourceId.startsWith(prefix)) {
-    throw new Error(`Invalid VidEasy sourceId: ${sourceId}`);
-  }
-  const payload = decodeVideasySourceId(sourceId.slice(prefix.length));
-  if (!payload) throw new Error('Malformed VidEasy source id');
-
-  const { s: server, m: tmdbId, t: type, se: seed, sn: season, ep: episode } = payload;
-
-  // Build the speedracelight query.
-  const query = {
-    tmdbId,
-    mediaType: type,
-    enc: '2',
-    seed,
-    // title is not needed when we have tmdbId; use a placeholder to satisfy
-    // the endpoint signature.
-    title: encodeURIComponent(String(tmdbId)),
-  };
-  if (type === 'tv') {
-    query.seasonId = season;
-    query.episodeId = episode;
-  }
-
-  const encrypted = await fetchEncryptedSources(server, query);
-  if (!encrypted) throw new Error('VidEasy: failed to fetch encrypted sources');
-
-  const decrypted = await decryptVideasy(encrypted, tmdbId, seed);
-  if (!decrypted) throw new Error('VidEasy: decryption failed');
-
-  // Decrypted is `{ sources: [{url, quality}], subtitles: [...] }`.
-  //
-  // Not `{file, type}` / `tracks`, which is what this read for until it was
-  // checked against a live response — so even a server that answered fell
-  // over here with "no stream URL". `quality` is a server nickname
-  // ("playhq", "bk"), not a resolution, so it isn't treated as one.
-  let parsed;
-  try {
-    parsed = typeof decrypted === 'string' ? JSON.parse(decrypted) : decrypted;
-  } catch (_) {
-    throw new Error('VidEasy: invalid decrypted JSON');
-  }
-
-  const sourcesArr = Array.isArray(parsed.sources) ? parsed.sources : [];
-  const entry = sourcesArr.find((s) => s && typeof s.url === 'string' && s.url);
-  if (!entry) throw new Error('VidEasy: no stream URL in decrypted payload');
-
-  const rawSubs = Array.isArray(parsed.subtitles) ? parsed.subtitles : [];
-  const subtitles = rawSubs
-    .filter((t) => t && (t.url || t.file))
-    .map((t) => ({
-      language: t.language || t.label || t.lang || '',
-      url: t.url || t.file,
-      label: t.label || t.language || t.lang || '',
-    }));
-
-  return {
-    url: entry.url,
-    // These come back as both .m3u8 and .mp4 depending on the server.
-    format: entry.url.includes('.m3u8') ? 'hls' : 'other',
-    headers: {
-      Origin: 'https://player.videasy.to',
-      Referer: 'https://player.videasy.to/',
-      'User-Agent': VIDEASY_UA,
-    },
-    subtitles,
-  };
-}
-
-globalThis.__streamProviders = globalThis.__streamProviders || [];
-globalThis.__streamProviders.push({
-  providerKey: VIDEASY_PROVIDER_KEY,
-  sources: videasyListSources,
-  resolve: videasyResolveSource,
-});
 
 // Kora as a stream provider, in JS on the host `fetch`/`codec`/`match` API.
 //
