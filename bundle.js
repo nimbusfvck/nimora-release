@@ -2074,6 +2074,342 @@ if (!globalThis.__extension.sources) {
   };
 }
 
+// VidFast multi-resolution HLS provider, using the same token/server flow as
+// the VidFast player. Resolved URLs are deliberately never stored in source
+// ids: the page token and CDN URL are short-lived and must be refreshed.
+
+const VIDFAST_BASE = globalThis.__vidfastBaseUrl || 'https://vidfast.vc';
+const VIDFAST_ENCDEC_BASE =
+  globalThis.__vidfastEncDecBaseUrl || 'https://enc-dec.app/api';
+const VIDFAST_PROVIDER_KEY = 'vidfast';
+const VIDFAST_PROVIDER_ID = 'nimora.vidfast';
+const VIDFAST_UA =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36';
+
+function vidfastHeaders(extra) {
+  return {
+    Accept: '*/*',
+    Origin: VIDFAST_BASE,
+    Referer: `${VIDFAST_BASE}/`,
+    'User-Agent': VIDFAST_UA,
+    ...(extra || {}),
+  };
+}
+
+function vidfastMediaRef(refId) {
+  if (typeof refId !== 'string') return null;
+  if (refId.startsWith('movie:')) {
+    const tmdbId = refId.slice('movie:'.length);
+    return tmdbId.length > 0 ? { kind: 'movie', tmdbId } : null;
+  }
+  const match = /^series:([^:]+):season:([^:]+):episode:([^:]+)$/.exec(refId);
+  return match == null
+    ? null
+    : {
+        kind: 'tv',
+        tmdbId: match[1],
+        season: match[2],
+        episode: match[3],
+      };
+}
+
+function encodeVidfastSourceId(media) {
+  return encodeURIComponent(JSON.stringify(media));
+}
+
+function decodeVidfastSourceId(encoded) {
+  try {
+    return JSON.parse(decodeURIComponent(encoded));
+  } catch (_) {
+    return null;
+  }
+}
+
+function vidfastPageUrl(media) {
+  if (media.kind === 'movie') {
+    return `${VIDFAST_BASE}/movie/${encodeURIComponent(media.tmdbId)}`;
+  }
+  return `${VIDFAST_BASE}/tv/${encodeURIComponent(media.tmdbId)}/` +
+    `${encodeURIComponent(media.season)}/${encodeURIComponent(media.episode)}`;
+}
+
+async function vidfastFetch(url, options) {
+  try {
+    return await fetch(url, options);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function vidfastJson(url, options) {
+  const response = await vidfastFetch(url, options);
+  if (response == null || response.status < 200 || response.status >= 300) {
+    return null;
+  }
+  try {
+    return JSON.parse(response.body);
+  } catch (_) {
+    return null;
+  }
+}
+
+function vidfastTokenFromPage(body) {
+  if (typeof body !== 'string') return null;
+  // The token is in the escaped Next.js data payload. Accept the unescaped
+  // form too because fixtures and future page renderers may emit either one.
+  const match = /\\?"(?:en|token)\\?"\s*:\s*\\?"([^"\\]+)\\?"/.exec(body);
+  return match == null ? null : match[1];
+}
+
+async function vidfastDecrypt(text) {
+  if (typeof text !== 'string' || text.length === 0) return null;
+  const data = await vidfastJson(`${VIDFAST_ENCDEC_BASE}/dec-vidfast`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text}),
+  });
+  return data && data.status === 200 ? data.result : null;
+}
+
+function vidfastAbsoluteUrl(raw, base) {
+  if (typeof raw !== 'string' || raw.trim().length === 0) return null;
+  const value = raw.trim();
+  if (/^https?:\/\//i.test(value)) return value;
+  const origin = /^(https?:\/\/[^/]+)/i.exec(base);
+  if (origin == null) return null;
+  if (value.startsWith('/')) return `${origin[1]}${value}`;
+  const basePath = base.slice(0, base.lastIndexOf('/') + 1);
+  const combined = `${basePath}${value}`;
+  const parts = [];
+  for (const part of combined.split('/')) {
+    if (part === '..') {
+      if (parts.length > 3) parts.pop();
+    } else if (part !== '.' && part.length > 0) {
+      parts.push(part);
+    }
+  }
+  return `${parts[0]}//${parts.slice(1).join('/')}`;
+}
+
+function vidfastPlaylistReferences(body) {
+  if (typeof body !== 'string') return [];
+  return body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'));
+}
+
+function vidfastVariantReference(body) {
+  if (typeof body !== 'string') return null;
+  const lines = body.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith('#EXT-X-STREAM-INF:')) continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      const candidate = lines[j].trim();
+      if (candidate.length === 0 || candidate.startsWith('#')) continue;
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function vidfastHasMultipleResolutions(body) {
+  if (typeof body !== 'string' || !body.startsWith('#EXTM3U')) return false;
+  const resolutions = [...body.matchAll(
+    /#EXT-X-STREAM-INF:[^\r\n]*RESOLUTION=(\d+x\d+)/g,
+  )].map((match) => match[1]);
+  return new Set(resolutions).size >= 2;
+}
+
+async function vidfastProbeMultiResolution(url) {
+  const headers = vidfastHeaders();
+  const masterResponse = await vidfastFetch(url, {headers});
+  if (
+    masterResponse == null ||
+    masterResponse.status < 200 ||
+    masterResponse.status >= 300
+  ) {
+    return false;
+  }
+  const master = masterResponse.body;
+  if (!vidfastHasMultipleResolutions(master)) return false;
+
+  const variantReference = vidfastVariantReference(master);
+  const variantUrl = vidfastAbsoluteUrl(variantReference, url);
+  if (variantUrl == null) return false;
+  const variantResponse = await vidfastFetch(variantUrl, {headers});
+  if (
+    variantResponse == null ||
+    variantResponse.status < 200 ||
+    variantResponse.status >= 300 ||
+    typeof variantResponse.body !== 'string' ||
+    !variantResponse.body.startsWith('#EXTM3U')
+  ) {
+    return false;
+  }
+
+  const segmentReference = vidfastPlaylistReferences(variantResponse.body)[0];
+  const segmentUrl = vidfastAbsoluteUrl(segmentReference, variantUrl);
+  if (segmentUrl == null) return false;
+  const segmentResponse = await vidfastFetch(segmentUrl, {
+    headers: {...headers, Range: 'bytes=0-2047'},
+  });
+  return (
+    segmentResponse != null &&
+    segmentResponse.status >= 200 &&
+    segmentResponse.status < 300 &&
+    typeof segmentResponse.body === 'string' &&
+    segmentResponse.body.length > 0
+  );
+}
+
+function vidfastSubtitles(streamData) {
+  const tracks = streamData && Array.isArray(streamData.tracks)
+    ? streamData.tracks
+    : [];
+  return tracks
+    .filter((track) => track && typeof (track.file || track.url) === 'string')
+    .map((track) => ({
+      language: track.language || track.lang || track.label || '',
+      url: track.file || track.url,
+      label: track.label || track.language || track.lang || '',
+    }));
+}
+
+async function vidfastCandidate(server, streamBase, csrfToken) {
+  if (server == null || typeof server.data !== 'string') return null;
+  const streamUrl = `${String(streamBase).replace(/\/$/, '')}/${server.data}`;
+  const encryptedResponse = await vidfastFetch(streamUrl, {
+    method: 'POST',
+    headers: vidfastHeaders({'X-CSRF-Token': csrfToken}),
+  });
+  if (
+    encryptedResponse == null ||
+    encryptedResponse.status < 200 ||
+    encryptedResponse.status >= 300
+  ) {
+    return null;
+  }
+  const streamData = await vidfastDecrypt(encryptedResponse.body);
+  const url = vidfastAbsoluteUrl(streamData && streamData.url, streamUrl);
+  if (url == null || !(await vidfastProbeMultiResolution(url))) return null;
+  return {
+    url,
+    subtitles: vidfastSubtitles(streamData),
+  };
+}
+
+async function vidfastResolveMedia(media) {
+  const pageResponse = await vidfastFetch(vidfastPageUrl(media), {
+    headers: vidfastHeaders(),
+  });
+  if (
+    pageResponse == null ||
+    pageResponse.status < 200 ||
+    pageResponse.status >= 300
+  ) {
+    throw new Error('VidFast: page request failed');
+  }
+  const encodedToken = vidfastTokenFromPage(pageResponse.body);
+  if (encodedToken == null) throw new Error('VidFast: page token missing');
+
+  const encodedData = await vidfastJson(
+    `${VIDFAST_ENCDEC_BASE}/enc-vidfast?text=${encodeURIComponent(encodedToken)}`,
+  );
+  const decoded = encodedData && encodedData.status === 200
+    ? encodedData.result
+    : null;
+  if (
+    decoded == null ||
+    typeof decoded.servers !== 'string' ||
+    typeof decoded.stream !== 'string' ||
+    typeof decoded.token !== 'string'
+  ) {
+    throw new Error('VidFast: server bootstrap failed');
+  }
+
+  const serversResponse = await vidfastFetch(decoded.servers, {
+    method: 'POST',
+    headers: vidfastHeaders({'X-CSRF-Token': decoded.token}),
+  });
+  if (
+    serversResponse == null ||
+    serversResponse.status < 200 ||
+    serversResponse.status >= 300
+  ) {
+    throw new Error('VidFast: server list request failed');
+  }
+  const servers = await vidfastDecrypt(serversResponse.body);
+  if (!Array.isArray(servers) || servers.length === 0) {
+    throw new Error('VidFast: no servers returned');
+  }
+
+  const candidates = await Promise.all(
+    servers.map((server) => vidfastCandidate(server, decoded.stream, decoded.token)),
+  );
+  const selected = candidates.find((candidate) => candidate != null);
+  if (selected == null) {
+    throw new Error('VidFast: no multi-resolution HLS server');
+  }
+  return {
+    url: selected.url,
+    format: 'hls',
+    headers: vidfastHeaders(),
+    subtitles: selected.subtitles,
+  };
+}
+
+async function vidfastSources(args) {
+  const enabled = args.enabledProviders;
+  if (enabled != null && enabled.indexOf(VIDFAST_PROVIDER_ID) === -1) {
+    return {sources: []};
+  }
+  const item = args.item || {};
+  const refId = (item.ref && item.ref.id) || item.id || '';
+  const media = vidfastMediaRef(refId);
+  if (media == null) return {sources: []};
+  return {
+    sources: [{
+      id: `${VIDFAST_PROVIDER_KEY}:${encodeVidfastSourceId(media)}`,
+      label: 'VidFast · Multi-Resolution',
+      provider: 'Nimora',
+      providerId: VIDFAST_PROVIDER_ID,
+    }],
+  };
+}
+
+async function vidfastResolveSource(sourceId) {
+  const prefix = `${VIDFAST_PROVIDER_KEY}:`;
+  if (!sourceId.startsWith(prefix)) {
+    throw new Error(`Invalid VidFast sourceId: ${sourceId}`);
+  }
+  const media = decodeVidfastSourceId(sourceId.slice(prefix.length));
+  const validMovie = media != null &&
+    media.kind === 'movie' &&
+    typeof media.tmdbId === 'string' &&
+    media.tmdbId.length > 0;
+  const validEpisode = media != null &&
+    media.kind === 'tv' &&
+    typeof media.tmdbId === 'string' &&
+    media.tmdbId.length > 0 &&
+    typeof media.season === 'string' &&
+    media.season.length > 0 &&
+    typeof media.episode === 'string' &&
+    media.episode.length > 0;
+  if (!validMovie && !validEpisode) {
+    throw new Error('VidFast: malformed source id');
+  }
+  return vidfastResolveMedia(media);
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: VIDFAST_PROVIDER_KEY,
+  sources: vidfastSources,
+  resolve: vidfastResolveSource,
+});
+
 // FlyStream as a stream provider, over the host `fetch` API.
 //
 // flystream.net serves one or more adaptive HLS playlists per title from
