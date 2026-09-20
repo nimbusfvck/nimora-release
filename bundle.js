@@ -48,10 +48,10 @@ const FEATURED_CATALOG_ID = 'fixtures_featured';
 const LIVE_CATEGORY = 'live';
 const ALL_CATEGORY = 'all';
 
-// Unfinished fixtures remain relevant while live and up to a week before
+// Unfinished fixtures remain relevant while live and up to three days before
 // kickoff. Finished fixtures remain for two days so the timeline can show
 // yesterday's history.
-const UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const UPCOMING_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 // Keep yesterday's completed events in the timeline so the previous date
 // remains visible after the live window rolls over.
 const RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -277,8 +277,9 @@ async function leagueBrandingFor(matches) {
   return new Map(entries.filter((entry) => entry[1] != null));
 }
 
-// The daily match feed is fetched for today plus the next seven Jakarta dates.
-// Deduplication below handles the endpoint's next-day late-night overlap.
+// The daily match feed is fetched for yesterday, today, and the next three
+// Jakarta dates. Deduplication below handles the endpoint's next-day late-night
+// overlap.
 let fixturesMemo = null;
 let popularLeaguesMemo = null;
 const leagueBrandingMemo = new Map();
@@ -313,7 +314,7 @@ async function fetchFotmobMatches(nowMs) {
   // lookback so a provider cannot re-introduce an already-known FotMob event
   // as a provider-only card.
   const payloads = await Promise.all(
-    Array.from({ length: 9 }, (_, index) =>
+    Array.from({ length: 5 }, (_, index) =>
       fetchFotmobMatchesForDate(fotmobDateKey(nowMs, index - 1)),
     ),
   );
@@ -20539,7 +20540,7 @@ const ROXIE_HOME_PATH = '/';
 const ROXIE_INDEX_PATH = '/soccer';
 const ROXIE_GENERIC_EVENT_PATHS = ['/', '/fighting', '/motorsports'];
 const ROXIE_DOMAINS_FALLBACK_PATH = '/domainsz76.txt';
-const ROXIE_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const ROXIE_UPCOMING_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 const ROXIE_RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
 // Roxie exposes kickoff only, without an end-time or completion status.
 // Keep event-specific windows so completed events remain available in
@@ -21415,7 +21416,7 @@ const TIMSTREAMS_ORIGIN = 'https://timst.cfd';
 const TIMSTREAMS_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36';
-const TIMSTREAMS_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const TIMSTREAMS_UPCOMING_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 const TIMSTREAMS_RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
 const TIMSTREAMS_EVENT_DURATION_MS = 3 * 60 * 60 * 1000;
 
