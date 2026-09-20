@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.100",
+      "version": "1.0.101",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Refresh DaddyLive playback URLs on every renewal while deduplicating only concurrent resolves, so expired live tokens are not reused.",
         "Reduced the Sports catalog upcoming window to three days and limited FotMob date fetches accordingly, with Roxie and TimStreams using the same window.",
         "Fixed DaddyLive schedule grouping for crowded events so channels map to the correct football match before HLS validation.",
         "Avoided opening the Cloudflare WebView for VidCore and skip VidCore quickly when its page is blocked; VidRock now rejects unavailable HLS playlists before playback fallback.",
@@ -117,7 +118,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "bd456d1fd5309332401b3986f0754ae0b1f29dc41b0ca294e8f2289a52a8a5e6"
+      "bundleSha256": "c860f1ceb14aacce50aec04907a3a8dfd52e01e51d6721a7d190e5e8bfe38ce5"
     }
   ]
 }

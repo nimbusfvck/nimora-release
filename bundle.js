@@ -21834,7 +21834,6 @@ const DADDYLIVE_ORIGIN = globalThis.__daddyliveOrigin || 'https://dlive.sx';
 const DADDYLIVE_PLAYERS = ['stream', 'cast', 'watch', 'plus', 'casting', 'player'];
 const DADDYLIVE_MAX_CHANNELS = 3;
 const DADDYLIVE_CANDIDATE_WINDOW = 5;
-const DADDYLIVE_RESOLVE_CACHE_MS = 15000;
 const DADDYLIVE_MATCH_PROFILE = {
   aliases: {
     'man utd': 'manchester united', 'man united': 'manchester united',
@@ -21851,7 +21850,7 @@ const DADDYLIVE_UA =
   '(KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36';
 let daddyliveScheduleCache = null;
 let daddyliveSchedulePending = null;
-const daddyliveResolveCache = new Map();
+const daddyliveResolvePending = new Map();
 
 function daddyliveText(value) { return value == null ? '' : String(value).trim(); }
 function daddyliveDecodeEntities(value) {
@@ -22282,22 +22281,17 @@ async function daddyliveResolveFresh(sourceId) {
 }
 
 async function daddyliveResolve(sourceId) {
-  const cached = daddyliveResolveCache.get(sourceId);
-  if (cached && cached.until > Date.now()) return cached.result;
-  if (cached) daddyliveResolveCache.delete(sourceId);
-  const result = await daddyliveResolveFresh(sourceId);
-  const now = Date.now();
-  for (const [key, entry] of daddyliveResolveCache) {
-    if (entry.until <= now) daddyliveResolveCache.delete(key);
+  const pending = daddyliveResolvePending.get(sourceId);
+  if (pending) return pending;
+  const fresh = daddyliveResolveFresh(sourceId);
+  daddyliveResolvePending.set(sourceId, fresh);
+  try {
+    return await fresh;
+  } finally {
+    if (daddyliveResolvePending.get(sourceId) === fresh) {
+      daddyliveResolvePending.delete(sourceId);
+    }
   }
-  while (daddyliveResolveCache.size >= 40) {
-    daddyliveResolveCache.delete(daddyliveResolveCache.keys().next().value);
-  }
-  daddyliveResolveCache.set(sourceId, {
-    result,
-    until: now + DADDYLIVE_RESOLVE_CACHE_MS,
-  });
-  return result;
 }
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
