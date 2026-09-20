@@ -18293,6 +18293,11 @@ async function cdnLiveTvResolve(sourceId) {
       Accept: 'text/html,*/*;q=0.8',
       Referer: referer,
       'User-Agent': CDN_LIVE_TV_USER_AGENT,
+      // CDNLiveTV occasionally points at an embedded host protected by a
+      // browser-only Cloudflare challenge. Do not open the generic visible
+      // solver during source discovery; let this channel fail fast so the
+      // app can keep the other playable sources.
+      'x-qjsr-disable-cloudflare': '1',
     },
   });
   if (player.status < 200 || player.status >= 300) {
@@ -18303,7 +18308,9 @@ async function cdnLiveTvResolve(sourceId) {
   );
   if (!url) throw new Error('CDNLiveTV player has no direct HLS playlist');
 
-  const playlist = await fetch(url, { headers });
+  const playlist = await fetch(url, {
+    headers: {...headers, 'x-qjsr-disable-cloudflare': '1'},
+  });
   if (playlist.status < 200 || playlist.status >= 300 ||
       !cdnLiveTvText(playlist.body).startsWith('#EXTM3U')) {
     throw new Error('CDNLiveTV returned an invalid HLS playlist');
@@ -18756,6 +18763,7 @@ const DADDYLIVE_ORIGIN = globalThis.__daddyliveOrigin || 'https://dlive.sx';
 const DADDYLIVE_PLAYERS = ['stream', 'cast', 'watch', 'plus', 'casting', 'player'];
 const DADDYLIVE_MAX_CHANNELS = 3;
 const DADDYLIVE_CANDIDATE_WINDOW = 5;
+const DADDYLIVE_HANDOFF_CACHE_MS = 2500;
 const DADDYLIVE_MATCH_PROFILE = {
   aliases: {
     'man utd': 'manchester united', 'man united': 'manchester united',
@@ -18773,6 +18781,7 @@ const DADDYLIVE_UA =
 let daddyliveScheduleCache = null;
 let daddyliveSchedulePending = null;
 const daddyliveResolvePending = new Map();
+const daddyliveHandoffCache = new Map();
 
 function daddyliveText(value) { return value == null ? '' : String(value).trim(); }
 function daddyliveDecodeEntities(value) {
@@ -19014,14 +19023,19 @@ async function daddyliveSources(args) {
     const candidates = event.channels.slice(0, DADDYLIVE_CANDIDATE_WINDOW).map((channel) => ({
       id: daddyliveSourceId(channel), label: channel.name, provider: 'DaddyLive', providerId: DADDYLIVE_PROVIDER_ID,
     }));
-    const validated = await Promise.all(candidates.map(async (source) => {
-      try {
-        await daddyliveResolve(source.id);
-        return source;
-      } catch (_) {
-        return null;
-      }
-    }));
+    const validated = [];
+    let settled = 0;
+    await new Promise((resolve) => {
+      const finish = () => {
+        if (validated.length >= DADDYLIVE_MAX_CHANNELS || settled >= candidates.length) resolve();
+      };
+      candidates.forEach((source, index) => {
+        daddyliveResolve(source.id)
+          .then(() => { validated[index] = source; })
+          .catch(() => {})
+          .then(() => { settled += 1; finish(); });
+      });
+    });
     return {sources: validated.filter(Boolean).slice(0, DADDYLIVE_MAX_CHANNELS)};
   } catch (_) { return {sources: []}; }
 }
@@ -19197,18 +19211,29 @@ async function daddyliveResolveFresh(sourceId) {
       const headers = {'User-Agent': DADDYLIVE_UA};
       if (referer) { headers.Referer = referer; headers.Origin = daddyliveParseUrl(referer).origin; }
       return {url: playableUrl, headers, format: 'hls', label: daddyliveText(channel.name) || 'DaddyLive'};
-    } catch (error) { lastError = error; }
+    } catch (error) {
+      lastError = error;
+      // Trying another player path is useful for a bad embed, but not when
+      // the upstream host itself is unreachable. Stop immediately so one
+      // dead channel cannot consume the whole discovery budget.
+      if (/connection refused|failed host lookup|socketexception|nodename nor servname/i.test(String(error && error.message || error))) break;
+    }
   }
   throw new Error(`DaddyLive channel ${channel.name || channel.id} could not resolve: ${lastError && lastError.message || 'no playable player'}`);
 }
 
 async function daddyliveResolve(sourceId) {
+  const cached = daddyliveHandoffCache.get(sourceId);
+  if (cached && cached.until > Date.now()) return cached.value;
+  if (cached) daddyliveHandoffCache.delete(sourceId);
   const pending = daddyliveResolvePending.get(sourceId);
   if (pending) return pending;
   const fresh = daddyliveResolveFresh(sourceId);
   daddyliveResolvePending.set(sourceId, fresh);
   try {
-    return await fresh;
+    const value = await fresh;
+    daddyliveHandoffCache.set(sourceId, {value, until: Date.now() + DADDYLIVE_HANDOFF_CACHE_MS});
+    return value;
   } finally {
     if (daddyliveResolvePending.get(sourceId) === fresh) {
       daddyliveResolvePending.delete(sourceId);
