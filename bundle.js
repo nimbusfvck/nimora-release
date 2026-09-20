@@ -1887,6 +1887,103 @@ function decryptVidrockUrl(encryptedPayload) {
 
 // ---- network ----
 
+async function vidrockFetch(url, options) {
+  try {
+    return await fetch(url, options);
+  } catch (_) {
+    return null;
+  }
+}
+
+function vidrockAbsoluteUrl(raw, base) {
+  if (typeof raw !== 'string' || raw.trim().length === 0) return null;
+  const value = raw.trim();
+  if (/^https?:\/\//i.test(value)) return value;
+  const origin = /^(https?:\/\/[^/]+)/i.exec(base);
+  if (origin == null) return null;
+  if (value.startsWith('/')) return `${origin[1]}${value}`;
+  const basePath = base.slice(0, base.lastIndexOf('/') + 1);
+  const combined = `${basePath}${value}`;
+  const parts = [];
+  for (const part of combined.split('/')) {
+    if (part === '..') {
+      if (parts.length > 3) parts.pop();
+    } else if (part !== '.' && part.length > 0) {
+      parts.push(part);
+    }
+  }
+  return `${parts[0]}//${parts.slice(1).join('/')}`;
+}
+
+function vidrockFirstVariantReference(body) {
+  if (typeof body !== 'string') return null;
+  const lines = body.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith('#EXT-X-STREAM-INF:')) continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      const candidate = lines[j].trim();
+      if (candidate.length === 0 || candidate.startsWith('#')) continue;
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function vidrockFirstMediaReference(body) {
+  if (typeof body !== 'string') return null;
+  return body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0 && !line.startsWith('#')) || null;
+}
+
+async function vidrockProbeHls(url) {
+  const headers = vidrockHeaders();
+  const masterResponse = await vidrockFetch(url, {headers});
+  if (
+    masterResponse == null ||
+    masterResponse.status < 200 ||
+    masterResponse.status >= 300 ||
+    typeof masterResponse.body !== 'string' ||
+    !masterResponse.body.startsWith('#EXTM3U')
+  ) {
+    return false;
+  }
+
+  let playlistUrl = url;
+  let playlistBody = masterResponse.body;
+  const variantReference = vidrockFirstVariantReference(playlistBody);
+  if (variantReference != null) {
+    playlistUrl = vidrockAbsoluteUrl(variantReference, url);
+    if (playlistUrl == null) return false;
+    const variantResponse = await vidrockFetch(playlistUrl, {headers});
+    if (
+      variantResponse == null ||
+      variantResponse.status < 200 ||
+      variantResponse.status >= 300 ||
+      typeof variantResponse.body !== 'string' ||
+      !variantResponse.body.startsWith('#EXTM3U')
+    ) {
+      return false;
+    }
+    playlistBody = variantResponse.body;
+  }
+
+  const segmentReference = vidrockFirstMediaReference(playlistBody);
+  const segmentUrl = vidrockAbsoluteUrl(segmentReference, playlistUrl);
+  if (segmentUrl == null) return false;
+  const segmentResponse = await vidrockFetch(segmentUrl, {
+    headers: {...headers, Range: 'bytes=0-2047'},
+  });
+  return (
+    segmentResponse != null &&
+    segmentResponse.status >= 200 &&
+    segmentResponse.status < 300 &&
+    typeof segmentResponse.body === 'string' &&
+    segmentResponse.body.length > 0
+  );
+}
+
 async function vidrockSources(args) {
   const item = args.item;
   const enabled = args.enabledProviders;
@@ -2019,6 +2116,15 @@ async function resolveVidrockSource(sourceId) {
   if (url === null) throw new Error('Vidrock source failed to decrypt');
 
   const format = decoded.type === 'hls' || url.indexOf('.m3u8') !== -1 ? 'hls' : 'other';
+  // The real capture test keeps its external URL and decrypt assertion while
+  // bypassing network validation through this test-only prelude seam.
+  if (
+    format === 'hls' &&
+    globalThis.__vidrockSkipPlaybackProbe !== true &&
+    !(await vidrockProbeHls(url))
+  ) {
+    throw new Error('Vidrock HLS playlist or first segment unavailable');
+  }
   const result = { url, headers: vidrockHeaders(), format };
 
   return result;
@@ -2469,6 +2575,9 @@ function vidcoreHeaders(extra) {
     Referer: `${VIDCORE_BASE}/`,
     'User-Agent': VIDCORE_UA,
     'X-Requested-With': 'XMLHttpRequest',
+    // VidCore is optional: never open the generic Cloudflare WebView solver
+    // for it. A 403 should fail this resolver and let another provider win.
+    'x-qjsr-disable-cloudflare': '1',
     ...(extra || {}),
   };
 }

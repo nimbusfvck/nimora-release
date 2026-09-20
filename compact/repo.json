@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.97",
+      "version": "1.0.98",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Avoided opening the Cloudflare WebView for VidCore and skip VidCore quickly when its page is blocked; VidRock now rejects unavailable HLS playlists before playback fallback.",
         "Added VidCore as a multi-resolution HLS provider with Wyzie subtitle enrichment and reordered VOD provider priority based on observed resolve speed.",
         "Added VidFast as a fresh multi-resolution HLS provider with server fallback and optional subtitle tracks.",
         "Probe the first five DaddyLive channels in parallel and return up to three with a validated HLS playlist and media segment.",
@@ -114,7 +115,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "a1dbf751f48830552956d923ad4ab7ce036d7329d3830f002be4ce1abeb40596"
+      "bundleSha256": "c7ddc80c69bb75e38576f08637ea6751f0e3183f5aae68d88319a726ad53fecd"
     }
   ]
 }
