@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "1.0.103",
+      "version": "1.0.104",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Fixed browser-only TimStreams embeds such as Stan Sport by capturing their HLS request in a headless WebView and returning it to native playback without opening the visible Cloudflare browser.",
         "Probe the full DaddyLive event channel list lazily, using three concurrent checks and stopping as soon as three playable sources are found.",
         "Start live playback from the first playable provider, keep slower providers as background fallbacks, and make DaddyLive and Cloudflare-blocked channels fail fast.",
         "Refresh DaddyLive playback URLs on every renewal while deduplicating only concurrent resolves, so expired live tokens are not reused.",
@@ -120,7 +121,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "c4a268ac207d743460ce5c6b2f131606d45347db3634f24422f104c755d230d1"
+      "bundleSha256": "3436090d20c73b2fd30954862c1e87f5672abf3bec4f40c8f1147fb1152a8608"
     }
   ]
 }

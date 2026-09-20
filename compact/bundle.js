@@ -18348,6 +18348,7 @@ const TIMSTREAMS_USER_AGENT =
 const TIMSTREAMS_UPCOMING_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 const TIMSTREAMS_RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
 const TIMSTREAMS_EVENT_DURATION_MS = 3 * 60 * 60 * 1000;
+const TIMSTREAMS_WEBVIEW_PATTERN = 'm3u8|master\\.txt';
 
 function timstreamsText(value) {
   return value == null ? '' : String(value).trim();
@@ -18711,24 +18712,51 @@ async function timstreamsResolve(sourceId) {
   const embedUrl = stream && stream.vip !== true ? timstreamsStreamUrl(stream.url) : null;
   if (!embedUrl) throw new Error('TimStreams event or stream changed; refresh sources');
 
+  const embedHeaders = {
+    Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+    Referer: `${TIMSTREAMS_ORIGIN}/`,
+    'User-Agent': TIMSTREAMS_USER_AGENT,
+    // A failed TimStreams embed must not open the generic visible Cloudflare
+    // browser. We have a provider-specific headless interception fallback.
+    'x-qjsr-disable-cloudflare': '1',
+  };
   const response = await fetch(embedUrl, {
-    headers: {
-      Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
-      Referer: `${TIMSTREAMS_ORIGIN}/`,
-      'User-Agent': TIMSTREAMS_USER_AGENT,
-    },
+    headers: embedHeaders,
   });
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`TimStreams embed request failed: ${response.status}`);
+  let url = response.status >= 200 && response.status < 300
+    ? timstreamsExtractM3u8(response.body)
+    : null;
+
+  if (!url) {
+    // Some event embeds redirect to a player host that only exposes the HLS
+    // request from a browser context. Capture that request in the generic
+    // headless WebView resolver, then continue through the native player.
+    const intercepted = await fetch(embedUrl, {
+      headers: {
+        ...embedHeaders,
+        'X-QJSR-WebView-Pattern': TIMSTREAMS_WEBVIEW_PATTERN,
+      },
+    });
+    const candidate = timstreamsStreamUrl(intercepted.url);
+    if (intercepted.status === 200 && candidate != null &&
+        /(?:m3u8|master\\.txt)/i.test(candidate)) {
+      url = candidate;
+    }
   }
-  const url = timstreamsExtractM3u8(response.body);
-  if (!url) throw new Error('TimStreams embed has no HLS playlist');
+
+  if (!url) {
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`TimStreams embed request failed: ${response.status}`);
+    }
+    throw new Error('TimStreams embed has no HLS playlist');
+  }
 
   const playlist = await fetch(url, {
     headers: {
       Accept: 'application/vnd.apple.mpegurl,application/x-mpegURL,*/*',
       Referer: embedUrl,
       'User-Agent': TIMSTREAMS_USER_AGENT,
+      'x-qjsr-disable-cloudflare': '1',
     },
   });
   if (playlist.status < 200 || playlist.status >= 300 ||
