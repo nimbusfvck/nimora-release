@@ -1986,6 +1986,11 @@ function fctvEntryIsLive(match, nowMs) {
   return match.startsAt <= nowMs && nowMs - match.startsAt <= FCTV_LIVE_WINDOW_MS;
 }
 
+function fctvEntryState(match, nowMs) {
+  if (match.startsAt > nowMs) return 'scheduled';
+  return fctvEntryIsLive(match, nowMs) ? 'live' : 'ended';
+}
+
 function fctvIsHighlight(match) {
   return fctvNormalize(
     `${match.title || ''} ${match.leagueName || ''} ${match.slug || ''}`,
@@ -2055,7 +2060,8 @@ function fctvAsianGamesBrandLogo(match) {
 
 function fctvEntryToCatalog(match, nowMs) {
   const sportName = fctvSportNameForMatch(match);
-  const live = fctvEntryIsLive(match, nowMs);
+  const state = fctvEntryState(match, nowMs);
+  const live = state === 'live';
   const item = {
     ref: {
       extensionId: globalThis.__nimoraExtensionId || 'nimora',
@@ -2067,7 +2073,7 @@ function fctvEntryToCatalog(match, nowMs) {
     subtitle: match.leagueName || sportName,
     schedule: {
       startsAt: new Date(match.startsAt).toISOString(),
-      state: live ? 'live' : 'scheduled',
+      state,
     },
   };
   if (match.participants.length === 2) {

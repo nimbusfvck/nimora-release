@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.1: marked FCTV events older than the live window as ended instead of incorrectly showing them as upcoming.",
         "Nimora Compact 2.0.0: added Sports Matches to Home and the All category with uncapped See more navigation and hardened Football Highlights playback for current multi-iframe embeds.",
         "Added the Sports Matches catalog to the All category so Asian Games 2026 appears on Home with its full uncapped item list and See more navigation.",
         "Fixed browser-only TimStreams embeds such as Stan Sport by capturing their HLS request in a headless WebView and returning it to native playback without opening the visible Cloudflare browser.",
