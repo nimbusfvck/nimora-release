@@ -3,13 +3,15 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "1.0.116",
+      "version": "2.0.0",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora 2.0.0: added Sports Matches to Home and the All category with uncapped See more navigation, hardened Football Highlights playback for current multi-iframe embeds, and added the FCTV33 live-event source.",
+        "Added the Sports Matches catalog to the All category so Asian Games 2026 appears on Home with its full uncapped item list and See more navigation.",
         "Fixed browser-only TimStreams embeds such as Stan Sport by capturing their HLS request in a headless WebView and returning it to native playback without opening the visible Cloudflare browser.",
         "Probe the full DaddyLive event channel list lazily, using three concurrent checks and stopping as soon as three playable sources are found.",
         "Start live playback from the first playable provider, keep slower providers as background fallbacks, and make DaddyLive and Cloudflare-blocked channels fail fast.",
@@ -261,7 +263,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "f06e4eb677a09e8a77c5e9493cd932f97f6e1868208cc4c8ec666f63329aa077"
+      "bundleSha256": "4d42c5dc34a9a48de53f7f7aca57058e4e8e86fee2c5a9968edf6ded2c79fd4a"
     }
   ]
 }

@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "1.0.116",
+  "version": "2.0.0",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -23,6 +23,13 @@
         "catalog"
       ],
       "catalogs": [
+        {
+          "id": "fixtures",
+          "name": "Sports Matches",
+          "categories": ["all"],
+          "kind": "liveEvent",
+          "display": "row"
+        },
         {
           "id": "fixtures_schedule",
           "name": "Live Timeline",
@@ -45,6 +52,13 @@
           "display": "row",
           "surface": "featured"
         }
+      ]
+    },
+    {
+      "id": "nimora.fctv",
+      "name": "FCTV33 Live Events",
+      "roles": [
+        "stream"
       ]
     },
     {

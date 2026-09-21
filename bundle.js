@@ -39,8 +39,8 @@ const PROVIDER_ID = 'nimora.matches';
 
 // The one catalog this extension declares, and the categories inside it.
 // `live` is based on FotMob's match status; `schedule` is the daily match
-// schedule. `all` includes the live football items alongside the other live
-// sports catalog entries.
+// schedule. `all` can expose provider-owned editorial shelves such as Asian
+// Games, while the dedicated `live` catalog remains the live timeline.
 const CATALOG_ID = 'fixtures';
 const SCHEDULE_CATALOG_ID = 'fixtures_schedule';
 const SPORT_CATALOG_ID = 'fixtures_sport';
@@ -71,6 +71,8 @@ const EVENT_DURATION_MINUTES = [
   { match: /tennis/i, minutes: 180 },
   { match: /basketball|nba|wnba/i, minutes: 150 },
   { match: /volleyball/i, minutes: 135 },
+  { match: /hockey|nhl|aahl/i, minutes: 180 },
+  { match: /baseball|mlb|npb/i, minutes: 210 },
   { match: /badminton|bwf/i, minutes: 120 },
   { match: /football|soccer/i, minutes: 135 },
 ];
@@ -685,12 +687,19 @@ function byDateItems(items, nowMs) {
 // --- catalog navigation ---
 
 const FOOTBALL = { id: 'football', name: 'Football' };
+// TODO(asian-games-2026): Remove the Asian Games Home shelf below and the
+// `fixtures` `all` catalog registration from both manifest files after the
+// event concludes.
+const ASIAN_GAMES = { id: 'asian-games', name: 'Asian Games 2026' };
 const TENNIS = { id: 'tennis', name: 'Tennis' };
 const MOTORSPORT = { id: 'motorsport', name: 'Motorsport' };
 const FIGHTING = { id: 'fighting', name: 'Fighting' };
 const BADMINTON = { id: 'badminton', name: 'Badminton' };
 const BASKETBALL = { id: 'basketball', name: 'Basketball' };
 const VOLLEYBALL = { id: 'volleyball', name: 'Volleyball' };
+const HOCKEY = { id: 'hockey', name: 'Hockey' };
+const BASEBALL = { id: 'baseball', name: 'Baseball' };
+const TABLE_TENNIS = { id: 'table-tennis', name: 'Table Tennis' };
 const OTHER_LIVE_SPORTS = {
   id: 'other-live-sports',
   name: 'Other Live Sports',
@@ -700,12 +709,16 @@ const OTHER_LIVE_SPORTS = {
 // arrive without creating a new shelf for every spelling or niche sport.
 const SPORT_SECTION_ORDER = [
   FOOTBALL,
+  ASIAN_GAMES,
   TENNIS,
   MOTORSPORT,
   FIGHTING,
   BADMINTON,
   BASKETBALL,
   VOLLEYBALL,
+  HOCKEY,
+  BASEBALL,
+  TABLE_TENNIS,
   OTHER_LIVE_SPORTS,
 ];
 
@@ -713,6 +726,9 @@ function sportIdOf(name) {
   const value = `${name || ''}`.trim().toLowerCase();
   if (value.includes('football') || value.includes('soccer')) {
     return FOOTBALL.id;
+  }
+  if (value.includes('table tennis') || value.includes('ping pong')) {
+    return TABLE_TENNIS.id;
   }
   if (value.includes('tennis') || /\batp\b|\bwta\b/.test(value)) {
     return TENNIS.id;
@@ -746,12 +762,29 @@ function sportIdOf(name) {
     return BASKETBALL.id;
   }
   if (value.includes('volleyball')) return VOLLEYBALL.id;
+  if (value.includes('hockey') || /\bnhl\b|\baahl\b/.test(value)) {
+    return HOCKEY.id;
+  }
+  if (value.includes('baseball') || /\bmlb\b|\bnpb\b/.test(value)) {
+    return BASEBALL.id;
+  }
   return OTHER_LIVE_SPORTS.id;
 }
 
 function sportNameOf(name) {
   const id = sportIdOf(name);
   return SPORT_SECTION_ORDER.find((sport) => sport.id === id).name;
+}
+
+function isAsianGamesEntry(entry) {
+  if (Array.isArray(entry?.shelfIds) && entry.shelfIds.includes('asian-games')) {
+    return true;
+  }
+  const refId = `${entry?.item?.ref?.id || ''}`;
+  if (!refId.startsWith('fctv:')) return false;
+  return /\basian\s+(?:para\s+)?games?\b/i.test(
+    `${entry?.item?.title || ''} ${entry?.item?.subtitle || ''}`,
+  );
 }
 
 function isFootballCategory(category) {
@@ -1118,6 +1151,15 @@ async function getCricfySportEntries(nowMs) {
   }
 }
 
+async function getFctvSportEntries(nowMs) {
+  if (typeof globalThis.__fctvSportEntries !== 'function') return [];
+  try {
+    return await globalThis.__fctvSportEntries(nowMs);
+  } catch (_) {
+    return [];
+  }
+}
+
 async function getRoxieSportEntries(nowMs) {
   if (typeof globalThis.__roxieSportEntries !== 'function') return [];
   try {
@@ -1241,6 +1283,23 @@ function dedupeProviderEntries(entries, nowMs = Date.now()) {
         },
       };
     }
+    // Keep the provider-supplied competition branding even when another
+    // provider wins the duplicate's displayed metadata. FCTV carries the
+    // Asian Games pictogram and palette on its item; dropping it here makes
+    // the same event fall back to the plain generated banner.
+    const brandedEntries = [existing, entry].filter((candidate) =>
+      candidate?.item?.branding != null &&
+      candidate.item.branding.logo?.url,
+    );
+    const brandedEntry = brandedEntries.find((candidate) =>
+      candidate.item.ref?.providerId === 'nimora.matches',
+    ) || brandedEntries[0];
+    if (brandedEntry != null && merged.item != null) {
+      merged.item = {
+        ...merged.item,
+        branding: brandedEntry.item.branding,
+      };
+    }
     if (merged.fotmobId == null) merged.fotmobId = entry.fotmobId;
     result[existingIndex] = merged;
   }
@@ -1253,6 +1312,7 @@ function sportsOf(matches, providerEntries) {
   if (matches.length > 0) available.add(FOOTBALL.id);
   for (const entry of providerEntries) {
     available.add(sportIdOf(entry.sportName || entry.sportId));
+    if (isAsianGamesEntry(entry)) available.add(ASIAN_GAMES.id);
   }
   for (const sport of SPORT_SECTION_ORDER) {
     if (available.has(sport.id)) sports.push(sport);
@@ -1286,6 +1346,8 @@ function buildPage(
     ? null
     : selectedFootballLeagueId != null
       ? FOOTBALL.id
+      : selectedSportName === ASIAN_GAMES.id
+        ? ASIAN_GAMES.id
       : sportIdOf(selectedSportName);
   const subCategories = sportsOf(
     excludeEnded ? matches.filter((match) => !isFinishedMatch(match)) : matches,
@@ -1365,6 +1427,19 @@ function buildPage(
     };
   }
 
+  if (selected === ASIAN_GAMES.id) {
+    const items = providerEntries
+      .filter((entry) => isAsianGamesEntry(entry))
+      .filter((entry) => !excludeEnded || entry.item?.schedule?.state !== 'ended')
+      .map((entry) => entry.item);
+    return {
+      sections: items.length === 0
+        ? []
+        : [{ id: 'sport:asian-games', title: ASIAN_GAMES.name, items }],
+      subCategories,
+    };
+  }
+
   if (selected != null) {
     const entries = providerEntries.filter(
       (entry) => sportIdOf(entry.sportName || entry.sportId) === selected,
@@ -1384,28 +1459,20 @@ function buildPage(
   }
 
   if (query.category === ALL_CATEGORY) {
-    const footballItems = footballCatalogItems(
-      matches,
-      // FotMob owns event lifecycle. A provider's `live` flag can lag behind
-      // it, so use every matched football entry here and filter the resulting
-      // FotMob items by live state below.
-      providerEntries,
-      nowMs,
-      brandingByLeague,
-      requireLiveProviderMatches,
-      knownFotmobMatches,
-    ).filter((item) => item.schedule?.state === 'live');
-
-    const items = [
-      ...footballItems,
-      ...providerEntries
-        .filter((entry) => entry.live && !isFootballEntry(entry))
-        .map((entry) => entry.item),
-    ];
+    const asianGamesItems = providerEntries
+      .filter((entry) => isAsianGamesEntry(entry))
+      .filter((entry) => entry.item?.schedule?.state !== 'ended')
+      .map((entry) => entry.item);
+    const sections = [];
+    if (asianGamesItems.length > 0) {
+      sections.push({
+        id: 'sport:asian-games',
+        title: ASIAN_GAMES.name,
+        items: asianGamesItems,
+      });
+    }
     return {
-      sections: items.length === 0
-        ? []
-        : [{ id: 'live', title: 'Live Now', items }],
+      sections,
       subCategories,
     };
   }
@@ -1429,8 +1496,19 @@ function buildPage(
     subtitle: 'Other',
   }));
   sections.push(...footballSportSections(footballItems, otherFootballItems));
+  const asianGamesItems = providerEntries
+    .filter((entry) => isAsianGamesEntry(entry))
+    .filter((entry) => !excludeEnded || entry.item?.schedule?.state !== 'ended')
+    .map((entry) => entry.item);
+  if (asianGamesItems.length > 0) {
+    sections.push({
+      id: 'sport:asian-games',
+      title: ASIAN_GAMES.name,
+      items: asianGamesItems,
+    });
+  }
   for (const sport of subCategories) {
-    if (sport.id === FOOTBALL.id) continue;
+    if (sport.id === FOOTBALL.id || sport.id === ASIAN_GAMES.id) continue;
     const items = providerEntries
       .filter(
         (entry) =>
@@ -1453,8 +1531,10 @@ async function fixturesCatalog(query) {
   const nowMs = Date.now();
 
   let [matches, popularLeagues, roxieEntries, timstreamsEntries] = await Promise.all([
-    fetchFixturesMemo(nowMs),
-    fetchPopularLeaguesMemo(),
+    // Canonical FotMob metadata is preferred, but provider-only shelves such
+    // as FCTV Asian Games must remain usable when FotMob has a DNS/HTTP outage.
+    fetchFixturesMemo(nowMs).catch(() => []),
+    fetchPopularLeaguesMemo().catch(() => []),
     getRoxieSportEntries(nowMs),
     getTimstreamsSportEntries(nowMs),
   ]);
@@ -1474,8 +1554,10 @@ async function fixturesCatalog(query) {
   const brandingByLeague = await leagueBrandingFor(matches);
 
   let providerEntries = await getCricfySportEntries(nowMs);
+  const fctvEntries = await getFctvSportEntries(nowMs);
   providerEntries = dedupeProviderEntries([
     ...providerEntries,
+    ...fctvEntries,
     ...roxieEntries,
     ...timstreamsEntries,
   ], nowMs);
@@ -1522,6 +1604,1048 @@ if (!globalThis.__extension.catalog) {
     return provider.catalog(query);
   };
 }
+
+// FCTV33 live-event catalog and stream resolver.
+//
+// FCTV's public API returns protobuf payloads while the extension fetch bridge
+// exposes strings. The runtime marks binary responses as base64; this file
+// decodes only the small protobuf fields needed for event identity and HLS
+// source resolution. Signed media URLs are requested at playback time and are
+// never stored in the catalog or bundle.
+
+const FCTV_API_BASE =
+  globalThis.__fctvApiBaseUrl || 'https://apis-data10.tcllu137fien.ru';
+const FCTV_API_PATH_PREFIX =
+  globalThis.__fctvApiPathPrefix ||
+  '/sfverbb3711113fd545045e75134e6c1bdc41ee477e';
+const FCTV_PROVIDER_ID = 'nimora.fctv';
+const FCTV_PROVIDER_KEY = 'fctv';
+const FCTV_SITE_ORIGIN =
+  globalThis.__fctvSiteOrigin || 'https://www.fctv33hd.pw';
+const FCTV_LOGOS_BASE =
+  globalThis.__fctvLogosBaseUrl || 'https://logos1.tcllu137fien.ru';
+const FCTV_ASIAN_GAMES_LOGOS_BASE =
+  'https://www.aichi-nagoya2026.org/wp-content/uploads/2025/11';
+const FCTV_ASIAN_GAMES_LOGO_PROXY = 'https://wsrv.nl/?url=';
+const FCTV_ASIAN_GAMES_PRIMARY_COLOR = '#3a3454';
+const FCTV_ASIAN_GAMES_SECONDARY_COLOR = '#7468b8';
+const FCTV_USER_AGENT =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
+  '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
+const FCTV_LIVE_WINDOW_MS = 6 * 60 * 60 * 1000;
+const FCTV_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const FCTV_MEMO_TTL_MS = 60 * 1000;
+const FCTV_MEDIA_TIMEOUT_MS = 12000;
+const FCTV_MEDIA_HEALTH_TIMEOUT_MS = 5000;
+const FCTV_BUSINESS_SECRET_TTL_MS = 3000;
+const FCTV_TOKEN_KEY = 'a7981cc9eb2f4d19dcfea57b101ecd89';
+const FCTV_TOKEN_IV = '8017d3a8f1400d2f';
+const FCTV_FALLBACK_PLAYER_ORIGINS = [
+  'https://jack29eo.mpgreatestclgczbmiddle.my',
+  'https://nadia59bc.mp77g69ainei3gx2voxygen.ru',
+  'https://morgan33cg.006hndchurch05g7ifbreathing.sbs',
+];
+
+let fctvLiveMemo = null;
+let fctvGeoMemo = null;
+let fctvPlayerOriginsMemo = null;
+let fctvBusinessSecretMemo = null;
+
+function fctvHeader(response, wanted) {
+  const headers = response && response.headers;
+  if (headers == null || typeof headers !== 'object') return '';
+  const key = Object.keys(headers).find(
+    (name) => name.toLowerCase() === wanted.toLowerCase(),
+  );
+  return key == null ? '' : String(headers[key] || '');
+}
+
+function fctvHexToBytes(hex) {
+  const clean = String(hex || '').trim();
+  if (clean.length === 0 || clean.length % 2 !== 0) return [];
+  const bytes = [];
+  for (let i = 0; i < clean.length; i += 2) {
+    const value = Number.parseInt(clean.slice(i, i + 2), 16);
+    if (!Number.isFinite(value)) return [];
+    bytes.push(value);
+  }
+  return bytes;
+}
+
+function fctvBytesToHex(bytes) {
+  return bytes.map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function fctvReadVarint(bytes, state) {
+  let value = 0;
+  let shift = 0;
+  while (state.index < bytes.length && shift < 56) {
+    const next = bytes[state.index++];
+    value += (next & 0x7f) * (2 ** shift);
+    if ((next & 0x80) === 0) return value;
+    shift += 7;
+  }
+  throw new Error('invalid protobuf varint');
+}
+
+function fctvReadFields(bytes) {
+  const fields = [];
+  const state = { index: 0 };
+  while (state.index < bytes.length) {
+    const tag = fctvReadVarint(bytes, state);
+    const field = Math.floor(tag / 8);
+    const wire = tag & 7;
+    if (field <= 0) throw new Error('invalid protobuf field');
+    if (wire === 0) {
+      fields.push({ field, wire, value: fctvReadVarint(bytes, state) });
+    } else if (wire === 1) {
+      fields.push({ field, wire, value: bytes.slice(state.index, state.index + 8) });
+      state.index += 8;
+    } else if (wire === 2) {
+      const length = fctvReadVarint(bytes, state);
+      if (length < 0 || state.index + length > bytes.length) {
+        throw new Error('invalid protobuf length');
+      }
+      fields.push({
+        field,
+        wire,
+        value: bytes.slice(state.index, state.index + length),
+      });
+      state.index += length;
+    } else if (wire === 5) {
+      fields.push({ field, wire, value: bytes.slice(state.index, state.index + 4) });
+      state.index += 4;
+    } else {
+      throw new Error('unsupported protobuf wire type');
+    }
+  }
+  return fields;
+}
+
+function fctvFieldsOf(bytes, field, wire) {
+  return fctvReadFields(bytes).filter(
+    (entry) => entry.field === field && (wire == null || entry.wire === wire),
+  );
+}
+
+function fctvFirstField(bytes, field, wire) {
+  return fctvFieldsOf(bytes, field, wire)[0] || null;
+}
+
+function fctvString(bytes) {
+  if (!Array.isArray(bytes)) return '';
+  try {
+    return host.codec.base64ToText(
+      host.codec.hexToBase64(fctvBytesToHex(bytes)),
+    ).trim();
+  } catch (_) {
+    return '';
+  }
+}
+
+function fctvBodyHex(response) {
+  if (response == null || response.status < 200 || response.status >= 300) {
+    return null;
+  }
+  const body = String(response.body || '');
+  if (body.length === 0) return null;
+  try {
+    const encoding = fctvHeader(response, 'x-qjsr-body-encoding').toLowerCase();
+    return encoding === 'base64'
+      ? host.codec.base64ToHex(body)
+      : host.codec.base64ToHex(host.codec.textToBase64(body));
+  } catch (_) {
+    return null;
+  }
+}
+
+async function fctvFetchBinary(path, timeoutMs = 10000) {
+  const response = await fctvFetchBinaryResponse(path, timeoutMs);
+  return response.bytes;
+}
+
+function fctvApiTarget(path, businessSecret, usePathPrefix = true) {
+  const rawPath = String(path || '');
+  const prefix = String(FCTV_API_PATH_PREFIX || '').replace(/\/+$/, '');
+  const normalizedPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+  const targetPath = usePathPrefix
+    ? `${prefix}${normalizedPath}`
+    : normalizedPath;
+  if (!businessSecret) return `${FCTV_API_BASE}${targetPath}`;
+  const separator = targetPath.includes('?') ? '&' : '?';
+  return `${FCTV_API_BASE}${targetPath}${separator}bs=${encodeURIComponent(businessSecret)}`;
+}
+
+async function fctvBusinessSecret() {
+  const nowMs = Date.now();
+  if (
+    fctvBusinessSecretMemo != null &&
+    nowMs - fctvBusinessSecretMemo.fetchedAt < FCTV_BUSINESS_SECRET_TTL_MS
+  ) {
+    return fctvBusinessSecretMemo.promise;
+  }
+  const promise = (async () => {
+    const response = await fetch(
+      `${FCTV_API_BASE}/api/common/bs?code=100&sportType=0&stream=true`,
+      { timeoutMs: 10000, headers: fctvApiHeaders() },
+    );
+    const hex = fctvBodyHex(response);
+    if (hex == null) throw new Error(`FCTV business secret failed: ${response.status}`);
+    const root = fctvFirstField(fctvHexToBytes(hex), 10, 2);
+    const payload = root == null ? null : fctvFirstField(root.value, 1, 2);
+    const secret = payload == null
+      ? ''
+      : fctvString((fctvFirstField(payload.value, 2, 2) || {}).value || []);
+    if (!/^[a-f0-9]{32}$/i.test(secret)) {
+      throw new Error('FCTV business secret is malformed');
+    }
+    return secret;
+  })();
+  fctvBusinessSecretMemo = { fetchedAt: nowMs, promise };
+  return promise;
+}
+
+async function fctvFetchBinaryResponse(
+  path,
+  timeoutMs = 10000,
+  usePathPrefix = true,
+) {
+  const secret = await fctvBusinessSecret();
+  const response = await fetch(fctvApiTarget(path, secret, usePathPrefix), {
+    timeoutMs,
+    headers: fctvApiHeaders(),
+  });
+  const hex = fctvBodyHex(response);
+  if (hex == null) throw new Error(`FCTV request failed: ${response.status}`);
+  return {
+    bytes: fctvHexToBytes(hex),
+    rbSession: fctvHeader(response, 'rb-session'),
+  };
+}
+
+function fctvApiHeaders() {
+  return {
+    Accept: 'application/json, text/plain, */*',
+    'User-Agent': FCTV_USER_AGENT,
+    Origin: FCTV_SITE_ORIGIN,
+    Referer: `${FCTV_SITE_ORIGIN}/`,
+    platform: 'WEB',
+    countrycode: 'ID',
+    language: 'eng',
+    languagecode: 'eng',
+    local: 'IND',
+    originalcountry: 'ID',
+    tenant_identifier: 'master',
+    timezone: 'Asia/Jakarta',
+  };
+}
+
+function fctvLeagueName(matchBytes) {
+  const league = fctvFirstField(matchBytes, 10, 2);
+  if (league == null) return '';
+  const display = fctvFirstField(league.value, 3, 2);
+  if (display == null) return '';
+  const name = fctvFirstField(display.value, 2, 2);
+  return name == null ? '' : fctvString(name.value);
+}
+
+function fctvLogoUrl(value) {
+  const raw = String(value || '').trim();
+  if (!/^https?:\/\//i.test(raw)) return '';
+  const path = raw
+    .replace(/^https?:\/\/[^/]+\/?/i, '')
+    .split('!')[0]
+    .split('?')[0]
+    .replace(/^\/+/, '');
+  return path.length === 0
+    ? ''
+    : `${String(FCTV_LOGOS_BASE).replace(/\/+$/, '')}/${path}`;
+}
+
+function fctvLeagueLogo(matchBytes) {
+  const league = fctvFirstField(matchBytes, 10, 2);
+  if (league == null) return '';
+  const display = fctvFirstField(league.value, 3, 2);
+  const candidates = [
+    fctvFirstField(league.value, 4, 2),
+    display == null ? null : fctvFirstField(display.value, 4, 2),
+  ];
+  for (const candidate of candidates) {
+    const logo = fctvLogoUrl(candidate == null ? '' : fctvString(candidate.value));
+    if (logo.length > 0) return logo;
+  }
+  return '';
+}
+
+function fctvTeamName(wrapperBytes) {
+  const team = fctvFirstField(wrapperBytes, 10, 2);
+  if (team == null) return '';
+  const display = fctvFirstField(team.value, 3, 2);
+  if (display == null) return '';
+  const name = fctvFirstField(display.value, 2, 2);
+  return name == null ? '' : fctvString(name.value);
+}
+
+function fctvParseMatch(matchBytes) {
+  const id = fctvFirstField(matchBytes, 1, 0);
+  const sportType = fctvFirstField(matchBytes, 2, 0);
+  const startsAt = fctvFirstField(matchBytes, 3, 0);
+  if (id == null || sportType == null || startsAt == null) return null;
+
+  let title = '';
+  const participants = [];
+  const participantLogos = [];
+  for (const entry of fctvFieldsOf(matchBytes, 30, 2)) {
+    const directTitle = fctvFirstField(entry.value, 2, 2);
+    if (directTitle != null && title.length === 0) {
+      title = fctvString(directTitle.value);
+    }
+    if (fctvFirstField(entry.value, 10, 2) != null) {
+      const team = fctvTeamName(entry.value);
+      if (team.length > 0) {
+        participants.push(team);
+        const teamBlock = fctvFirstField(entry.value, 10, 2);
+        const logo = teamBlock == null
+          ? ''
+          : fctvLogoUrl(
+              fctvString((fctvFirstField(teamBlock.value, 4, 2) || {}).value || []),
+            );
+        participantLogos.push(logo);
+      }
+    }
+  }
+
+  const slugInfo = fctvFirstField(matchBytes, 150, 2);
+  const slug = slugInfo == null
+    ? ''
+    : fctvString((fctvFirstField(slugInfo.value, 20, 2) || {}).value || []);
+  return {
+    matchId: String(id.value),
+    sportType: Number(sportType.value),
+    startsAt: Number(startsAt.value),
+    title: title || participants.join(' vs '),
+    participants,
+    participantLogos,
+    leagueName: fctvLeagueName(matchBytes),
+    leagueLogo: fctvLeagueLogo(matchBytes),
+    slug,
+  };
+}
+
+function fctvParseLiveMatches(bytes) {
+  const data = fctvFirstField(bytes, 10, 2);
+  if (data == null) return [];
+  const matches = [];
+  for (const entry of fctvFieldsOf(data.value, 1, 2)) {
+    try {
+      const match = fctvParseMatch(entry.value);
+      if (match != null) matches.push(match);
+    } catch (_) {
+      // One malformed upstream item should not hide the remaining events.
+    }
+  }
+  return matches;
+}
+
+function fctvSportName(sportType) {
+  switch (Number(sportType)) {
+    case 1: return 'Football';
+    case 2: return 'Basketball';
+    case 3: return 'Tennis';
+    case 4: return 'Baseball';
+    case 5: return 'Volleyball';
+    case 7: return 'Motorsport';
+    case 11: return 'Hockey';
+    case 12: return 'Badminton';
+    case 13: return 'Volleyball';
+    case 15: return 'Fighting';
+    default: return 'Other Live Sports';
+  }
+}
+
+function fctvSportNameForMatch(match) {
+  const identity = `${match && match.leagueName || ''} ${match && match.title || ''}`;
+  if (/\bhockey\b|\bnhl\b|\baahl\b/i.test(identity)) return 'Hockey';
+  if (/\bbaseball\b|\bmlb\b|\bnpb\b/i.test(identity)) return 'Baseball';
+  if (/\btable tennis\b|\bping pong\b/i.test(identity)) return 'Table Tennis';
+  if (/\bbasketball\b|\bnba\b|\bwnba\b/i.test(identity)) return 'Basketball';
+  if (/\bvolleyball\b/i.test(identity)) return 'Volleyball';
+  if (/\bbadminton\b|\bbwf\b/i.test(identity)) return 'Badminton';
+  return fctvSportName(match && match.sportType);
+}
+
+function fctvNormalize(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&amp;/g, '&')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function fctvEntryIsLive(match, nowMs) {
+  return match.startsAt <= nowMs && nowMs - match.startsAt <= FCTV_LIVE_WINDOW_MS;
+}
+
+function fctvIsHighlight(match) {
+  return fctvNormalize(
+    `${match.title || ''} ${match.leagueName || ''} ${match.slug || ''}`,
+  ).includes('sorotan');
+}
+
+function fctvIsAsianGames(match) {
+  return /\basian\s+(?:para\s+)?games?\b/i.test(
+    `${match.title || ''} ${match.leagueName || ''} ${match.slug || ''}`,
+  );
+}
+
+function fctvAsianGamesBrandLogo(match) {
+  if (!fctvIsAsianGames(match)) return '';
+  const identity = `${match.title || ''} ${match.leagueName || ''} ${match.slug || ''}`;
+  const sportType = Number(match.sportType);
+  const candidates = [
+    { code: 'BAS', match: /basketball|\bbsk\b/i },
+    { code: 'HOC', match: /hockey|\bnhl\b|\bhoc\b/i },
+    { code: 'BOX', match: /boxing|\bbox\b/i },
+    { code: 'TTE', match: /table\s*tennis|ping\s*pong|\btte\b/i },
+    { code: 'VVO', match: /volleyball|\bvvo\b/i, sportTypes: [5, 13] },
+    { code: 'BDM', match: /badminton|\bbwf\b|\bbdm\b/, sportTypes: [12] },
+    { code: 'TEN', match: /tennis|\bten\b/i, sportTypes: [3] },
+    { code: 'FBL', match: /football|soccer|\bfbl\b/i, sportTypes: [1] },
+    { code: 'SWI', match: /swimming|swim|\bswi\b/i, sportTypes: [6] },
+    { code: 'ARC', match: /archery|\barc\b/i },
+    { code: 'ATH', match: /athletics|\bath\b/i },
+    { code: 'BMX', match: /bmx/i },
+    { code: 'CSL', match: /canoe\s*slalom|\bcsl\b/i },
+    { code: 'CSP', match: /canoe\s*sprint|\bcsp\b/i },
+    { code: 'CRD', match: /cycling[- ]?road|road\s*cycling|\bcrd\b/i },
+    { code: 'CTR', match: /cycling[- ]?track|track\s*cycling|\bctr\b/i },
+    { code: 'MTB', match: /mountain\s*bike|\bmtb\b/i },
+    { code: 'DIV', match: /diving|\bdiv\b/i },
+    { code: 'EQU', match: /equestrian|\bequ\b/i },
+    { code: 'FEN', match: /fencing|\bfen\b/i },
+    { code: 'GAR', match: /artistic\s*gymnastics|gymnastics[- ]?artistic|\bgar\b/i },
+    { code: 'GRY', match: /rhythmic\s*gymnastics|gymnastics[- ]?rhythmic|\bgry\b/i },
+    { code: 'GTR', match: /trampoline\s*gymnastics|gymnastics[- ]?trampoline|\bgtr\b/i },
+    { code: 'JUD', match: /judo|\bjud\b/i },
+    { code: 'JJI', match: /jiu\s*jitsu|\bjji\b/i },
+    { code: 'KAB', match: /kabaddi|\bkab\b/i },
+    { code: 'KUR', match: /kurash|\bkur\b/i },
+    { code: 'MMA', match: /mixed\s*martial\s*arts|\bmma\b/i },
+    { code: 'ROW', match: /rowing|\brow\b/i },
+    { code: 'SHO', match: /shooting|\bsho\b/i },
+    { code: 'SKB', match: /skateboarding|\bskb\b/i },
+    { code: 'SQU', match: /squash|\bsqu\b/i },
+    { code: 'SRF', match: /surfing|\bsrf\b/i },
+    { code: 'TRI', match: /triathlon|\btri\b/i },
+    { code: 'WPO', match: /water\s*polo|\bwpo\b/i },
+    { code: 'WLF', match: /weightlifting|\bwlf\b/i },
+    { code: 'WRE', match: /wrestling|\bwre\b/i },
+    { code: 'WSU', match: /wushu|\bwsu\b/i },
+  ];
+  const selected = candidates.find((candidate) =>
+    candidate.match.test(identity) || candidate.sportTypes?.includes(sportType),
+  );
+  const code = selected == null ? '' : selected.code;
+  return code.length === 0
+    ? ''
+    : `${FCTV_ASIAN_GAMES_LOGO_PROXY}${encodeURIComponent(
+        `${FCTV_ASIAN_GAMES_LOGOS_BASE}/${code}.png`,
+      )}&output=webp`;
+}
+
+function fctvEntryToCatalog(match, nowMs) {
+  const sportName = fctvSportNameForMatch(match);
+  const live = fctvEntryIsLive(match, nowMs);
+  const item = {
+    ref: {
+      extensionId: globalThis.__nimoraExtensionId || 'nimora',
+      providerId: 'nimora.matches',
+      id: `fctv:${match.matchId}:${match.sportType}`,
+    },
+    kind: 'event',
+    title: match.title || `${sportName} event`,
+    subtitle: match.leagueName || sportName,
+    schedule: {
+      startsAt: new Date(match.startsAt).toISOString(),
+      state: live ? 'live' : 'scheduled',
+    },
+  };
+  if (match.participants.length === 2) {
+    item.participants = match.participants.map((name, index) => {
+      const logo = Array.isArray(match.participantLogos)
+        ? match.participantLogos[index]
+        : '';
+      return {
+        name,
+        ...(logo ? { logo: { url: logo } } : {}),
+      };
+    });
+  }
+  const brandingLogo = fctvAsianGamesBrandLogo(match) || match.leagueLogo;
+  if (fctvIsAsianGames(match)) {
+    item.branding = {
+      primaryColor: FCTV_ASIAN_GAMES_PRIMARY_COLOR,
+      secondaryColor: FCTV_ASIAN_GAMES_SECONDARY_COLOR,
+      ...(brandingLogo ? { logo: { url: brandingLogo } } : {}),
+    };
+  } else if (brandingLogo) {
+    item.branding = { logo: { url: brandingLogo } };
+  }
+  return {
+    sportId: sportName,
+    sportName,
+    live,
+    item,
+    ...(fctvIsAsianGames(match) ? { shelfIds: ['asian-games'] } : {}),
+  };
+}
+
+async function fctvFetchLiveMatches() {
+  const bytes = await fctvFetchBinary('/api/match/live?sportType=0&language=0&stream=true');
+  return fctvParseLiveMatches(bytes);
+}
+
+function fctvLiveMatchesMemo() {
+  const nowMs = Date.now();
+  if (fctvLiveMemo != null && nowMs - fctvLiveMemo.fetchedAt < FCTV_MEMO_TTL_MS) {
+    return fctvLiveMemo.promise;
+  }
+  const promise = fctvFetchLiveMatches().catch(() => []);
+  fctvLiveMemo = { fetchedAt: nowMs, promise };
+  return promise;
+}
+
+async function fctvSportEntries(nowMs) {
+  const matches = await fctvLiveMatchesMemo();
+  return matches
+    .filter((match) => !fctvIsHighlight(match))
+    .filter((match) => match.startsAt - nowMs <= FCTV_UPCOMING_WINDOW_MS)
+    .map((match) => fctvEntryToCatalog(match, nowMs));
+}
+
+function fctvMatchFromSourceId(sourceId) {
+  const parts = String(sourceId || '').split(':');
+  if ((parts.length !== 4 && parts.length !== 5) || parts[0] !== FCTV_PROVIDER_KEY) return null;
+  const matchId = parts[1];
+  const sportType = Number(parts[2]);
+  const siteType = parts.length === 5 ? Number(parts[3]) : 2001;
+  const streamId = parts.length === 5 ? parts[4] : parts[3];
+  if (!/^\d+$/.test(matchId) || !Number.isFinite(sportType) || !/^\d+$/.test(streamId)) {
+    return null;
+  }
+  return {
+    matchId,
+    sportType,
+    siteType: Number.isFinite(siteType) && siteType > 0 ? siteType : 2001,
+    streamId,
+  };
+}
+
+function fctvMatchFromItemId(itemId) {
+  const parts = String(itemId || '').split(':');
+  if (parts.length !== 3 || parts[0] !== FCTV_PROVIDER_KEY) return null;
+  const matchId = parts[1];
+  const sportType = Number(parts[2]);
+  if (!/^\d+$/.test(matchId) || !Number.isFinite(sportType)) return null;
+  return { matchId, sportType };
+}
+
+async function fctvMatchForItem(item) {
+  const direct = fctvMatchFromItemId(item && item.ref && item.ref.id);
+  if (direct != null) return direct;
+  const participants = Array.isArray(item && item.participants)
+    ? item.participants.map((part) => fctvNormalize(part && part.name)).filter(Boolean)
+    : [];
+  if (participants.length !== 2) return null;
+  const kickoff = Date.parse(item.schedule && item.schedule.startsAt);
+  const candidates = await fctvLiveMatchesMemo();
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    if (candidate.participants.length !== 2) continue;
+    const names = candidate.participants.map(fctvNormalize);
+    const sameOrder = names[0] === participants[0] && names[1] === participants[1];
+    const reverseOrder = names[0] === participants[1] && names[1] === participants[0];
+    if (!sameOrder && !reverseOrder) continue;
+    const timeDelta = Number.isFinite(kickoff)
+      ? Math.abs(candidate.startsAt - kickoff)
+      : 0;
+    if (timeDelta > FCTV_LIVE_WINDOW_MS) continue;
+    const score = timeDelta + (sameOrder ? 0 : 1);
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best == null ? null : {
+    matchId: best.matchId,
+    sportType: best.sportType,
+  };
+}
+
+function fctvStreamsFromDetail(bytes) {
+  const data = fctvFirstField(bytes, 10, 2);
+  if (data == null) return [];
+  return fctvFieldsOf(data.value, 2, 2)
+    .map((entry) => {
+      const stream = entry.value;
+      const id = fctvFirstField(stream, 1, 0);
+      const name = fctvFirstField(stream, 3, 2);
+      const status = fctvFirstField(stream, 5, 0);
+      const siteType = fctvFirstField(stream, 9, 0);
+      if (id == null || status == null || status.value !== 1) return null;
+      return {
+        streamId: String(id.value),
+        name: name == null ? 'Live stream' : fctvString(name.value),
+        siteType: siteType == null ? 0 : Number(siteType.value),
+      };
+    })
+    .filter((stream) => stream != null);
+}
+
+async function fctvMatchStreams(match) {
+  const bytes = await fctvFetchBinary(
+    `/api/match/detail?matchId=${encodeURIComponent(match.matchId)}` +
+    `&sportType=${encodeURIComponent(match.sportType)}&stream=true`,
+  );
+  return fctvStreamsFromDetail(bytes);
+}
+
+async function fctvSources(args) {
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && enabled.indexOf(FCTV_PROVIDER_ID) === -1) return { sources: [] };
+  const match = await fctvMatchForItem(args && args.item);
+  if (match == null) return { sources: [] };
+  let streams;
+  try {
+    streams = await fctvMatchStreams(match);
+  } catch (_) {
+    return { sources: [] };
+  }
+  return {
+    sources: streams.map((stream) => ({
+      id: `${FCTV_PROVIDER_KEY}:${match.matchId}:${match.sportType}:` +
+        `${stream.siteType}:${stream.streamId}`,
+      label: fctvSourceLabel(stream.name),
+      provider: 'FCTV33',
+      providerId: FCTV_PROVIDER_ID,
+    })),
+  };
+}
+
+function fctvSourceHeaders() {
+  return {
+    Origin: FCTV_SITE_ORIGIN,
+    Referer: `${FCTV_SITE_ORIGIN}/`,
+    'User-Agent': FCTV_USER_AGENT,
+  };
+}
+
+function fctvPlaylistHeaders() {
+  // The upstream playlist rejects Referer/Origin. Keep this deliberately
+  // separate from the CDN headers used for child playlists and segments.
+  return { 'User-Agent': FCTV_USER_AGENT };
+}
+
+function fctvSegmentHeaders(origin) {
+  return {
+    'User-Agent': FCTV_USER_AGENT,
+    Accept: '*/*',
+    Origin: origin,
+    Referer: `${origin}/`,
+  };
+}
+
+function fctvSourceLabel() {
+  return 'FCTV';
+}
+
+function fctvValidMediaUrl(value) {
+  return /^https?:\/\/[^\s]+$/i.test(String(value || ''));
+}
+
+function fctvRot47(value) {
+  return [...String(value || '')].map((char) => {
+    const code = char.charCodeAt(0);
+    if (code < 33 || code > 126) return char;
+    return String.fromCharCode(33 + ((code - 33 + 47) % 94));
+  }).join('');
+}
+
+function fctvDecodedMediaUrl(value) {
+  const raw = String(value || '').trim();
+  const decoded = fctvRot47(raw);
+  if (decoded.length > 8 && fctvValidMediaUrl(decoded.slice(8))) {
+    return decoded.slice(8);
+  }
+  if (fctvValidMediaUrl(decoded)) return decoded;
+  // `notConfuse=true` is useful for diagnostics and returns a plain URL.
+  if (fctvValidMediaUrl(raw)) return raw;
+  return '';
+}
+
+function fctvTokenizedMediaUrl(value, rbSession) {
+  const mediaUrl = fctvDecodedMediaUrl(value);
+  if (!fctvValidMediaUrl(mediaUrl)) return '';
+  const session = String(rbSession || '');
+  if (session.length === 0) return mediaUrl;
+  try {
+    const parsed = mediaUrl.match(
+      /^(https?:\/\/[^/]+)(\/[^?]*)?(\?.*)?$/i,
+    );
+    if (parsed == null) return '';
+    const encrypted = host.crypto.aesCbcEncrypt(
+      host.codec.textToBase64(FCTV_TOKEN_KEY),
+      host.codec.textToBase64(FCTV_TOKEN_IV),
+      host.codec.textToBase64(session),
+    );
+    const cipherHex = host.codec.base64ToHex(encrypted);
+    return `${parsed[1]}/token-${encodeURIComponent(cipherHex)}a` +
+      `${parsed[2] || '/'}${parsed[3] || ''}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+function fctvMediaUrlWithPath(candidate, primary) {
+  const candidateUrl = fctvDecodedMediaUrl(candidate);
+  const primaryUrl = fctvDecodedMediaUrl(primary);
+  if (!fctvValidMediaUrl(candidateUrl)) return '';
+  const candidatePathIndex = candidateUrl.indexOf('/', candidateUrl.indexOf('://') + 3);
+  if (candidatePathIndex >= 0 && candidateUrl.slice(candidatePathIndex) !== '/') {
+    return candidateUrl;
+  }
+  const primaryPathIndex = primaryUrl.indexOf('/', primaryUrl.indexOf('://') + 3);
+  if (primaryPathIndex < 0 || primaryUrl.slice(primaryPathIndex) === '/') return '';
+  return `${candidateUrl.replace(/\/$/, '')}${primaryUrl.slice(primaryPathIndex)}`;
+}
+
+function fctvResponseBytes(response) {
+  const hex = fctvBodyHex(response);
+  return hex == null ? null : fctvHexToBytes(hex);
+}
+
+function fctvBytesToText(bytes) {
+  if (!Array.isArray(bytes)) return '';
+  try {
+    return host.codec.base64ToText(
+      host.codec.hexToBase64(fctvBytesToHex(bytes)),
+    );
+  } catch (_) {
+    return '';
+  }
+}
+
+function fctvResolveRelativeUrl(baseUrl, value) {
+  const child = String(value || '').trim();
+  if (fctvValidMediaUrl(child)) return child;
+  const match = String(baseUrl || '').match(/^(https?:\/\/[^/]+)(\/.*)?$/i);
+  if (match == null) return '';
+  if (child.startsWith('/')) return `${match[1]}${child}`;
+  const path = match[2] || '/';
+  const directory = path.slice(0, path.lastIndexOf('/') + 1);
+  return `${match[1]}${directory}${child}`;
+}
+
+function fctvFirstHlsUri(text) {
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const value = line.trim();
+    if (value.length > 0 && !value.startsWith('#')) return value;
+  }
+  return '';
+}
+
+function fctvMediaBytesLookBinary(bytes) {
+  if (!Array.isArray(bytes) || bytes.length === 0) return false;
+  if (bytes[0] === 0x47) return true;
+  if (bytes.length >= 8) {
+    const brand = String.fromCharCode(
+      bytes[4], bytes[5], bytes[6], bytes[7],
+    );
+    if (brand === 'ftyp' || brand === 'moof') return true;
+  }
+  return bytes.length >= 2 && bytes[0] === 0xff &&
+    (bytes[1] === 0xf1 || bytes[1] === 0xf9);
+}
+
+function fctvMediaResponseIsUsable(response, bytes) {
+  if (response == null || response.status < 200 || response.status >= 300) {
+    return false;
+  }
+  if (!Array.isArray(bytes) || bytes.length === 0) return false;
+  const contentType = fctvHeader(response, 'content-type').toLowerCase();
+  if (/(text\/html|text\/plain)/i.test(contentType)) return false;
+  if (/application\/json/i.test(contentType)) {
+    return fctvMediaBytesLookBinary(bytes);
+  }
+  return true;
+}
+
+async function fctvValidateMediaUrl(mediaUrl, depth = 0) {
+  if (depth > 2) throw new Error('FCTV playlist nesting is too deep');
+  const response = await fetch(mediaUrl, {
+    timeoutMs: FCTV_MEDIA_TIMEOUT_MS,
+    headers: {
+      ...fctvSourceHeaders(),
+      Accept: '*/*',
+    },
+  });
+  const bytes = fctvResponseBytes(response);
+  if (bytes == null) throw new Error(`FCTV media HTTP ${response.status}`);
+  const text = fctvBytesToText(bytes);
+  if (text.trimLeft().startsWith('#EXTM3U')) {
+    const next = fctvFirstHlsUri(text);
+    if (next.length === 0) throw new Error('FCTV playlist has no media URI');
+    return fctvValidateMediaUrl(fctvResolveRelativeUrl(mediaUrl, next), depth + 1);
+  }
+  if (!fctvMediaResponseIsUsable(response, bytes)) {
+    throw new Error('FCTV media response is not playable');
+  }
+  return true;
+}
+
+function fctvPlayerOriginsFromConfig(raw) {
+  const origins = [];
+  const addOrigin = (value) => {
+    let candidate = String(value || '').trim().replace(/\\\//g, '/');
+    if (candidate.length > 0 && !/^https?:\/\//i.test(candidate)) {
+      candidate = `https://${candidate}`;
+    }
+    const match = candidate.match(
+      /^https?:\/\/([^/?#]+)/i,
+    );
+    if (match == null) return;
+    const origin = `${match[0].slice(0, match[0].length - match[1].length)}${match[1]}`
+      .replace(/\/$/, '');
+    if (!origins.includes(origin)) origins.push(origin);
+  };
+  const parseObject = (value) => {
+    if (value != null && typeof value === 'object' && !Array.isArray(value)) {
+      return value;
+    }
+    try {
+      const parsed = JSON.parse(String(value || ''));
+      return parsed != null && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed
+        : null;
+    } catch (_) {
+      return null;
+    }
+  };
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach((entry) => addOrigin(entry));
+      return;
+    }
+    const object = parseObject(value);
+    if (object == null) return;
+    const clients = parseObject(object['common:web:client']);
+    if (clients != null) {
+      Object.values(clients).forEach((client) => {
+        if (client == null || typeof client !== 'object') return;
+        const domains = client.iframePlayerDomains;
+        if (Array.isArray(domains)) addOrigin(domains[0]);
+      });
+    }
+    const playerDomains = parseObject(object.g_player_domains);
+    if (playerDomains != null) {
+      const siteDigit = globalThis.__fctvSiteDigit || 'foth';
+      visit(playerDomains[siteDigit]);
+    }
+  };
+
+  const rawText = String(raw || '');
+  visit(rawText);
+  visit(fctvRot47(rawText));
+  return origins;
+}
+
+async function fctvPlayerOrigins() {
+  if (fctvPlayerOriginsMemo != null) return fctvPlayerOriginsMemo;
+  let discovered = [];
+  try {
+    const response = await fetch(`${FCTV_API_BASE}/api/common/params`, {
+      timeoutMs: 10000,
+      headers: fctvApiHeaders(),
+    });
+    if (response.status >= 200 && response.status < 300) {
+      discovered = fctvPlayerOriginsFromConfig(response.body);
+    }
+  } catch (_) {
+    // The player origin is only a CDN header hint; fallback origins remain
+    // usable when the configuration endpoint is unavailable.
+  }
+  fctvPlayerOriginsMemo = [...new Set([
+    ...discovered,
+    FCTV_SITE_ORIGIN,
+    ...FCTV_FALLBACK_PLAYER_ORIGINS,
+  ])];
+  return fctvPlayerOriginsMemo;
+}
+
+async function fctvGeo() {
+  if (fctvGeoMemo != null) return fctvGeoMemo;
+  let result = null;
+  try {
+    const bytes = await fctvFetchBinary('/api/user/info');
+    const info = fctvFirstField(bytes, 10, 2);
+    const country = info == null ? '' : fctvString(
+      (fctvFirstField(info.value, 2, 2) || {}).value || [],
+    );
+    const continent = info == null ? '' : fctvString(
+      (fctvFirstField(info.value, 3, 2) || {}).value || [],
+    );
+    if (country.length > 0 && continent.length > 0) {
+      result = { country, continent };
+    }
+  } catch (_) {
+    // Use the local market fallback if the geo endpoint is challenged.
+  }
+  fctvGeoMemo = result || { country: 'ID', continent: 'AS' };
+  return fctvGeoMemo;
+}
+
+async function fctvPlaylistUrl(source) {
+  const geo = await fctvGeo();
+  const path =
+    `/api/stream/detail?streamId=${encodeURIComponent(source.streamId)}` +
+    `&matchId=${encodeURIComponent(source.matchId)}` +
+    `&sportType=${encodeURIComponent(source.sportType)}` +
+    `&siteType=${encodeURIComponent(source.siteType)}` +
+    `&country=${encodeURIComponent(geo.country)}` +
+    `&continent=${encodeURIComponent(geo.continent)}`;
+  // The current web client requests stream/detail from the API root. The
+  // older sfver-prefixed route still answers, but does not expose rb-session,
+  // which leaves the CDN URL unsigned for child media segments.
+  const response = await fctvFetchBinaryResponse(path, 10000, false);
+  const bytes = response.bytes;
+  const outer = fctvFirstField(bytes, 10, 2);
+  const stream = outer == null ? null : fctvFirstField(outer.value, 2, 2);
+  const encoded = stream == null ? '' : fctvString(
+    (fctvFirstField(stream.value, 4, 2) || {}).value || [],
+  );
+  // The CDN accepts the playlist path without a token, but redirects every
+  // child `.json` segment until the rb-session token is embedded after the
+  // media host. Preserve that response header through the resolver.
+  const decoded = await fctvSelectMediaUrl(
+    fctvMediaEntries(bytes),
+    response.rbSession,
+  ) || fctvTokenizedMediaUrl(encoded, response.rbSession) ||
+    fctvDecodedMediaUrl(encoded);
+  if (!fctvValidMediaUrl(decoded)) throw new Error('FCTV returned no playlist URL');
+  return decoded;
+}
+
+function fctvMediaEntries(bytes) {
+  const data = fctvFirstField(bytes, 10, 2);
+  if (data == null) return [];
+  const entries = [];
+  for (const entry of fctvFieldsOf(data.value, 2, 2)) {
+      const url = fctvFirstField(entry.value, 4, 2);
+      const name = fctvFirstField(entry.value, 3, 2);
+      const primaryUrl = url == null ? '' : fctvDecodedMediaUrl(fctvString(url.value));
+      if (!fctvValidMediaUrl(primaryUrl)) continue;
+      const entryName = name == null ? 'Live stream' : fctvString(name.value);
+      const urls = [primaryUrl];
+      // FCTV returns backup edge hosts in repeated field 12. Each backup
+      // reuses the primary signed HLS path for this resolve attempt.
+      for (const backup of fctvFieldsOf(entry.value, 12, 2)) {
+        const backupUrl = fctvMediaUrlWithPath(fctvString(backup.value), primaryUrl);
+        if (backupUrl.length > 0 && !urls.includes(backupUrl)) urls.push(backupUrl);
+      }
+      for (const mediaUrl of urls) {
+        entries.push({ mediaUrl, name: entryName });
+      }
+  }
+  return entries;
+}
+
+async function fctvMediaHostHealthy(host) {
+  try {
+    const response = await fetch(`https://${host}/cgi-trace`, {
+      timeoutMs: FCTV_MEDIA_HEALTH_TIMEOUT_MS,
+      headers: {
+        Accept: 'text/plain, */*',
+        'User-Agent': FCTV_USER_AGENT,
+      },
+    });
+    const body = String(response.body || '').trim().toLowerCase();
+    const statusOk = (response.status >= 200 && response.status < 300) ||
+      response.status === 304;
+    const bodyOk = body === '.' || body === '1' || body.includes('ok') ||
+      body.includes('success');
+    return statusOk || bodyOk;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function fctvSelectMediaUrl(entries, rbSession) {
+  const candidates = entries
+    .map((entry) => ({
+      ...entry,
+      mediaUrl: fctvTokenizedMediaUrl(entry.mediaUrl, rbSession),
+    }))
+    .filter((entry) => fctvValidMediaUrl(entry.mediaUrl));
+  if (candidates.length === 0) return '';
+
+  // Match the web player's selectHealthyStreamUrl behavior: probe the
+  // primary and backup hosts, then keep the signed URL's path and query.
+  for (const candidate of candidates) {
+    try {
+      const hostMatch = String(candidate.mediaUrl).match(
+        /^https?:\/\/([^/:?#]+)/i,
+      );
+      const host = hostMatch == null ? '' : hostMatch[1];
+      if (host.length === 0) continue;
+      if (await fctvMediaHostHealthy(host)) return candidate.mediaUrl;
+    } catch (_) {}
+  }
+  return candidates[0].mediaUrl;
+}
+
+async function fctvFirstPlayableMediaEntry(bytes, rbSession = '') {
+  const entries = fctvMediaEntries(bytes);
+  let lastError = null;
+  for (const entry of entries) {
+    const mediaUrl = fctvTokenizedMediaUrl(entry.mediaUrl, rbSession);
+    if (!fctvValidMediaUrl(mediaUrl)) continue;
+    try {
+      await fctvValidateMediaUrl(mediaUrl);
+      return { ...entry, mediaUrl };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError != null) throw lastError;
+  throw new Error('FCTV returned no playable media');
+}
+
+async function fctvResolve(sourceId) {
+  const source = fctvMatchFromSourceId(sourceId);
+  if (source == null) throw new Error(`Invalid FCTV source id: ${sourceId}`);
+  const playlist = await fctvPlaylistUrl(source);
+  const origins = await fctvPlayerOrigins();
+  const playerOrigin = origins[0] || FCTV_SITE_ORIGIN;
+  return {
+    url: playlist,
+    // Keep a conservative base map for consumers that do not know the
+    // specialised HLS fields. The app proxy prefers the two maps below.
+    headers: fctvPlaylistHeaders(),
+    playlistHeaders: fctvPlaylistHeaders(),
+    segmentHeaders: fctvSegmentHeaders(playerOrigin),
+    format: 'hls',
+    label: fctvSourceLabel(),
+  };
+}
+
+globalThis.__fctvSportEntries = fctvSportEntries;
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: FCTV_PROVIDER_KEY,
+  sources: fctvSources,
+  resolve: (sourceId) => fctvResolve(sourceId),
+});
 
 // Shared helpers for source labels.
 //
@@ -19499,8 +20623,8 @@ if (!globalThis.__extension.segments) {
 //
 // The public homepage is a WordPress page whose video cards come from the
 // `Video` category. The REST API gives us the same post stream without
-// depending on the theme's generated HTML layout. Each post contains a Videa
-// iframe; the iframe page carries the actual CDN master playlist.
+// depending on the theme's generated HTML layout. Posts may contain a legacy
+// Videa iframe, a Byse frame, or a second direct-HLS highlights iframe.
 
 const TIMESOCCER_BASE =
   globalThis.__timesoccerBaseUrl || 'https://timesoccertv.com';
@@ -19552,30 +20676,59 @@ function timesoccerContentOf(post) {
   return '';
 }
 
-function timesoccerEmbedUrlFromHtml(html) {
+function timesoccerEmbedUrlsFromHtml(html) {
   const frames = /<iframe\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/ig;
+  const urls = [];
+  const seen = new Set();
   let match;
   while ((match = frames.exec(html || '')) != null) {
     const url = timesoccerDecodeHtml(match[1]).trim();
-    if (/^https?:\/\/[^/]+\/embed\/media\/[A-Za-z0-9-]+(?:[/?#]|$)/i.test(url)) {
-      return url;
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+    // TimeSoccer now mixes the legacy Videa path with Byse `/e/...` frames
+    // and the direct-HLS `soccertims/.../embed/...` player. Keep all of the
+    // known embed-shaped frames and let the resolver validate the stream.
+    if (!/(?:\/embed\/media\/|\/e\/[A-Za-z0-9_-]+(?:[/?#]|$)|\/embed\/[A-Za-z0-9_-]+(?:[/?#]|$))/i.test(url)) {
+      continue;
     }
+    seen.add(url);
+    urls.push(url);
   }
-  return null;
+  return urls;
 }
 
-function timesoccerHasVideaEmbed(post) {
+function timesoccerEmbedUrlFromHtml(html) {
+  return timesoccerEmbedUrlsFromHtml(html)[0] || null;
+}
+
+function timesoccerHasSupportedEmbed(post) {
   return timesoccerEmbedUrlFromHtml(timesoccerContentOf(post)) != null;
 }
 
-function timesoccerHlsUrlFromEmbed(html) {
+function timesoccerHlsUrlFromEmbed(html, baseUrl) {
   const decoded = timesoccerDecodeHtml(html);
-  const matches = decoded.match(
-    /https?:\/\/[^"'<>\\\s]+\.m3u8(?:\?[^"'<>\\\s]*)?/ig,
+  const playlistMatch = /\.m3u8(?:\?[^"'<> \t\r\n]*)?/i.exec(decoded);
+  if (playlistMatch == null) return null;
+  const prefix = decoded.slice(0, playlistMatch.index);
+  const absoluteMatch = /https?:\/\/[^"'<> \t\r\n]*$/i.exec(prefix);
+  const start = absoluteMatch != null
+    ? prefix.length - absoluteMatch[0].length
+    : prefix.lastIndexOf('//');
+  if (start < 0) return null;
+  const rawUrl = decoded.slice(
+    start,
+    playlistMatch.index + playlistMatch[0].length,
   );
-  if (!matches || matches.length === 0) return null;
-  const url = matches[0].trim();
-  return /^https?:\/\//i.test(url) ? url : null;
+  const normalized = rawUrl.trim();
+  if (/^https?:\/\//i.test(normalized)) return normalized;
+  if (/^\/\//.test(normalized)) {
+    const scheme = /^(https?):/i.exec(baseUrl);
+    return `${scheme == null ? 'https' : scheme[1]}:${normalized}`;
+  }
+  try {
+    return new URL(normalized, baseUrl).toString();
+  } catch (_) {
+    return null;
+  }
 }
 
 function timesoccerArtworkUrl(post) {
@@ -19591,7 +20744,7 @@ function timesoccerArtworkUrl(post) {
 
 function timesoccerPostToItem(post) {
   if (post == null || post.id == null) return null;
-  if (!timesoccerHasVideaEmbed(post)) return null;
+  if (!timesoccerHasSupportedEmbed(post)) return null;
   const title = timesoccerCleanTitle(
     post.title && typeof post.title === 'object'
       ? post.title.rendered
@@ -19783,7 +20936,7 @@ async function timesoccerSources(args) {
   return {
     sources: [{
       id: `${TIMESOCCER_PROVIDER_KEY}:${itemId.slice('post:'.length)}`,
-      label: 'Videa HLS',
+      label: 'Time Soccer HLS',
       provider: 'Nimora',
       providerId: TIMESOCCER_PROVIDER_ID,
     }],
@@ -19809,52 +20962,60 @@ async function timesoccerResolveSource(sourceId) {
   );
   const postResponse = await timesoccerFetchJson(postUrl);
   const post = postResponse.data;
-  const embedUrl = timesoccerEmbedUrlFromHtml(timesoccerContentOf(post));
-  if (embedUrl == null) {
-    throw new Error(`Time Soccer post ${postId} has no Videa embed`);
+  const embedUrls = timesoccerEmbedUrlsFromHtml(timesoccerContentOf(post));
+  if (embedUrls.length === 0) {
+    throw new Error(`Time Soccer post ${postId} has no supported embed`);
   }
 
-  const embedResponse = await fetch(embedUrl, {
-    headers: {
-      Accept: 'text/html,application/xhtml+xml',
-      'User-Agent': TIMESOCCER_USER_AGENT,
-    },
-  });
-  if (embedResponse.status < 200 || embedResponse.status >= 300) {
-    throw new Error(`Videa embed request failed: ${embedResponse.status}`);
-  }
-  const hlsUrl = timesoccerHlsUrlFromEmbed(embedResponse.body);
-  if (hlsUrl == null) throw new Error('Videa embed has no HLS playlist');
+  let lastError = null;
+  for (const embedUrl of embedUrls) {
+    try {
+      const embedResponse = await fetch(embedUrl, {
+        headers: {
+          Accept: 'text/html,application/xhtml+xml',
+          'User-Agent': TIMESOCCER_USER_AGENT,
+        },
+      });
+      if (embedResponse.status < 200 || embedResponse.status >= 300) {
+        throw new Error(`Time Soccer embed request failed: ${embedResponse.status}`);
+      }
+      const hlsUrl = timesoccerHlsUrlFromEmbed(embedResponse.body, embedUrl);
+      if (hlsUrl == null) {
+        lastError = new Error('Time Soccer embed has no HLS playlist');
+        continue;
+      }
 
-  const playlistResponse = await fetch(hlsUrl, {
-    headers: {
-      Accept: 'application/vnd.apple.mpegurl,application/x-mpegURL,*/*',
-      'User-Agent': TIMESOCCER_USER_AGENT,
-    },
-  });
-  if (playlistResponse.status < 200 || playlistResponse.status >= 300) {
-    throw new Error(`Videa playlist request failed: ${playlistResponse.status}`);
-  }
-  const playlist = String(playlistResponse.body || '');
-  if (!playlist.includes('#EXTM3U') ||
-      !(/#EXT-X-STREAM-INF|#EXTINF/.test(playlist))) {
-    throw new Error('Videa response is not a playable HLS playlist');
+      const playlistResponse = await fetch(hlsUrl, {
+        headers: {
+          Accept: 'application/vnd.apple.mpegurl,application/x-mpegURL,*/*',
+          'User-Agent': TIMESOCCER_USER_AGENT,
+          Referer: embedUrl,
+        },
+      });
+      if (playlistResponse.status < 200 || playlistResponse.status >= 300) {
+        throw new Error(`Time Soccer playlist request failed: ${playlistResponse.status}`);
+      }
+      const playlist = String(playlistResponse.body || '');
+      if (!playlist.includes('#EXTM3U') ||
+          !(/#EXT-X-STREAM-INF|#EXTINF/.test(playlist))) {
+        throw new Error('Time Soccer response is not a playable HLS playlist');
+      }
+
+      return {
+        url: hlsUrl,
+        headers: {
+          'User-Agent': TIMESOCCER_USER_AGENT,
+          Referer: embedUrl,
+        },
+        format: 'hls',
+        label: 'Time Soccer HLS',
+      };
+    } catch (error) {
+      lastError = error;
+    }
   }
 
-  // The CDN sample is public and CORS-enabled; returning no forced Referer
-  // keeps native iOS HLS from being pushed through an unnecessary request
-  // header path. The User-Agent is still forced, though: every request up
-  // to here (post, embed, playlist) used the spoofed one above, but the
-  // native player's own segment fetches otherwise fall back to the
-  // platform default — a mismatch a CDN that treats non-browser clients
-  // differently would only start showing once real playback begins, not
-  // during this validation fetch.
-  return {
-    url: hlsUrl,
-    headers: { 'User-Agent': TIMESOCCER_USER_AGENT },
-    format: 'hls',
-    label: 'Videa HLS',
-  };
+  throw lastError || new Error('Time Soccer embeds have no playable HLS');
 }
 
 globalThis.__catalogProviders = globalThis.__catalogProviders || [];
@@ -20555,6 +21716,11 @@ const ROXIE_MOTORSPORT_WINDOW_MS = 210 * 60 * 1000;
 const ROXIE_COUNTDOWN_OFFSET = '-07:00';
 const ROXIE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
+const ROXIE_WTA_LOGO =
+  'https://wsrv.nl/?url=' + encodeURIComponent(
+    'https://photoresources.wtatennis.com/photo-resources/2025/02/27/' +
+    'bf3c987a-350a-4b59-864b-a5312fd7bcbb/Frame-1-1-2.png?height=500&width=500',
+  ) + '&output=webp';
 
 // Keep Roxie's matching independent from the full profile's Kora source.
 // Compact bundles do not include kora.js, but both profiles still need to
@@ -20790,6 +21956,17 @@ function roxieSportName(event) {
   return 'Other Live Sports';
 }
 
+function roxieBranding(event, sportName) {
+  if (sportName !== 'Tennis') return null;
+  const identity = `${event.title || ''} ${event.pagePath || ''}`;
+  if (!/\bwta\b|tennis-/i.test(identity)) return null;
+  return {
+    primaryColor: '#24132f',
+    secondaryColor: '#8b5cf6',
+    logo: { url: ROXIE_WTA_LOGO },
+  };
+}
+
 function roxieCatalogTitleKey(value) {
   if (typeof catalogTitleKey === 'function') return catalogTitleKey(value);
   return roxieNormalize(value)
@@ -20845,6 +22022,8 @@ function roxieCatalogEntry(event, nowMs = Date.now()) {
   // an index/cache must not promote a future event into the Live catalog.
   const state = roxieCountdownState(event, nowMs);
   const live = state === 'live';
+  const sportName = roxieSportName(event);
+  const branding = roxieBranding(event, sportName);
   const item = {
     ref: {
       extensionId: globalThis.__nimoraExtensionId || 'nimora',
@@ -20853,9 +22032,10 @@ function roxieCatalogEntry(event, nowMs = Date.now()) {
     },
     kind: 'event',
     title: event.title,
-    subtitle: roxieSportName(event),
+    subtitle: sportName,
+    ...(branding ? { branding } : {}),
     schedule: typeof eventSchedule === 'function'
-      ? eventSchedule(startsAt, state, roxieSportName(event), event.title)
+      ? eventSchedule(startsAt, state, sportName, event.title)
       : {
           startsAt: new Date(startsAt).toISOString(),
           state,
@@ -20865,8 +22045,8 @@ function roxieCatalogEntry(event, nowMs = Date.now()) {
     item.participants = [{ name: event.teamA }, { name: event.teamB }];
   }
   return {
-    sportId: roxieSportName(event),
-    sportName: roxieSportName(event),
+    sportId: sportName,
+    sportName,
     live,
     item,
   };

@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "1.0.104",
+  "version": "2.0.0",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -20,6 +20,13 @@
       "name": "Sports Matches",
       "roles": ["catalog"],
       "catalogs": [
+        {
+          "id": "fixtures",
+          "name": "Sports Matches",
+          "categories": ["all"],
+          "kind": "liveEvent",
+          "display": "row"
+        },
         {
           "id": "fixtures_schedule",
           "name": "Sports Schedule",

@@ -40,8 +40,8 @@ const PROVIDER_ID = 'nimora.matches';
 
 // The one catalog this extension declares, and the categories inside it.
 // `live` is based on FotMob's match status; `schedule` is the daily match
-// schedule. `all` includes the live football items alongside the other live
-// sports catalog entries.
+// schedule. `all` can expose provider-owned editorial shelves such as Asian
+// Games, while the dedicated `live` catalog remains the live timeline.
 const CATALOG_ID = 'fixtures';
 const SCHEDULE_CATALOG_ID = 'fixtures_schedule';
 const SPORT_CATALOG_ID = 'fixtures_sport';
@@ -72,6 +72,8 @@ const EVENT_DURATION_MINUTES = [
   { match: /tennis/i, minutes: 180 },
   { match: /basketball|nba|wnba/i, minutes: 150 },
   { match: /volleyball/i, minutes: 135 },
+  { match: /hockey|nhl|aahl/i, minutes: 180 },
+  { match: /baseball|mlb|npb/i, minutes: 210 },
   { match: /badminton|bwf/i, minutes: 120 },
   { match: /football|soccer/i, minutes: 135 },
 ];
@@ -686,12 +688,19 @@ function byDateItems(items, nowMs) {
 // --- catalog navigation ---
 
 const FOOTBALL = { id: 'football', name: 'Football' };
+// TODO(asian-games-2026): Remove the Asian Games Home shelf below and the
+// `fixtures` `all` catalog registration from both manifest files after the
+// event concludes.
+const ASIAN_GAMES = { id: 'asian-games', name: 'Asian Games 2026' };
 const TENNIS = { id: 'tennis', name: 'Tennis' };
 const MOTORSPORT = { id: 'motorsport', name: 'Motorsport' };
 const FIGHTING = { id: 'fighting', name: 'Fighting' };
 const BADMINTON = { id: 'badminton', name: 'Badminton' };
 const BASKETBALL = { id: 'basketball', name: 'Basketball' };
 const VOLLEYBALL = { id: 'volleyball', name: 'Volleyball' };
+const HOCKEY = { id: 'hockey', name: 'Hockey' };
+const BASEBALL = { id: 'baseball', name: 'Baseball' };
+const TABLE_TENNIS = { id: 'table-tennis', name: 'Table Tennis' };
 const OTHER_LIVE_SPORTS = {
   id: 'other-live-sports',
   name: 'Other Live Sports',
@@ -701,12 +710,16 @@ const OTHER_LIVE_SPORTS = {
 // arrive without creating a new shelf for every spelling or niche sport.
 const SPORT_SECTION_ORDER = [
   FOOTBALL,
+  ASIAN_GAMES,
   TENNIS,
   MOTORSPORT,
   FIGHTING,
   BADMINTON,
   BASKETBALL,
   VOLLEYBALL,
+  HOCKEY,
+  BASEBALL,
+  TABLE_TENNIS,
   OTHER_LIVE_SPORTS,
 ];
 
@@ -714,6 +727,9 @@ function sportIdOf(name) {
   const value = `${name || ''}`.trim().toLowerCase();
   if (value.includes('football') || value.includes('soccer')) {
     return FOOTBALL.id;
+  }
+  if (value.includes('table tennis') || value.includes('ping pong')) {
+    return TABLE_TENNIS.id;
   }
   if (value.includes('tennis') || /\batp\b|\bwta\b/.test(value)) {
     return TENNIS.id;
@@ -747,12 +763,29 @@ function sportIdOf(name) {
     return BASKETBALL.id;
   }
   if (value.includes('volleyball')) return VOLLEYBALL.id;
+  if (value.includes('hockey') || /\bnhl\b|\baahl\b/.test(value)) {
+    return HOCKEY.id;
+  }
+  if (value.includes('baseball') || /\bmlb\b|\bnpb\b/.test(value)) {
+    return BASEBALL.id;
+  }
   return OTHER_LIVE_SPORTS.id;
 }
 
 function sportNameOf(name) {
   const id = sportIdOf(name);
   return SPORT_SECTION_ORDER.find((sport) => sport.id === id).name;
+}
+
+function isAsianGamesEntry(entry) {
+  if (Array.isArray(entry?.shelfIds) && entry.shelfIds.includes('asian-games')) {
+    return true;
+  }
+  const refId = `${entry?.item?.ref?.id || ''}`;
+  if (!refId.startsWith('fctv:')) return false;
+  return /\basian\s+(?:para\s+)?games?\b/i.test(
+    `${entry?.item?.title || ''} ${entry?.item?.subtitle || ''}`,
+  );
 }
 
 function isFootballCategory(category) {
@@ -1119,6 +1152,15 @@ async function getCricfySportEntries(nowMs) {
   }
 }
 
+async function getFctvSportEntries(nowMs) {
+  if (typeof globalThis.__fctvSportEntries !== 'function') return [];
+  try {
+    return await globalThis.__fctvSportEntries(nowMs);
+  } catch (_) {
+    return [];
+  }
+}
+
 async function getRoxieSportEntries(nowMs) {
   if (typeof globalThis.__roxieSportEntries !== 'function') return [];
   try {
@@ -1242,6 +1284,23 @@ function dedupeProviderEntries(entries, nowMs = Date.now()) {
         },
       };
     }
+    // Keep the provider-supplied competition branding even when another
+    // provider wins the duplicate's displayed metadata. FCTV carries the
+    // Asian Games pictogram and palette on its item; dropping it here makes
+    // the same event fall back to the plain generated banner.
+    const brandedEntries = [existing, entry].filter((candidate) =>
+      candidate?.item?.branding != null &&
+      candidate.item.branding.logo?.url,
+    );
+    const brandedEntry = brandedEntries.find((candidate) =>
+      candidate.item.ref?.providerId === 'nimora.matches',
+    ) || brandedEntries[0];
+    if (brandedEntry != null && merged.item != null) {
+      merged.item = {
+        ...merged.item,
+        branding: brandedEntry.item.branding,
+      };
+    }
     if (merged.fotmobId == null) merged.fotmobId = entry.fotmobId;
     result[existingIndex] = merged;
   }
@@ -1254,6 +1313,7 @@ function sportsOf(matches, providerEntries) {
   if (matches.length > 0) available.add(FOOTBALL.id);
   for (const entry of providerEntries) {
     available.add(sportIdOf(entry.sportName || entry.sportId));
+    if (isAsianGamesEntry(entry)) available.add(ASIAN_GAMES.id);
   }
   for (const sport of SPORT_SECTION_ORDER) {
     if (available.has(sport.id)) sports.push(sport);
@@ -1287,6 +1347,8 @@ function buildPage(
     ? null
     : selectedFootballLeagueId != null
       ? FOOTBALL.id
+      : selectedSportName === ASIAN_GAMES.id
+        ? ASIAN_GAMES.id
       : sportIdOf(selectedSportName);
   const subCategories = sportsOf(
     excludeEnded ? matches.filter((match) => !isFinishedMatch(match)) : matches,
@@ -1366,6 +1428,19 @@ function buildPage(
     };
   }
 
+  if (selected === ASIAN_GAMES.id) {
+    const items = providerEntries
+      .filter((entry) => isAsianGamesEntry(entry))
+      .filter((entry) => !excludeEnded || entry.item?.schedule?.state !== 'ended')
+      .map((entry) => entry.item);
+    return {
+      sections: items.length === 0
+        ? []
+        : [{ id: 'sport:asian-games', title: ASIAN_GAMES.name, items }],
+      subCategories,
+    };
+  }
+
   if (selected != null) {
     const entries = providerEntries.filter(
       (entry) => sportIdOf(entry.sportName || entry.sportId) === selected,
@@ -1385,28 +1460,20 @@ function buildPage(
   }
 
   if (query.category === ALL_CATEGORY) {
-    const footballItems = footballCatalogItems(
-      matches,
-      // FotMob owns event lifecycle. A provider's `live` flag can lag behind
-      // it, so use every matched football entry here and filter the resulting
-      // FotMob items by live state below.
-      providerEntries,
-      nowMs,
-      brandingByLeague,
-      requireLiveProviderMatches,
-      knownFotmobMatches,
-    ).filter((item) => item.schedule?.state === 'live');
-
-    const items = [
-      ...footballItems,
-      ...providerEntries
-        .filter((entry) => entry.live && !isFootballEntry(entry))
-        .map((entry) => entry.item),
-    ];
+    const asianGamesItems = providerEntries
+      .filter((entry) => isAsianGamesEntry(entry))
+      .filter((entry) => entry.item?.schedule?.state !== 'ended')
+      .map((entry) => entry.item);
+    const sections = [];
+    if (asianGamesItems.length > 0) {
+      sections.push({
+        id: 'sport:asian-games',
+        title: ASIAN_GAMES.name,
+        items: asianGamesItems,
+      });
+    }
     return {
-      sections: items.length === 0
-        ? []
-        : [{ id: 'live', title: 'Live Now', items }],
+      sections,
       subCategories,
     };
   }
@@ -1430,8 +1497,19 @@ function buildPage(
     subtitle: 'Other',
   }));
   sections.push(...footballSportSections(footballItems, otherFootballItems));
+  const asianGamesItems = providerEntries
+    .filter((entry) => isAsianGamesEntry(entry))
+    .filter((entry) => !excludeEnded || entry.item?.schedule?.state !== 'ended')
+    .map((entry) => entry.item);
+  if (asianGamesItems.length > 0) {
+    sections.push({
+      id: 'sport:asian-games',
+      title: ASIAN_GAMES.name,
+      items: asianGamesItems,
+    });
+  }
   for (const sport of subCategories) {
-    if (sport.id === FOOTBALL.id) continue;
+    if (sport.id === FOOTBALL.id || sport.id === ASIAN_GAMES.id) continue;
     const items = providerEntries
       .filter(
         (entry) =>
@@ -1454,8 +1532,10 @@ async function fixturesCatalog(query) {
   const nowMs = Date.now();
 
   let [matches, popularLeagues, roxieEntries, timstreamsEntries] = await Promise.all([
-    fetchFixturesMemo(nowMs),
-    fetchPopularLeaguesMemo(),
+    // Canonical FotMob metadata is preferred, but provider-only shelves such
+    // as FCTV Asian Games must remain usable when FotMob has a DNS/HTTP outage.
+    fetchFixturesMemo(nowMs).catch(() => []),
+    fetchPopularLeaguesMemo().catch(() => []),
     getRoxieSportEntries(nowMs),
     getTimstreamsSportEntries(nowMs),
   ]);
@@ -1475,8 +1555,10 @@ async function fixturesCatalog(query) {
   const brandingByLeague = await leagueBrandingFor(matches);
 
   let providerEntries = await getCricfySportEntries(nowMs);
+  const fctvEntries = await getFctvSportEntries(nowMs);
   providerEntries = dedupeProviderEntries([
     ...providerEntries,
+    ...fctvEntries,
     ...roxieEntries,
     ...timstreamsEntries,
   ], nowMs);
@@ -16222,8 +16304,8 @@ if (!globalThis.__extension.segments) {
 //
 // The public homepage is a WordPress page whose video cards come from the
 // `Video` category. The REST API gives us the same post stream without
-// depending on the theme's generated HTML layout. Each post contains a Videa
-// iframe; the iframe page carries the actual CDN master playlist.
+// depending on the theme's generated HTML layout. Posts may contain a legacy
+// Videa iframe, a Byse frame, or a second direct-HLS highlights iframe.
 
 const TIMESOCCER_BASE =
   globalThis.__timesoccerBaseUrl || 'https://timesoccertv.com';
@@ -16275,30 +16357,59 @@ function timesoccerContentOf(post) {
   return '';
 }
 
-function timesoccerEmbedUrlFromHtml(html) {
+function timesoccerEmbedUrlsFromHtml(html) {
   const frames = /<iframe\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/ig;
+  const urls = [];
+  const seen = new Set();
   let match;
   while ((match = frames.exec(html || '')) != null) {
     const url = timesoccerDecodeHtml(match[1]).trim();
-    if (/^https?:\/\/[^/]+\/embed\/media\/[A-Za-z0-9-]+(?:[/?#]|$)/i.test(url)) {
-      return url;
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+    // TimeSoccer now mixes the legacy Videa path with Byse `/e/...` frames
+    // and the direct-HLS `soccertims/.../embed/...` player. Keep all of the
+    // known embed-shaped frames and let the resolver validate the stream.
+    if (!/(?:\/embed\/media\/|\/e\/[A-Za-z0-9_-]+(?:[/?#]|$)|\/embed\/[A-Za-z0-9_-]+(?:[/?#]|$))/i.test(url)) {
+      continue;
     }
+    seen.add(url);
+    urls.push(url);
   }
-  return null;
+  return urls;
 }
 
-function timesoccerHasVideaEmbed(post) {
+function timesoccerEmbedUrlFromHtml(html) {
+  return timesoccerEmbedUrlsFromHtml(html)[0] || null;
+}
+
+function timesoccerHasSupportedEmbed(post) {
   return timesoccerEmbedUrlFromHtml(timesoccerContentOf(post)) != null;
 }
 
-function timesoccerHlsUrlFromEmbed(html) {
+function timesoccerHlsUrlFromEmbed(html, baseUrl) {
   const decoded = timesoccerDecodeHtml(html);
-  const matches = decoded.match(
-    /https?:\/\/[^"'<>\\\s]+\.m3u8(?:\?[^"'<>\\\s]*)?/ig,
+  const playlistMatch = /\.m3u8(?:\?[^"'<> \t\r\n]*)?/i.exec(decoded);
+  if (playlistMatch == null) return null;
+  const prefix = decoded.slice(0, playlistMatch.index);
+  const absoluteMatch = /https?:\/\/[^"'<> \t\r\n]*$/i.exec(prefix);
+  const start = absoluteMatch != null
+    ? prefix.length - absoluteMatch[0].length
+    : prefix.lastIndexOf('//');
+  if (start < 0) return null;
+  const rawUrl = decoded.slice(
+    start,
+    playlistMatch.index + playlistMatch[0].length,
   );
-  if (!matches || matches.length === 0) return null;
-  const url = matches[0].trim();
-  return /^https?:\/\//i.test(url) ? url : null;
+  const normalized = rawUrl.trim();
+  if (/^https?:\/\//i.test(normalized)) return normalized;
+  if (/^\/\//.test(normalized)) {
+    const scheme = /^(https?):/i.exec(baseUrl);
+    return `${scheme == null ? 'https' : scheme[1]}:${normalized}`;
+  }
+  try {
+    return new URL(normalized, baseUrl).toString();
+  } catch (_) {
+    return null;
+  }
 }
 
 function timesoccerArtworkUrl(post) {
@@ -16314,7 +16425,7 @@ function timesoccerArtworkUrl(post) {
 
 function timesoccerPostToItem(post) {
   if (post == null || post.id == null) return null;
-  if (!timesoccerHasVideaEmbed(post)) return null;
+  if (!timesoccerHasSupportedEmbed(post)) return null;
   const title = timesoccerCleanTitle(
     post.title && typeof post.title === 'object'
       ? post.title.rendered
@@ -16506,7 +16617,7 @@ async function timesoccerSources(args) {
   return {
     sources: [{
       id: `${TIMESOCCER_PROVIDER_KEY}:${itemId.slice('post:'.length)}`,
-      label: 'Videa HLS',
+      label: 'Time Soccer HLS',
       provider: 'Nimora',
       providerId: TIMESOCCER_PROVIDER_ID,
     }],
@@ -16532,52 +16643,60 @@ async function timesoccerResolveSource(sourceId) {
   );
   const postResponse = await timesoccerFetchJson(postUrl);
   const post = postResponse.data;
-  const embedUrl = timesoccerEmbedUrlFromHtml(timesoccerContentOf(post));
-  if (embedUrl == null) {
-    throw new Error(`Time Soccer post ${postId} has no Videa embed`);
+  const embedUrls = timesoccerEmbedUrlsFromHtml(timesoccerContentOf(post));
+  if (embedUrls.length === 0) {
+    throw new Error(`Time Soccer post ${postId} has no supported embed`);
   }
 
-  const embedResponse = await fetch(embedUrl, {
-    headers: {
-      Accept: 'text/html,application/xhtml+xml',
-      'User-Agent': TIMESOCCER_USER_AGENT,
-    },
-  });
-  if (embedResponse.status < 200 || embedResponse.status >= 300) {
-    throw new Error(`Videa embed request failed: ${embedResponse.status}`);
-  }
-  const hlsUrl = timesoccerHlsUrlFromEmbed(embedResponse.body);
-  if (hlsUrl == null) throw new Error('Videa embed has no HLS playlist');
+  let lastError = null;
+  for (const embedUrl of embedUrls) {
+    try {
+      const embedResponse = await fetch(embedUrl, {
+        headers: {
+          Accept: 'text/html,application/xhtml+xml',
+          'User-Agent': TIMESOCCER_USER_AGENT,
+        },
+      });
+      if (embedResponse.status < 200 || embedResponse.status >= 300) {
+        throw new Error(`Time Soccer embed request failed: ${embedResponse.status}`);
+      }
+      const hlsUrl = timesoccerHlsUrlFromEmbed(embedResponse.body, embedUrl);
+      if (hlsUrl == null) {
+        lastError = new Error('Time Soccer embed has no HLS playlist');
+        continue;
+      }
 
-  const playlistResponse = await fetch(hlsUrl, {
-    headers: {
-      Accept: 'application/vnd.apple.mpegurl,application/x-mpegURL,*/*',
-      'User-Agent': TIMESOCCER_USER_AGENT,
-    },
-  });
-  if (playlistResponse.status < 200 || playlistResponse.status >= 300) {
-    throw new Error(`Videa playlist request failed: ${playlistResponse.status}`);
-  }
-  const playlist = String(playlistResponse.body || '');
-  if (!playlist.includes('#EXTM3U') ||
-      !(/#EXT-X-STREAM-INF|#EXTINF/.test(playlist))) {
-    throw new Error('Videa response is not a playable HLS playlist');
+      const playlistResponse = await fetch(hlsUrl, {
+        headers: {
+          Accept: 'application/vnd.apple.mpegurl,application/x-mpegURL,*/*',
+          'User-Agent': TIMESOCCER_USER_AGENT,
+          Referer: embedUrl,
+        },
+      });
+      if (playlistResponse.status < 200 || playlistResponse.status >= 300) {
+        throw new Error(`Time Soccer playlist request failed: ${playlistResponse.status}`);
+      }
+      const playlist = String(playlistResponse.body || '');
+      if (!playlist.includes('#EXTM3U') ||
+          !(/#EXT-X-STREAM-INF|#EXTINF/.test(playlist))) {
+        throw new Error('Time Soccer response is not a playable HLS playlist');
+      }
+
+      return {
+        url: hlsUrl,
+        headers: {
+          'User-Agent': TIMESOCCER_USER_AGENT,
+          Referer: embedUrl,
+        },
+        format: 'hls',
+        label: 'Time Soccer HLS',
+      };
+    } catch (error) {
+      lastError = error;
+    }
   }
 
-  // The CDN sample is public and CORS-enabled; returning no forced Referer
-  // keeps native iOS HLS from being pushed through an unnecessary request
-  // header path. The User-Agent is still forced, though: every request up
-  // to here (post, embed, playlist) used the spoofed one above, but the
-  // native player's own segment fetches otherwise fall back to the
-  // platform default — a mismatch a CDN that treats non-browser clients
-  // differently would only start showing once real playback begins, not
-  // during this validation fetch.
-  return {
-    url: hlsUrl,
-    headers: { 'User-Agent': TIMESOCCER_USER_AGENT },
-    format: 'hls',
-    label: 'Videa HLS',
-  };
+  throw lastError || new Error('Time Soccer embeds have no playable HLS');
 }
 
 globalThis.__catalogProviders = globalThis.__catalogProviders || [];
@@ -17477,6 +17596,11 @@ const ROXIE_MOTORSPORT_WINDOW_MS = 210 * 60 * 1000;
 const ROXIE_COUNTDOWN_OFFSET = '-07:00';
 const ROXIE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
+const ROXIE_WTA_LOGO =
+  'https://wsrv.nl/?url=' + encodeURIComponent(
+    'https://photoresources.wtatennis.com/photo-resources/2025/02/27/' +
+    'bf3c987a-350a-4b59-864b-a5312fd7bcbb/Frame-1-1-2.png?height=500&width=500',
+  ) + '&output=webp';
 
 // Keep Roxie's matching independent from the full profile's Kora source.
 // Compact bundles do not include kora.js, but both profiles still need to
@@ -17712,6 +17836,17 @@ function roxieSportName(event) {
   return 'Other Live Sports';
 }
 
+function roxieBranding(event, sportName) {
+  if (sportName !== 'Tennis') return null;
+  const identity = `${event.title || ''} ${event.pagePath || ''}`;
+  if (!/\bwta\b|tennis-/i.test(identity)) return null;
+  return {
+    primaryColor: '#24132f',
+    secondaryColor: '#8b5cf6',
+    logo: { url: ROXIE_WTA_LOGO },
+  };
+}
+
 function roxieCatalogTitleKey(value) {
   if (typeof catalogTitleKey === 'function') return catalogTitleKey(value);
   return roxieNormalize(value)
@@ -17767,6 +17902,8 @@ function roxieCatalogEntry(event, nowMs = Date.now()) {
   // an index/cache must not promote a future event into the Live catalog.
   const state = roxieCountdownState(event, nowMs);
   const live = state === 'live';
+  const sportName = roxieSportName(event);
+  const branding = roxieBranding(event, sportName);
   const item = {
     ref: {
       extensionId: globalThis.__nimoraExtensionId || 'nimora',
@@ -17775,9 +17912,10 @@ function roxieCatalogEntry(event, nowMs = Date.now()) {
     },
     kind: 'event',
     title: event.title,
-    subtitle: roxieSportName(event),
+    subtitle: sportName,
+    ...(branding ? { branding } : {}),
     schedule: typeof eventSchedule === 'function'
-      ? eventSchedule(startsAt, state, roxieSportName(event), event.title)
+      ? eventSchedule(startsAt, state, sportName, event.title)
       : {
           startsAt: new Date(startsAt).toISOString(),
           state,
@@ -17787,8 +17925,8 @@ function roxieCatalogEntry(event, nowMs = Date.now()) {
     item.participants = [{ name: event.teamA }, { name: event.teamB }];
   }
   return {
-    sportId: roxieSportName(event),
-    sportName: roxieSportName(event),
+    sportId: sportName,
+    sportName,
     live,
     item,
   };
