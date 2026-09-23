@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.1",
+      "version": "2.0.2",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.2: added TVNow live channel catalogs with category shelves, category-specific See more filtering, and an EPG-backed channel schedule; removed the legacy fixture timeline catalog.",
         "Nimora Compact 2.0.1: marked FCTV events older than the live window as ended instead of incorrectly showing them as upcoming.",
         "Nimora Compact 2.0.0: added Sports Matches to Home and the All category with uncapped See more navigation and hardened Football Highlights playback for current multi-iframe embeds.",
         "Added the Sports Matches catalog to the All category so Asian Games 2026 appears on Home with its full uncapped item list and See more navigation.",
@@ -124,7 +125,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "d9977aefd69b1f680ed5b45075077d5a79858d1698d3961e9e014bac1f76e7da"
+      "bundleSha256": "42fad22420f493147930d50c93d764274f11a290f73b85bc32449542e493b5f7"
     }
   ]
 }

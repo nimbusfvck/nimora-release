@@ -43,7 +43,6 @@ const PROVIDER_ID = 'nimora.matches';
 // schedule. `all` can expose provider-owned editorial shelves such as Asian
 // Games, while the dedicated `live` catalog remains the live timeline.
 const CATALOG_ID = 'fixtures';
-const SCHEDULE_CATALOG_ID = 'fixtures_schedule';
 const SPORT_CATALOG_ID = 'fixtures_sport';
 const FEATURED_CATALOG_ID = 'fixtures_featured';
 const LIVE_CATEGORY = 'live';
@@ -1331,8 +1330,7 @@ function buildPage(
   knownFotmobMatches = matches,
 ) {
   const liveCategory = query.category === LIVE_CATEGORY;
-  const excludeEnded = query.catalogId === SPORT_CATALOG_ID ||
-    (liveCategory && query.catalogId !== SCHEDULE_CATALOG_ID);
+  const excludeEnded = query.catalogId === SPORT_CATALOG_ID || liveCategory;
   providerEntries = providerEntries.map((entry) =>
     normalizeProviderEntry(entry, nowMs));
   const selectedFootballLeagueId = typeof query.subCategory === 'string' &&
@@ -1579,10 +1577,6 @@ async function fixturesCatalog(query) {
 globalThis.__catalogProviders = globalThis.__catalogProviders || [];
 globalThis.__catalogProviders.push({
   catalogId: CATALOG_ID,
-  catalog: fixturesCatalog,
-});
-globalThis.__catalogProviders.push({
-  catalogId: SCHEDULE_CATALOG_ID,
   catalog: fixturesCatalog,
 });
 globalThis.__catalogProviders.push({
@@ -19925,4 +19919,457 @@ globalThis.__streamProviders.push({
   providerKey: LEAGUE_CHANNELS_PROVIDER_KEY,
   sources: leagueChannelsSources,
   resolve: leagueChannelsResolve,
+});
+
+// TVNow live channel catalog, EPG metadata, and fresh HLS resolver.
+//
+// Channel identity is the stable slug. Playback URLs are fetched again when
+// a source is selected because the API/cache and downstream segment URLs are
+// short-lived. EPG is loaded lazily through the metadata contract so loading
+// 175 channel cards does not fan out into 175 guide requests.
+
+const TVNOW_PROVIDER_ID = 'nimora.tvnow';
+const TVNOW_PROVIDER_KEY = 'tvnow';
+const TVNOW_CATALOG_ID = 'tvnow_channels';
+const TVNOW_SCHEDULE_CATALOG_ID = 'tvnow_schedule';
+const TVNOW_CATEGORY = 'live';
+const TVNOW_ORIGIN = 'https://tvnow.st';
+const TVNOW_CHANNELS_URL =
+  globalThis.__tvnowChannelsUrl || `${TVNOW_ORIGIN}/api/channels`;
+const TVNOW_EPG_URL =
+  globalThis.__tvnowEpgUrl || `${TVNOW_ORIGIN}/api/epg`;
+const TVNOW_CHANNELS_TTL_MS = 60 * 1000;
+const TVNOW_EPG_TTL_MS = 30 * 1000;
+const TVNOW_EPG_LIMIT = 8;
+const TVNOW_SCHEDULE_BATCH_SIZE = 32;
+const TVNOW_USER_AGENT =
+  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36';
+
+let tvnowChannelsMemo = null;
+let tvnowChannelsPending = null;
+const tvnowEpgMemo = new Map();
+const tvnowEpgPending = new Map();
+let tvnowScheduleMemo = null;
+let tvnowSchedulePending = null;
+
+function tvnowText(value) {
+  return value == null ? '' : String(value).trim();
+}
+
+function tvnowJson(value, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(value || ''));
+  } catch (_) {
+    throw new Error(`TVNow ${label} returned invalid JSON`);
+  }
+  if (parsed == null || typeof parsed !== 'object') {
+    throw new Error(`TVNow ${label} returned an invalid object`);
+  }
+  return parsed;
+}
+
+function tvnowHeaders() {
+  return {
+    Accept: 'application/json',
+    Origin: TVNOW_ORIGIN,
+    Referer: `${TVNOW_ORIGIN}/`,
+    'User-Agent': TVNOW_USER_AGENT,
+  };
+}
+
+async function tvnowFetchJson(url, label) {
+  const response = await fetch(url, {headers: tvnowHeaders()});
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`TVNow ${label} failed: ${response.status}`);
+  }
+  return tvnowJson(response.body, label);
+}
+
+function tvnowAbsoluteUrl(value) {
+  const text = tvnowText(value);
+  if (/^https?:\/\//i.test(text)) return text;
+  if (!text.startsWith('/')) return '';
+  return `${TVNOW_ORIGIN}${text}`;
+}
+
+function tvnowChannel(value) {
+  if (value == null || typeof value !== 'object') return null;
+  const slug = tvnowText(value.slug);
+  const name = tvnowText(value.name || value.mark);
+  if (!slug || !name) return null;
+  return {
+    slug,
+    name,
+    mark: tvnowText(value.mark),
+    category: tvnowText(value.category) || 'Other',
+    logo: tvnowAbsoluteUrl(value.logo),
+    playback: /^https?:\/\/[^\s]+$/i.test(tvnowText(value.playback))
+      ? tvnowText(value.playback)
+      : '',
+    featured: value.featured === true,
+  };
+}
+
+function tvnowChannelsFromPayload(payload) {
+  if (payload.ok === false || !Array.isArray(payload.channels)) {
+    throw new Error('TVNow channels payload has no channels list');
+  }
+  return payload.channels.map(tvnowChannel).filter((channel) => channel != null);
+}
+
+async function tvnowLoadChannels(force = false) {
+  if (!force && tvnowChannelsMemo != null &&
+      Date.now() - tvnowChannelsMemo.at < TVNOW_CHANNELS_TTL_MS) {
+    return tvnowChannelsMemo.channels;
+  }
+  if (tvnowChannelsPending != null) return tvnowChannelsPending;
+  tvnowChannelsPending = (async () => {
+    const payload = await tvnowFetchJson(TVNOW_CHANNELS_URL, 'channels');
+    const channels = tvnowChannelsFromPayload(payload);
+    if (channels.length === 0) throw new Error('TVNow channels list is empty');
+    tvnowChannelsMemo = {at: Date.now(), channels};
+    return channels;
+  })();
+  try {
+    return await tvnowChannelsPending;
+  } finally {
+    tvnowChannelsPending = null;
+  }
+}
+
+function tvnowSourceId(slug) {
+  return `${TVNOW_PROVIDER_KEY}:${encodeURIComponent(tvnowText(slug))}`;
+}
+
+function tvnowSlugFromSourceId(sourceId) {
+  const prefix = `${TVNOW_PROVIDER_KEY}:`;
+  const value = tvnowText(sourceId);
+  if (!value.startsWith(prefix)) throw new Error('Invalid TVNow source id');
+  const parts = value.slice(prefix.length).split(':');
+  const slug = decodeURIComponent(
+    parts[0] === 'event' ? parts[1] || '' : parts[0],
+  );
+  if (!/^[a-z0-9][a-z0-9-]*$/i.test(slug)) {
+    throw new Error('Malformed TVNow channel slug');
+  }
+  return slug;
+}
+
+function tvnowEventId(slug, programId) {
+  return `${TVNOW_PROVIDER_KEY}:event:${encodeURIComponent(slug)}:${encodeURIComponent(programId)}`;
+}
+
+function tvnowItem(channel) {
+  const item = {
+    ref: {
+      extensionId: globalThis.__nimoraExtensionId || 'nimora',
+      providerId: TVNOW_PROVIDER_ID,
+      id: tvnowSourceId(channel.slug),
+    },
+    kind: 'channel',
+    title: channel.name,
+    subtitle: channel.category,
+  };
+  if (channel.logo) item.artwork = {portrait: {url: channel.logo}};
+  return item;
+}
+
+function tvnowCategoryId(value) {
+  return tvnowText(value).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+async function tvnowCatalog(query) {
+  if (!query || query.category !== TVNOW_CATEGORY) return {sections: []};
+  if (query.catalogId === TVNOW_SCHEDULE_CATALOG_ID) {
+    try {
+      const items = await tvnowLoadSchedule();
+      return {
+        sections: items.length === 0
+          ? []
+          : [{id: TVNOW_SCHEDULE_CATALOG_ID, title: 'TV Schedule', items}],
+      };
+    } catch (_) {
+      return {sections: []};
+    }
+  }
+  if (query.catalogId != null && query.catalogId !== TVNOW_CATALOG_ID) {
+    return {sections: []};
+  }
+  let channels;
+  try {
+    channels = await tvnowLoadChannels();
+  } catch (_) {
+    return {sections: []};
+  }
+  const allCategories = [...new Set(channels.map((channel) => channel.category))];
+  const subCategories = allCategories.map((category) => ({
+    id: tvnowCategoryId(category),
+    name: category,
+  }));
+  const selectedCategory = query.subCategory == null
+    ? null
+    : allCategories.find(
+        (category) => tvnowCategoryId(category) === query.subCategory,
+      ) || null;
+  if (query.subCategory != null && selectedCategory == null) {
+    return {sections: [], subCategories};
+  }
+  const categories = selectedCategory == null
+    ? allCategories
+    : [selectedCategory];
+  return {
+    sections: categories.map((category) => {
+      const rows = channels.filter((channel) => channel.category === category);
+      return {
+        id: `${TVNOW_CATALOG_ID}:${tvnowCategoryId(category)}`,
+        title: category,
+        items: rows.map(tvnowItem),
+      };
+    }).filter((section) => section.items.length > 0),
+    subCategories,
+  };
+}
+
+function tvnowEpochMs(value) {
+  const number = Number(value);
+  if (Number.isFinite(number)) {
+    return number < 100000000000 ? number * 1000 : number;
+  }
+  const parsed = Date.parse(tvnowText(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function tvnowIso(value) {
+  const timestamp = tvnowEpochMs(value);
+  return timestamp == null ? null : new Date(timestamp).toISOString();
+}
+
+function tvnowEpgChannel(payload, slug) {
+  if (!Array.isArray(payload.channels)) return null;
+  return payload.channels.find((channel) =>
+    tvnowText(channel && channel.slug) === slug,
+  ) || payload.channels[0] || null;
+}
+
+function tvnowGuideFromPayload(payload, slug) {
+  const channel = tvnowEpgChannel(payload, slug);
+  const rawItems = channel && Array.isArray(channel.items) ? channel.items : [];
+  const programs = rawItems.map((entry) => {
+    if (entry == null || typeof entry !== 'object') return null;
+    const startsAt = tvnowIso(entry.start);
+    const endsAt = tvnowIso(entry.end);
+    const id = tvnowText(entry.id);
+    const title = tvnowText(entry.title);
+    if (!id || !title || !startsAt || !endsAt ||
+        Date.parse(endsAt) <= Date.parse(startsAt)) return null;
+    return {
+      id,
+      title,
+      subtitle: tvnowText(entry.subtitle) || null,
+      description: tvnowText(entry.description) || null,
+      startsAt,
+      endsAt,
+    };
+  }).filter((program) => program != null).sort((a, b) =>
+    Date.parse(a.startsAt) - Date.parse(b.startsAt));
+  const generatedAt = tvnowIso(payload.generatedAt);
+  return {
+    generatedAt,
+    available: channel == null ? false : channel.available !== false,
+    programs,
+  };
+}
+
+function tvnowScheduleState(program) {
+  const now = Date.now();
+  const startsAt = Date.parse(program.startsAt);
+  const endsAt = Date.parse(program.endsAt);
+  if (now < startsAt) return 'scheduled';
+  if (now < endsAt) return 'live';
+  return 'ended';
+}
+
+function tvnowEventItem(channel, program) {
+  const item = {
+    ref: {
+      extensionId: globalThis.__nimoraExtensionId || 'nimora',
+      providerId: TVNOW_PROVIDER_ID,
+      id: tvnowEventId(channel.slug, program.id),
+    },
+    kind: 'event',
+    title: program.title,
+    subtitle: channel.name,
+    overview: program.description || undefined,
+    tags: channel.category ? [channel.category] : [],
+    schedule: {
+      startsAt: program.startsAt,
+      endsAt: program.endsAt,
+      state: tvnowScheduleState(program),
+    },
+  };
+  if (channel.logo) {
+    item.artwork = {portrait: {url: channel.logo}};
+    item.branding = {logo: {url: channel.logo}};
+  }
+  return item;
+}
+
+async function tvnowLoadSchedule() {
+  if (tvnowScheduleMemo != null &&
+      Date.now() - tvnowScheduleMemo.at < TVNOW_EPG_TTL_MS) {
+    return tvnowScheduleMemo.items;
+  }
+  if (tvnowSchedulePending != null) return tvnowSchedulePending;
+  tvnowSchedulePending = (async () => {
+    const channels = await tvnowLoadChannels();
+    const channelBySlug = new Map(
+      channels.map((channel) => [channel.slug, channel]),
+    );
+    const payloads = [];
+    for (let index = 0; index < channels.length; index += TVNOW_SCHEDULE_BATCH_SIZE) {
+      const batch = channels.slice(index, index + TVNOW_SCHEDULE_BATCH_SIZE);
+      const url = `${TVNOW_EPG_URL}?channels=${batch.map((channel) =>
+        encodeURIComponent(channel.slug)).join(',')}&limit=${TVNOW_EPG_LIMIT}`;
+      try {
+        payloads.push(await tvnowFetchJson(url, 'schedule'));
+      } catch (_) {
+        // Keep a partial guide usable when one upstream batch fails.
+      }
+    }
+    const byId = new Map();
+    for (const payload of payloads) {
+      if (!Array.isArray(payload.channels)) continue;
+      for (const rawChannel of payload.channels) {
+        const slug = tvnowText(rawChannel && rawChannel.slug);
+        const channel = channelBySlug.get(slug);
+        if (channel == null) continue;
+        const guide = tvnowGuideFromPayload(payload, slug);
+        for (const program of guide.programs) {
+          const item = tvnowEventItem(channel, program);
+          byId.set(item.ref.id, item);
+        }
+      }
+    }
+    const items = [...byId.values()].sort((first, second) =>
+      Date.parse(first.schedule.startsAt) - Date.parse(second.schedule.startsAt) ||
+      String(first.subtitle).localeCompare(String(second.subtitle)) ||
+      first.title.localeCompare(second.title));
+    if (items.length === 0) throw new Error('TVNow schedule is empty');
+    tvnowScheduleMemo = {at: Date.now(), items};
+    return items;
+  })();
+  try {
+    return await tvnowSchedulePending;
+  } finally {
+    tvnowSchedulePending = null;
+  }
+}
+
+async function tvnowLoadGuide(slug) {
+  const memo = tvnowEpgMemo.get(slug);
+  if (memo != null && Date.now() - memo.at < TVNOW_EPG_TTL_MS) {
+    return memo.guide;
+  }
+  const pending = tvnowEpgPending.get(slug);
+  if (pending != null) return pending;
+  const request = (async () => {
+    const url = `${TVNOW_EPG_URL}?channels=${encodeURIComponent(slug)}&limit=${TVNOW_EPG_LIMIT}`;
+    const payload = await tvnowFetchJson(url, `EPG for ${slug}`);
+    const guide = tvnowGuideFromPayload(payload, slug);
+    tvnowEpgMemo.set(slug, {at: Date.now(), guide});
+    return guide;
+  })();
+  tvnowEpgPending.set(slug, request);
+  try {
+    return await request;
+  } finally {
+    tvnowEpgPending.delete(slug);
+  }
+}
+
+async function tvnowMeta(args) {
+  const ref = args && args.ref;
+  if (!ref || ref.providerId !== TVNOW_PROVIDER_ID) {
+    throw new Error('TVNow metadata received an unrelated ref');
+  }
+  const slug = tvnowSlugFromSourceId(ref.id);
+  const channels = await tvnowLoadChannels();
+  const channel = channels.find((entry) => entry.slug === slug);
+  if (channel == null) throw new Error('TVNow channel is no longer offered');
+  let channelGuide;
+  try {
+    channelGuide = await tvnowLoadGuide(slug);
+  } catch (_) {
+    channelGuide = {generatedAt: null, available: false, programs: []};
+  }
+  return {item: tvnowItem(channel), channelGuide};
+}
+
+async function tvnowSources(args) {
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && !enabled.includes(TVNOW_PROVIDER_ID)) {
+    return {sources: []};
+  }
+  const item = args && args.item;
+  if (!item || !item.ref || item.ref.providerId !== TVNOW_PROVIDER_ID) {
+    return {sources: []};
+  }
+  const slug = tvnowSlugFromSourceId(item.ref.id);
+  const channels = await tvnowLoadChannels();
+  const channel = channels.find((entry) => entry.slug === slug);
+  if (channel == null || !channel.playback) return {sources: []};
+  return {
+    sources: [{
+      id: tvnowSourceId(slug),
+      label: `TVNow · ${channel.name}`,
+      provider: 'Nimora',
+      providerId: TVNOW_PROVIDER_ID,
+    }],
+  };
+}
+
+async function tvnowResolve(sourceId) {
+  const slug = tvnowSlugFromSourceId(sourceId);
+  const channels = await tvnowLoadChannels(true);
+  const channel = channels.find((entry) => entry.slug === slug);
+  if (channel == null || !channel.playback) {
+    throw new Error('TVNow channel has no playback URL');
+  }
+  return {
+    url: channel.playback,
+    format: 'hls',
+    headers: {
+      Origin: TVNOW_ORIGIN,
+      Referer: `${TVNOW_ORIGIN}/`,
+      'User-Agent': TVNOW_USER_AGENT,
+    },
+    drm: null,
+    audioUrl: null,
+    label: channel.name,
+  };
+}
+
+globalThis.__catalogProviders = globalThis.__catalogProviders || [];
+globalThis.__catalogProviders.push({
+  catalogId: TVNOW_CATALOG_ID,
+  catalog: tvnowCatalog,
+});
+globalThis.__catalogProviders.push({
+  catalogId: TVNOW_SCHEDULE_CATALOG_ID,
+  catalog: tvnowCatalog,
+});
+
+globalThis.__metaProviders = globalThis.__metaProviders || [];
+globalThis.__metaProviders.push({
+  providerId: TVNOW_PROVIDER_ID,
+  meta: tvnowMeta,
+});
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: TVNOW_PROVIDER_KEY,
+  sources: tvnowSources,
+  resolve: tvnowResolve,
 });
