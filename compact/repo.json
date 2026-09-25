@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.4",
+      "version": "2.0.5",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.5: fixed TVNow Live Shelf loading by sanitizing invalid IPTV artwork URLs, deduplicating equal channel titles, and exposing TVNow plus IPTV Hub sources on one card.",
         "Nimora Compact 2.0.4: merged IPTV Hub channels directly into the TVNow Live Shelf, including shared category rows and provider-aware playback IDs.",
         "Nimora Compact 2.0.3: added IPTV Hub live-TV channels to the existing TVNow provider, grouped by upstream category under the TV category with fresh HLS/DASH playback resolution.",
         "Nimora Compact 2.0.2: added TVNow live channel catalogs with category shelves, category-specific See more filtering, and an EPG-backed channel schedule; removed the legacy fixture timeline catalog.",
@@ -127,7 +128,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "baa7a97cd988e42a25a9625554dcdab717b7febf67d0f1e2182e54b25dabe6de"
+      "bundleSha256": "fb32f12329c5c64773dadc46a8a0bcb765b0a315804528e3cd815eff027b5558"
     }
   ]
 }

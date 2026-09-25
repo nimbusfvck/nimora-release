@@ -19995,9 +19995,14 @@ async function tvnowFetchJson(url, label) {
 
 function tvnowAbsoluteUrl(value) {
   const text = tvnowText(value);
-  if (/^https?:\/\//i.test(text)) return text;
+  if (/^https?:\/\//i.test(text)) return tvnowImageUrl(text);
   if (!text.startsWith('/')) return '';
-  return `${TVNOW_ORIGIN}${text}`;
+  return tvnowImageUrl(`${TVNOW_ORIGIN}${text}`);
+}
+
+function tvnowImageUrl(value) {
+  const url = tvnowText(value).split('#', 1)[0];
+  return /^https?:\/\/[^\s]+$/i.test(url) ? url : '';
 }
 
 function tvnowChannel(value) {
@@ -20090,6 +20095,14 @@ function tvnowCategoryId(value) {
   return tvnowText(value).toLowerCase().replace(/[^a-z0-9]+/g, '-');
 }
 
+function tvnowTitleKey(value) {
+  return tvnowText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 function tvnowIptvPlaylistUrl(value) {
   const url = tvnowText(value);
   if (!/^https?:\/\/[^\s]+$/i.test(url)) return '';
@@ -20109,7 +20122,7 @@ function tvnowIptvChannel(value) {
     name,
     url,
     category: tvnowText(value.category) || 'General',
-    logo: tvnowText(value.logo),
+    logo: tvnowImageUrl(value.logo),
     country: tvnowText(value.countryName || value.country),
     language: tvnowText(value.language),
     resolution: tvnowText(value.resolution),
@@ -20217,7 +20230,28 @@ async function tvnowCatalog(query) {
   } catch (_) {
     // Keep the TVNow Live shelf available if the optional IPTV directory is down.
   }
-  const allCategories = [...new Set(channels.map((channel) => channel.category))];
+  const merged = new Map();
+  for (const channel of channels) {
+    const key = tvnowTitleKey(channel.name);
+    if (!key) continue;
+    let group = merged.get(key);
+    if (group == null) {
+      group = {tvnow: [], iptv: []};
+      merged.set(key, group);
+    }
+    if (channel.slug) group.tvnow.push(channel);
+    else group.iptv.push(channel);
+  }
+  const catalogChannels = [...merged.values()].map((group) => {
+    const primary = group.tvnow[0] || group.iptv[0];
+    return {
+      category: group.tvnow[0]?.category || group.iptv[0]?.category || 'Other',
+      item: group.tvnow.length > 0 ? tvnowItem(primary) : tvnowIptvItem(primary),
+    };
+  });
+  const allCategories = [...new Set(
+    catalogChannels.map((channel) => channel.category),
+  )];
   const subCategories = allCategories.map((category) => ({
     id: tvnowCategoryId(category),
     name: category,
@@ -20235,11 +20269,13 @@ async function tvnowCatalog(query) {
     : [selectedCategory];
   return {
     sections: categories.map((category) => {
-      const rows = channels.filter((channel) => channel.category === category);
+      const rows = catalogChannels.filter(
+        (channel) => channel.category === category,
+      );
       return {
         id: `${TVNOW_CATALOG_ID}:${tvnowCategoryId(category)}`,
         title: category,
-        items: rows.map(tvnowCatalogItem),
+        items: rows.map((channel) => channel.item),
       };
     }).filter((section) => section.items.length > 0),
     subCategories,
@@ -20455,13 +20491,30 @@ async function tvnowSources(args) {
   const channels = await tvnowLoadChannels();
   const channel = channels.find((entry) => entry.slug === slug);
   if (channel == null || !channel.playback) return {sources: []};
+  const sources = [{
+    id: tvnowSourceId(slug),
+    label: `TVNow · ${channel.name}`,
+    provider: 'Nimora',
+    providerId: TVNOW_PROVIDER_ID,
+  }];
+  try {
+    const iptvChannels = await tvnowLoadIptvChannels();
+    for (const iptvChannel of iptvChannels) {
+      if (tvnowTitleKey(iptvChannel.name) !== tvnowTitleKey(channel.name)) {
+        continue;
+      }
+      sources.push({
+        id: tvnowIptvSourceId(iptvChannel.id),
+        label: `IPTV Hub · ${iptvChannel.name}`,
+        provider: 'Nimora',
+        providerId: TVNOW_PROVIDER_ID,
+      });
+    }
+  } catch (_) {
+    // TVNow playback remains available if the optional IPTV directory is down.
+  }
   return {
-    sources: [{
-      id: tvnowSourceId(slug),
-      label: `TVNow · ${channel.name}`,
-      provider: 'Nimora',
-      providerId: TVNOW_PROVIDER_ID,
-    }],
+    sources,
   };
 }
 
