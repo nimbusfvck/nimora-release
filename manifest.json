@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -243,6 +243,13 @@
           "categories": ["live"],
           "kind": "liveEvent",
           "display": "channelSchedule"
+        },
+        {
+          "id": "tvnow_iptv",
+          "name": "Live TV",
+          "categories": ["tv"],
+          "kind": "channel",
+          "display": "row"
         }
       ]
     },

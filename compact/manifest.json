@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -83,6 +83,20 @@
           "id": "league_channels",
           "name": "League Channels",
           "categories": [],
+          "kind": "channel",
+          "display": "row"
+        }
+      ]
+    },
+    {
+      "id": "nimora.tvnow",
+      "name": "TVNow",
+      "roles": ["catalog", "meta", "stream"],
+      "catalogs": [
+        {
+          "id": "tvnow_iptv",
+          "name": "Live TV",
+          "categories": ["tv"],
           "kind": "channel",
           "display": "row"
         }

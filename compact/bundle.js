@@ -19932,7 +19932,9 @@ const TVNOW_PROVIDER_ID = 'nimora.tvnow';
 const TVNOW_PROVIDER_KEY = 'tvnow';
 const TVNOW_CATALOG_ID = 'tvnow_channels';
 const TVNOW_SCHEDULE_CATALOG_ID = 'tvnow_schedule';
+const TVNOW_IPTV_CATALOG_ID = 'tvnow_iptv';
 const TVNOW_CATEGORY = 'live';
+const TVNOW_IPTV_CATEGORY = 'tv';
 const TVNOW_ORIGIN = 'https://tvnow.st';
 const TVNOW_CHANNELS_URL =
   globalThis.__tvnowChannelsUrl || `${TVNOW_ORIGIN}/api/channels`;
@@ -19942,6 +19944,10 @@ const TVNOW_CHANNELS_TTL_MS = 60 * 1000;
 const TVNOW_EPG_TTL_MS = 30 * 1000;
 const TVNOW_EPG_LIMIT = 8;
 const TVNOW_SCHEDULE_BATCH_SIZE = 32;
+const TVNOW_IPTV_URL =
+  globalThis.__iptvHubUrl ||
+  'https://raw.githubusercontent.com/hoangcon1808/iptv-hub/refs/heads/master/data/channels.json';
+const TVNOW_IPTV_TTL_MS = 10 * 60 * 1000;
 const TVNOW_USER_AGENT =
   'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36';
@@ -19952,6 +19958,8 @@ const tvnowEpgMemo = new Map();
 const tvnowEpgPending = new Map();
 let tvnowScheduleMemo = null;
 let tvnowSchedulePending = null;
+let tvnowIptvChannelsMemo = null;
+let tvnowIptvChannelsPending = null;
 
 function tvnowText(value) {
   return value == null ? '' : String(value).trim();
@@ -20080,8 +20088,151 @@ function tvnowCategoryId(value) {
   return tvnowText(value).toLowerCase().replace(/[^a-z0-9]+/g, '-');
 }
 
+function tvnowIptvPlaylistUrl(value) {
+  const url = tvnowText(value);
+  if (!/^https?:\/\/[^\s]+$/i.test(url)) return '';
+  const lower = url.toLowerCase();
+  if (!lower.includes('.m3u8') && !lower.includes('.mpd')) return '';
+  return url;
+}
+
+function tvnowIptvChannel(value) {
+  if (value == null || typeof value !== 'object') return null;
+  const id = tvnowText(value.id);
+  const name = tvnowText(value.name);
+  const url = tvnowIptvPlaylistUrl(value.url);
+  if (!id || !name || !url) return null;
+  return {
+    id,
+    name,
+    url,
+    category: tvnowText(value.category) || 'General',
+    logo: tvnowText(value.logo),
+    country: tvnowText(value.countryName || value.country),
+    language: tvnowText(value.language),
+    resolution: tvnowText(value.resolution),
+  };
+}
+
+async function tvnowLoadIptvChannels(force = false) {
+  if (!force && tvnowIptvChannelsMemo != null &&
+      Date.now() - tvnowIptvChannelsMemo.at < TVNOW_IPTV_TTL_MS) {
+    return tvnowIptvChannelsMemo.channels;
+  }
+  if (tvnowIptvChannelsPending != null) return tvnowIptvChannelsPending;
+  tvnowIptvChannelsPending = (async () => {
+    const response = await fetch(TVNOW_IPTV_URL, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': TVNOW_USER_AGENT,
+      },
+    });
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`IPTV Hub channel list failed: ${response.status}`);
+    }
+    let payload;
+    try {
+      payload = JSON.parse(String(response.body || ''));
+    } catch (_) {
+      throw new Error('IPTV Hub channel list returned invalid JSON');
+    }
+    if (!Array.isArray(payload)) {
+      throw new Error('IPTV Hub channel list is not an array');
+    }
+    const channels = payload.map(tvnowIptvChannel)
+      .filter((channel) => channel != null);
+    if (channels.length === 0) throw new Error('IPTV Hub channel list is empty');
+    tvnowIptvChannelsMemo = {at: Date.now(), channels};
+    return channels;
+  })();
+  try {
+    return await tvnowIptvChannelsPending;
+  } finally {
+    tvnowIptvChannelsPending = null;
+  }
+}
+
+function tvnowIptvSourceId(id) {
+  return `iptvhub:${encodeURIComponent(tvnowText(id))}`;
+}
+
+function tvnowIptvIdFromSourceId(sourceId) {
+  const prefix = 'iptvhub:';
+  const value = tvnowText(sourceId);
+  if (!value.startsWith(prefix)) throw new Error('Invalid IPTV Hub source id');
+  const id = decodeURIComponent(value.slice(prefix.length));
+  if (!id) throw new Error('Malformed IPTV Hub channel id');
+  return id;
+}
+
+function tvnowIptvItem(channel) {
+  const item = {
+    ref: {
+      extensionId: globalThis.__nimoraExtensionId || 'nimora',
+      providerId: TVNOW_PROVIDER_ID,
+      id: tvnowIptvSourceId(channel.id),
+    },
+    kind: 'channel',
+    title: channel.name,
+    subtitle: [channel.category, channel.country].filter(Boolean).join(' · '),
+  };
+  if (/^https?:\/\//i.test(channel.logo)) {
+    item.artwork = {portrait: {url: channel.logo}};
+  }
+  return item;
+}
+
+function tvnowIptvFormat(url) {
+  return /\.mpd(?:[?#]|$)/i.test(url) ? 'dash' : 'hls';
+}
+
+async function tvnowIptvCatalog(query) {
+  let channels;
+  try {
+    channels = await tvnowLoadIptvChannels();
+  } catch (_) {
+    return {sections: []};
+  }
+  const groups = [];
+  const byId = new Map();
+  for (const channel of channels) {
+    const id = tvnowCategoryId(channel.category) || 'general';
+    let group = byId.get(id);
+    if (group == null) {
+      group = {id, name: channel.category, channels: []};
+      byId.set(id, group);
+      groups.push(group);
+    }
+    group.channels.push(channel);
+  }
+  const subCategories = groups.map((group) => ({
+    id: group.id,
+    name: group.name,
+  }));
+  const selected = query.subCategory == null
+    ? null
+    : groups.find((group) => group.id === query.subCategory) || null;
+  if (query.subCategory != null && selected == null) {
+    return {sections: [], subCategories};
+  }
+  const visible = selected == null ? groups : [selected];
+  return {
+    sections: visible.map((group) => ({
+      id: `${TVNOW_IPTV_CATALOG_ID}:${group.id}`,
+      title: group.name,
+      items: group.channels.map(tvnowIptvItem),
+    })),
+    subCategories,
+  };
+}
+
 async function tvnowCatalog(query) {
-  if (!query || query.category !== TVNOW_CATEGORY) return {sections: []};
+  if (!query) return {sections: []};
+  if (query.catalogId === TVNOW_IPTV_CATALOG_ID) {
+    if (query.category !== TVNOW_IPTV_CATEGORY) return {sections: []};
+    return tvnowIptvCatalog(query);
+  }
+  if (query.category !== TVNOW_CATEGORY) return {sections: []};
   if (query.catalogId === TVNOW_SCHEDULE_CATALOG_ID) {
     try {
       const items = await tvnowLoadSchedule();
@@ -20294,6 +20445,13 @@ async function tvnowMeta(args) {
   if (!ref || ref.providerId !== TVNOW_PROVIDER_ID) {
     throw new Error('TVNow metadata received an unrelated ref');
   }
+  if (String(ref.id).startsWith('iptvhub:')) {
+    const id = tvnowIptvIdFromSourceId(ref.id);
+    const channels = await tvnowLoadIptvChannels();
+    const channel = channels.find((entry) => entry.id === id);
+    if (channel == null) throw new Error('IPTV Hub channel is no longer offered');
+    return {item: tvnowIptvItem(channel)};
+  }
   const slug = tvnowSlugFromSourceId(ref.id);
   const channels = await tvnowLoadChannels();
   const channel = channels.find((entry) => entry.slug === slug);
@@ -20316,6 +20474,20 @@ async function tvnowSources(args) {
   if (!item || !item.ref || item.ref.providerId !== TVNOW_PROVIDER_ID) {
     return {sources: []};
   }
+  if (String(item.ref.id).startsWith('iptvhub:')) {
+    const id = tvnowIptvIdFromSourceId(item.ref.id);
+    const channels = await tvnowLoadIptvChannels();
+    const channel = channels.find((entry) => entry.id === id);
+    if (channel == null) return {sources: []};
+    return {
+      sources: [{
+        id: tvnowIptvSourceId(id),
+        label: `IPTV Hub · ${channel.name}`,
+        provider: 'Nimora',
+        providerId: TVNOW_PROVIDER_ID,
+      }],
+    };
+  }
   const slug = tvnowSlugFromSourceId(item.ref.id);
   const channels = await tvnowLoadChannels();
   const channel = channels.find((entry) => entry.slug === slug);
@@ -20331,6 +20503,20 @@ async function tvnowSources(args) {
 }
 
 async function tvnowResolve(sourceId) {
+  if (String(sourceId).startsWith('iptvhub:')) {
+    const id = tvnowIptvIdFromSourceId(sourceId);
+    const channels = await tvnowLoadIptvChannels(true);
+    const channel = channels.find((entry) => entry.id === id);
+    if (channel == null) throw new Error('IPTV Hub channel is no longer offered');
+    return {
+      url: channel.url,
+      format: tvnowIptvFormat(channel.url),
+      headers: {'User-Agent': TVNOW_USER_AGENT},
+      drm: null,
+      audioUrl: null,
+      label: channel.name,
+    };
+  }
   const slug = tvnowSlugFromSourceId(sourceId);
   const channels = await tvnowLoadChannels(true);
   const channel = channels.find((entry) => entry.slug === slug);
@@ -20358,6 +20544,10 @@ globalThis.__catalogProviders.push({
 });
 globalThis.__catalogProviders.push({
   catalogId: TVNOW_SCHEDULE_CATALOG_ID,
+  catalog: tvnowCatalog,
+});
+globalThis.__catalogProviders.push({
+  catalogId: TVNOW_IPTV_CATALOG_ID,
   catalog: tvnowCatalog,
 });
 
