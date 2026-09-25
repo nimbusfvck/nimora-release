@@ -19932,9 +19932,7 @@ const TVNOW_PROVIDER_ID = 'nimora.tvnow';
 const TVNOW_PROVIDER_KEY = 'tvnow';
 const TVNOW_CATALOG_ID = 'tvnow_channels';
 const TVNOW_SCHEDULE_CATALOG_ID = 'tvnow_schedule';
-const TVNOW_IPTV_CATALOG_ID = 'tvnow_iptv';
 const TVNOW_CATEGORY = 'live';
-const TVNOW_IPTV_CATEGORY = 'tv';
 const TVNOW_ORIGIN = 'https://tvnow.st';
 const TVNOW_CHANNELS_URL =
   globalThis.__tvnowChannelsUrl || `${TVNOW_ORIGIN}/api/channels`;
@@ -20084,6 +20082,10 @@ function tvnowItem(channel) {
   return item;
 }
 
+function tvnowCatalogItem(channel) {
+  return channel.slug ? tvnowItem(channel) : tvnowIptvItem(channel);
+}
+
 function tvnowCategoryId(value) {
   return tvnowText(value).toLowerCase().replace(/[^a-z0-9]+/g, '-');
 }
@@ -20186,52 +20188,8 @@ function tvnowIptvFormat(url) {
   return /\.mpd(?:[?#]|$)/i.test(url) ? 'dash' : 'hls';
 }
 
-async function tvnowIptvCatalog(query) {
-  let channels;
-  try {
-    channels = await tvnowLoadIptvChannels();
-  } catch (_) {
-    return {sections: []};
-  }
-  const groups = [];
-  const byId = new Map();
-  for (const channel of channels) {
-    const id = tvnowCategoryId(channel.category) || 'general';
-    let group = byId.get(id);
-    if (group == null) {
-      group = {id, name: channel.category, channels: []};
-      byId.set(id, group);
-      groups.push(group);
-    }
-    group.channels.push(channel);
-  }
-  const subCategories = groups.map((group) => ({
-    id: group.id,
-    name: group.name,
-  }));
-  const selected = query.subCategory == null
-    ? null
-    : groups.find((group) => group.id === query.subCategory) || null;
-  if (query.subCategory != null && selected == null) {
-    return {sections: [], subCategories};
-  }
-  const visible = selected == null ? groups : [selected];
-  return {
-    sections: visible.map((group) => ({
-      id: `${TVNOW_IPTV_CATALOG_ID}:${group.id}`,
-      title: group.name,
-      items: group.channels.map(tvnowIptvItem),
-    })),
-    subCategories,
-  };
-}
-
 async function tvnowCatalog(query) {
   if (!query) return {sections: []};
-  if (query.catalogId === TVNOW_IPTV_CATALOG_ID) {
-    if (query.category !== TVNOW_IPTV_CATEGORY) return {sections: []};
-    return tvnowIptvCatalog(query);
-  }
   if (query.category !== TVNOW_CATEGORY) return {sections: []};
   if (query.catalogId === TVNOW_SCHEDULE_CATALOG_ID) {
     try {
@@ -20253,6 +20211,11 @@ async function tvnowCatalog(query) {
     channels = await tvnowLoadChannels();
   } catch (_) {
     return {sections: []};
+  }
+  try {
+    channels = channels.concat(await tvnowLoadIptvChannels());
+  } catch (_) {
+    // Keep the TVNow Live shelf available if the optional IPTV directory is down.
   }
   const allCategories = [...new Set(channels.map((channel) => channel.category))];
   const subCategories = allCategories.map((category) => ({
@@ -20276,7 +20239,7 @@ async function tvnowCatalog(query) {
       return {
         id: `${TVNOW_CATALOG_ID}:${tvnowCategoryId(category)}`,
         title: category,
-        items: rows.map(tvnowItem),
+        items: rows.map(tvnowCatalogItem),
       };
     }).filter((section) => section.items.length > 0),
     subCategories,
@@ -20544,10 +20507,6 @@ globalThis.__catalogProviders.push({
 });
 globalThis.__catalogProviders.push({
   catalogId: TVNOW_SCHEDULE_CATALOG_ID,
-  catalog: tvnowCatalog,
-});
-globalThis.__catalogProviders.push({
-  catalogId: TVNOW_IPTV_CATALOG_ID,
   catalog: tvnowCatalog,
 });
 
