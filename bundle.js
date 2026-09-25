@@ -42,6 +42,7 @@ const PROVIDER_ID = 'nimora.matches';
 // schedule. `all` can expose provider-owned editorial shelves such as Asian
 // Games, while the dedicated `live` catalog remains the live timeline.
 const CATALOG_ID = 'fixtures';
+const LIVE_CATALOG_ID = 'fixtures_live';
 const SPORT_CATALOG_ID = 'fixtures_sport';
 const FEATURED_CATALOG_ID = 'fixtures_featured';
 const LIVE_CATEGORY = 'live';
@@ -1351,8 +1352,34 @@ function buildPage(
     excludeEnded ? matches.filter((match) => !isFinishedMatch(match)) : matches,
     excludeEnded
       ? providerEntries.filter((entry) => entry.item?.schedule?.state !== 'ended')
-      : providerEntries,
+        : providerEntries,
   );
+
+  if (query.catalogId === LIVE_CATALOG_ID && liveCategory) {
+    const liveItems = [
+      ...footballCatalogItems(
+        matches,
+        providerEntries,
+        nowMs,
+        brandingByLeague,
+        false,
+        knownFotmobMatches,
+      ).filter((item) => item.schedule?.state === 'live'),
+      ...providerEntries
+        .filter((entry) => !isFootballEntry(entry))
+        .filter((entry) => entry.item?.schedule?.state === 'live')
+        .map((entry) => entry.item),
+    ].sort(
+      (first, second) => Date.parse(first.schedule?.startsAt) -
+        Date.parse(second.schedule?.startsAt),
+    );
+    return {
+      sections: liveItems.length === 0
+        ? []
+        : [{id: 'live:events', title: 'Live Events', items: liveItems}],
+      subCategories: [],
+    };
+  }
 
   // Home's Featured Hero loads catalogs registered for the global `all`
   // category. Keep this separate from the Live Now catalog: a scheduled
@@ -1576,6 +1603,10 @@ async function fixturesCatalog(query) {
 globalThis.__catalogProviders = globalThis.__catalogProviders || [];
 globalThis.__catalogProviders.push({
   catalogId: CATALOG_ID,
+  catalog: fixturesCatalog,
+});
+globalThis.__catalogProviders.push({
+  catalogId: LIVE_CATALOG_ID,
   catalog: fixturesCatalog,
 });
 globalThis.__catalogProviders.push({
@@ -24221,6 +24252,32 @@ function tvnowCategoryId(value) {
   return tvnowText(value).toLowerCase().replace(/[^a-z0-9]+/g, '-');
 }
 
+function tvnowCountryKey(value) {
+  const text = tvnowText(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const aliases = {
+    japan: 'jp',
+    'united states': 'us',
+    'united states of america': 'us',
+    usa: 'us',
+    'united kingdom': 'gb',
+    'great britain': 'gb',
+    uk: 'gb',
+    'north korea': 'kp',
+    'south korea': 'kr',
+  };
+  return aliases[text] || text;
+}
+
+function tvnowCategoryIsCountry(category, channels) {
+  const categoryKey = tvnowCountryKey(category);
+  if (!categoryKey || channels.length === 0) return false;
+  return channels.every((channel) => [
+    channel.countryName,
+    channel.countryCode,
+    channel.country,
+  ].some((value) => tvnowCountryKey(value) === categoryKey));
+}
+
 function tvnowTitleKey(value) {
   return tvnowText(value)
     .toLowerCase()
@@ -24250,6 +24307,8 @@ function tvnowIptvChannel(value) {
     category: tvnowText(value.category) || 'General',
     logo: tvnowImageUrl(value.logo),
     country: tvnowText(value.countryName || value.country),
+    countryName: tvnowText(value.countryName),
+    countryCode: tvnowText(value.country),
     language: tvnowText(value.language),
     resolution: tvnowText(value.resolution),
   };
@@ -24376,12 +24435,21 @@ async function tvnowCatalog(query) {
     const primary = group.tvnow[0] || group.iptv[0];
     return {
       category: group.tvnow[0]?.category || group.iptv[0]?.category || 'Other',
+      channel: primary,
       item: group.tvnow.length > 0 ? tvnowItem(primary) : tvnowIptvItem(primary),
     };
   });
   const allCategories = [...new Set(
     catalogChannels.map((channel) => channel.category),
-  )];
+  )].filter((category) => {
+    const rows = catalogChannels.filter((channel) =>
+      channel.category === category,
+    );
+    return rows.length > 1 && !tvnowCategoryIsCountry(
+      category,
+      rows.map((row) => row.channel),
+    );
+  });
   const subCategories = allCategories.map((category) => ({
     id: tvnowCategoryId(category),
     name: category,
