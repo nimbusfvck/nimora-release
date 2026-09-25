@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "2.0.5",
+      "version": "2.0.6",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora 2.0.6: fixed IPTV Hub playback by routing IPTV source IDs through the registered TVNow stream provider.",
         "Nimora 2.0.5: fixed TVNow Live Shelf loading by sanitizing invalid IPTV artwork URLs, deduplicating equal channel titles, and exposing TVNow plus IPTV Hub sources on one card.",
         "Nimora 2.0.4: merged IPTV Hub channels directly into the TVNow Live Shelf, including shared category rows and provider-aware playback IDs.",
         "Nimora 2.0.3: added IPTV Hub live-TV channels to the existing TVNow provider, grouped by upstream category under the TV category with fresh HLS/DASH playback resolution.",
@@ -268,7 +269,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "55b334ebf724d0b323a769b0a8496666c36a05371a95826e266985779be2e59e"
+      "bundleSha256": "1789965024795b52ef7e55d56fb417a756038ea49de3fa79bf457df9b8b9d773"
     }
   ]
 }

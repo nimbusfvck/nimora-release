@@ -20168,11 +20168,15 @@ async function tvnowLoadIptvChannels(force = false) {
 }
 
 function tvnowIptvSourceId(id) {
-  return `iptvhub:${encodeURIComponent(tvnowText(id))}`;
+  return `tvnow:iptv:${encodeURIComponent(tvnowText(id))}`;
+}
+
+function tvnowIsIptvSourceId(sourceId) {
+  return tvnowText(sourceId).startsWith('tvnow:iptv:');
 }
 
 function tvnowIptvIdFromSourceId(sourceId) {
-  const prefix = 'iptvhub:';
+  const prefix = 'tvnow:iptv:';
   const value = tvnowText(sourceId);
   if (!value.startsWith(prefix)) throw new Error('Invalid IPTV Hub source id');
   const id = decodeURIComponent(value.slice(prefix.length));
@@ -20444,7 +20448,7 @@ async function tvnowMeta(args) {
   if (!ref || ref.providerId !== TVNOW_PROVIDER_ID) {
     throw new Error('TVNow metadata received an unrelated ref');
   }
-  if (String(ref.id).startsWith('iptvhub:')) {
+  if (tvnowIsIptvSourceId(ref.id)) {
     const id = tvnowIptvIdFromSourceId(ref.id);
     const channels = await tvnowLoadIptvChannels();
     const channel = channels.find((entry) => entry.id === id);
@@ -20473,7 +20477,7 @@ async function tvnowSources(args) {
   if (!item || !item.ref || item.ref.providerId !== TVNOW_PROVIDER_ID) {
     return {sources: []};
   }
-  if (String(item.ref.id).startsWith('iptvhub:')) {
+  if (tvnowIsIptvSourceId(item.ref.id)) {
     const id = tvnowIptvIdFromSourceId(item.ref.id);
     const channels = await tvnowLoadIptvChannels();
     const channel = channels.find((entry) => entry.id === id);
@@ -20519,7 +20523,7 @@ async function tvnowSources(args) {
 }
 
 async function tvnowResolve(sourceId) {
-  if (String(sourceId).startsWith('iptvhub:')) {
+  if (tvnowIsIptvSourceId(sourceId)) {
     const id = tvnowIptvIdFromSourceId(sourceId);
     const channels = await tvnowLoadIptvChannels(true);
     const channel = channels.find((entry) => entry.id === id);
