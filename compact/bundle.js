@@ -10564,6 +10564,7 @@ function sokujaCatalogItem(result) {
       id: sokujaCatalogRefId(result),
     },
     kind: result.type === 'movie' ? 'video' : 'series',
+    contentDomain: 'anime',
     title: result.title,
   };
   if (Number.isInteger(result.releaseYear) && result.releaseYear > 0) {
@@ -10797,6 +10798,7 @@ async function sokujaCatalogMeta(args) {
   const item = {
     ref,
     kind: payload.k === 'video' ? 'video' : 'series',
+    contentDomain: 'anime',
     title: heading || payload.t || 'Untitled',
   };
   if (Number.isInteger(payload.y) && payload.y > 0) item.releaseYear = payload.y;
@@ -15610,6 +15612,7 @@ function anilistToMediaItem(media) {
       id: anilistRefId(media.id),
     },
     kind: media.format === 'MOVIE' ? 'video' : 'series',
+    contentDomain: 'anime',
     title: anilistTitle(media),
   };
   const year = media.startDate && media.startDate.year;

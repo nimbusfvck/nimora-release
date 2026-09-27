@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "2.0.8",
+  "version": "2.0.9",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -60,68 +60,78 @@
       "name": "FCTV33 Live Events",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.timesoccer",
       "name": "Time Soccer TV",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.timstreams",
       "name": "TimStreams",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.streamedpk",
       "name": "Streamed.pk Golf",
-      "roles": ["stream"]
+      "roles": ["stream"],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.daddylive",
       "name": "DaddyLive",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.moviebox",
       "name": "MovieBox",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["movie", "series"]
     },
     {
       "id": "nimora.showbox",
       "name": "Febbox",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["movie", "series"]
     },
     {
       "id": "nimora.kora",
       "name": "Kora",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.cricfy",
       "name": "Cricfy",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.metegol",
       "name": "MeteGol",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.dramadev",
@@ -129,14 +139,16 @@
       "roles": [
         "stream",
         "meta"
-      ]
+      ],
+      "streamDomains": ["movie", "series"]
     },
     {
       "id": "nimora.savefilm",
       "name": "Savefilm",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["movie", "series", "anime"]
     },
     {
       "id": "nimora.layarkaca.catalog",
@@ -157,6 +169,7 @@
       "roles": [
         "stream"
       ],
+      "streamDomains": ["movie", "series"],
       "locales": {
         "countries": ["ID"],
         "languages": ["id"]
@@ -168,6 +181,7 @@
       "roles": [
         "stream"
       ],
+      "streamDomains": ["movie", "series"],
       "locales": {
         "countries": ["ID"],
         "languages": ["id"]
@@ -179,6 +193,7 @@
       "roles": [
         "stream"
       ],
+      "streamDomains": ["movie", "series"],
       "locales": {
         "countries": ["ID"],
         "languages": ["id"]
@@ -190,6 +205,7 @@
       "roles": [
         "stream"
       ],
+      "streamDomains": ["movie", "series"],
       "locales": {
         "countries": ["ID"],
         "languages": ["id"]
@@ -200,21 +216,24 @@
       "name": "PlayZTV Live Events",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.roxie",
       "name": "RoxieStreams",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.cdnlivetv",
       "name": "CDNLiveTV",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.league_channels",
@@ -223,6 +242,7 @@
         "catalog",
         "stream"
       ],
+      "streamDomains": ["live"],
       "catalogs": [
         {
           "id": "league_channels",
@@ -241,6 +261,7 @@
         "meta",
         "stream"
       ],
+      "streamDomains": ["live"],
       "catalogs": [
         {
           "id": "tvnow_channels",
@@ -307,42 +328,48 @@
       "name": "FlyStream",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["movie", "series"]
     },
     {
       "id": "nimora.vidrock",
       "name": "Vidrock",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["movie", "series"]
     },
     {
       "id": "nimora.vidfast",
       "name": "VidFast",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["movie", "series"]
     },
     {
       "id": "nimora.vidcore",
       "name": "VidCore",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["movie", "series"]
     },
     {
       "id": "nimora.videasy",
       "name": "Videasy",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["movie", "series"]
     },
     {
       "id": "nimora.vaplayer",
       "name": "VaPlayer",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["movie", "series"]
     },
     {
       "id": "nimora.sokuja",
@@ -353,6 +380,7 @@
         "search",
         "stream"
       ],
+      "streamDomains": ["anime"],
       "catalogs": [
         {
           "id": "sokuja",
@@ -371,7 +399,8 @@
       "name": "KickassAnime",
       "roles": [
         "stream"
-      ]
+      ],
+      "streamDomains": ["anime"]
     },
     {
       "id": "nimora.indomax",
@@ -380,7 +409,8 @@
         "stream",
         "search",
         "meta"
-      ]
+      ],
+      "streamDomains": ["movie", "series", "anime"]
     },
     {
       "id": "nimora.catalog.nsfw",

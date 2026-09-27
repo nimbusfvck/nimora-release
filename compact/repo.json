@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.8",
+      "version": "2.0.9",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.9: filtered stream providers by movie, series, anime, and live content domains.",
         "Nimora Compact 2.0.8: added Streamed.pk Golf live-event streams and raised VidRock HLS probe timeout to 20 seconds.",
         "Nimora Compact 2.0.7: added the Live Events shelf and filtered TVNow/IPTV country categories and single-item categories from Home.",
         "Nimora Compact 2.0.6: fixed IPTV Hub playback by routing IPTV source IDs through the registered TVNow stream provider.",
@@ -131,7 +132,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "fcd7bb4505cbd7ce1542dab29f34b0dcbe2531173aa1473f0eaee8da5deb2009"
+      "bundleSha256": "5b05758d0a8e52414da60a2bdc8cb9e812e38c9c61fe10c45f5914ffffa0d7de"
     }
   ]
 }
