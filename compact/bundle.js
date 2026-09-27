@@ -1179,6 +1179,15 @@ async function getTimstreamsSportEntries(nowMs) {
   }
 }
 
+async function getStreamedPkSportEntries(nowMs) {
+  if (typeof globalThis.__streamedpkSportEntries !== 'function') return [];
+  try {
+    return await globalThis.__streamedpkSportEntries(nowMs);
+  } catch (_) {
+    return [];
+  }
+}
+
 function catalogTitleKey(value) {
   return `${value || ''}`
     .toLowerCase()
@@ -1561,6 +1570,7 @@ async function fixturesCatalog(query) {
     popularLeagues,
     roxieEntries,
     timstreamsEntries,
+    streamedPkEntries,
   ] = await Promise.all([
     // Canonical FotMob metadata is preferred, but provider-only shelves such
     // as FCTV Asian Games must remain usable when FotMob has a DNS/HTTP outage.
@@ -1568,6 +1578,7 @@ async function fixturesCatalog(query) {
     fetchPopularLeaguesMemo().catch(() => []),
     getRoxieSportEntries(nowMs),
     getTimstreamsSportEntries(nowMs),
+    getStreamedPkSportEntries(nowMs),
   ]);
   // Keep the complete FotMob feed as the identity authority for provider
   // dedupe. Finished matches remain available to schedule, but a stale
@@ -1591,6 +1602,7 @@ async function fixturesCatalog(query) {
     ...fctvEntries,
     ...roxieEntries,
     ...timstreamsEntries,
+    ...streamedPkEntries,
   ], nowMs);
   return buildPage(
     query,
@@ -18962,6 +18974,501 @@ globalThis.__streamProviders.push({
   providerKey: TIMSTREAMS_PROVIDER_KEY,
   sources: timstreamsSources,
   resolve: timstreamsResolve,
+});
+
+// Streamed.pk live-event catalog contributor and embed.st source resolver.
+// Only embed.st links are exposed; unsupported embed chains fail closed.
+
+const STREAMEDPK_ORIGIN = globalThis.__streamedpkOrigin || 'https://streamed.st';
+const STREAMEDPK_EMBED_ORIGIN = 'https://embed.st';
+const STREAMEDPK_PLAYER_ORIGIN = 'https://exposestrat.com';
+const STREAMEDPK_PROVIDER_ID = 'nimora.streamedpk';
+const STREAMEDPK_PROVIDER_KEY = 'streamedpk';
+const STREAMEDPK_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36';
+const STREAMEDPK_UPCOMING_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+const STREAMEDPK_RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
+const STREAMEDPK_MATCH_CACHE_MS = 60 * 1000;
+const STREAMEDPK_WEBVIEW_PATTERN = 'm3u8|master\\.txt';
+let streamedpkMatchesCache = null;
+let streamedpkMatchesPending = null;
+
+function streamedpkText(value) {
+  return value == null ? '' : String(value).trim();
+}
+
+function streamedpkLabel(link) {
+  const parts = ['Streamed'];
+  const language = streamedpkText(link && link.language);
+  if (language) parts.push(language);
+  if (link && typeof link.hd === 'boolean') parts.push(link.hd ? 'HD' : 'SD');
+  return parts.join(' · ');
+}
+
+function streamedpkNormalize(value) {
+  let text = streamedpkText(value).toLowerCase();
+  try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (_) {}
+  return text.replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function streamedpkEncode(value) {
+  return host.codec.textToBase64(JSON.stringify(value))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function streamedpkDecode(value) {
+  let encoded = streamedpkText(value).replace(/-/g, '+').replace(/_/g, '/');
+  while (encoded.length % 4) encoded += '=';
+  return JSON.parse(host.codec.base64ToText(encoded));
+}
+
+function streamedpkSourceId(payload) {
+  return `${STREAMEDPK_PROVIDER_KEY}:${streamedpkEncode(payload)}`;
+}
+
+function streamedpkDecodeSourceId(sourceId) {
+  const prefix = `${STREAMEDPK_PROVIDER_KEY}:`;
+  const value = streamedpkText(sourceId);
+  if (!value.startsWith(prefix)) {
+    throw new Error(`Invalid Streamed.pk source id: ${sourceId}`);
+  }
+  const payload = streamedpkDecode(value.slice(prefix.length));
+  if (payload == null || !payload.matchId || !payload.source || !payload.sourceId ||
+      !Number.isInteger(Number(payload.streamNo))) {
+    throw new Error('Invalid Streamed.pk source payload');
+  }
+  return payload;
+}
+
+async function streamedpkFetchJson(path) {
+  const response = await fetch(`${STREAMEDPK_ORIGIN}${path}`, {
+    headers: {
+      Accept: 'application/json',
+      Referer: `${STREAMEDPK_ORIGIN}/`,
+      'User-Agent': STREAMEDPK_USER_AGENT,
+    },
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Streamed.pk ${path} request failed: ${response.status}`);
+  }
+  const payload = JSON.parse(response.body || '');
+  if (payload == null || typeof payload !== 'object') {
+    throw new Error(`Streamed.pk ${path} returned invalid JSON`);
+  }
+  return payload;
+}
+
+async function streamedpkFetchMatches(nowMs) {
+  if (streamedpkMatchesCache && streamedpkMatchesCache.until > nowMs) {
+    return streamedpkMatchesCache.matches;
+  }
+  if (streamedpkMatchesPending) return streamedpkMatchesPending;
+  streamedpkMatchesPending = (async () => {
+    const matches = await streamedpkFetchJson('/api/matches/all');
+    if (!Array.isArray(matches)) {
+      throw new Error('Streamed.pk matches response is not an array');
+    }
+    streamedpkMatchesCache = {
+      matches,
+      until: Date.now() + STREAMEDPK_MATCH_CACHE_MS,
+    };
+    return matches;
+  })();
+  try {
+    return await streamedpkMatchesPending;
+  } finally {
+    streamedpkMatchesPending = null;
+  }
+}
+
+function streamedpkEventItem(match, nowMs) {
+  const matchId = streamedpkText(match && match.id);
+  const title = streamedpkText(match && match.title);
+  const startsAtMs = Number(match && match.date);
+  const category = streamedpkText(match && match.category) || 'Other';
+  if (!matchId || !title || !Number.isFinite(startsAtMs)) return null;
+  if (!Array.isArray(match.sources) || match.sources.length === 0) {
+    return null;
+  }
+
+  const endAtMs = startsAtMs + eventDurationMinutes(category, title) * 60 * 1000;
+  if (nowMs - endAtMs > STREAMEDPK_RECENT_WINDOW_MS ||
+      startsAtMs - nowMs > STREAMEDPK_UPCOMING_WINDOW_MS) return null;
+  const state = nowMs >= endAtMs ? 'ended'
+    : startsAtMs <= nowMs ? 'live' : 'scheduled';
+  const item = {
+    ref: {
+      extensionId: typeof EXTENSION_ID === 'string' ? EXTENSION_ID : 'nimora',
+      providerId: STREAMEDPK_PROVIDER_ID,
+      id: `streamedpk:${matchId}`,
+    },
+    kind: 'event',
+    title,
+    subtitle: category,
+    schedule: eventSchedule(startsAtMs, state, category, title),
+  };
+  const home = match.teams && match.teams.home && streamedpkText(match.teams.home.name);
+  const away = match.teams && match.teams.away && streamedpkText(match.teams.away.name);
+  if (home && away) item.participants = [{name: home}, {name: away}];
+  return {
+    sportId: sportIdOf(category),
+    sportName: sportNameOf(category),
+    live: state === 'live',
+    item,
+  };
+}
+
+async function streamedpkSportEntries(nowMs) {
+  try {
+    return (await streamedpkFetchMatches(nowMs))
+      .map((match) => streamedpkEventItem(match, nowMs))
+      .filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+}
+
+function streamedpkMatchIdFromItem(item) {
+  const ref = item && item.ref;
+  const refId = streamedpkText(ref && ref.id);
+  if (ref && ref.providerId === STREAMEDPK_PROVIDER_ID &&
+      refId.startsWith('streamedpk:')) {
+    return refId.slice('streamedpk:'.length);
+  }
+  return null;
+}
+
+function streamedpkMatchTimeMatches(match, item) {
+  const itemStart = Date.parse(item && item.schedule && item.schedule.startsAt);
+  const matchStart = Number(match && match.date);
+  return !Number.isFinite(itemStart) || !Number.isFinite(matchStart) ||
+    Math.abs(itemStart - matchStart) <= 12 * 60 * 60 * 1000;
+}
+
+function streamedpkMatchHasSources(match) {
+  return Array.isArray(match && match.sources) && match.sources.some(
+    (source) => source && streamedpkText(source.source) && streamedpkText(source.id),
+  );
+}
+
+function streamedpkFindMatch(matches, item) {
+  const directId = streamedpkMatchIdFromItem(item);
+  if (directId) {
+    return matches.find((match) => String(match.id) === directId) || null;
+  }
+
+  const titleKey = streamedpkNormalize(item && item.title);
+  const exact = matches.filter((match) => streamedpkMatchHasSources(match) &&
+    streamedpkNormalize(match.title) === titleKey &&
+    streamedpkMatchTimeMatches(match, item));
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) {
+    const itemStart = Date.parse(item && item.schedule && item.schedule.startsAt);
+    return exact.sort((a, b) =>
+      Math.abs(Number(a.date) - itemStart) - Math.abs(Number(b.date) - itemStart))[0];
+  }
+
+  const participants = item && item.participants;
+  if (!Array.isArray(participants) || participants.length !== 2) return null;
+  try {
+    const candidates = matches.filter(streamedpkMatchHasSources);
+    const result = host.match.resolve({
+      teamA: participants[0].name,
+      teamB: participants[1].name,
+      teamAShort: participants[0].shortName || null,
+      teamBShort: participants[1].shortName || null,
+      kickoff: item.schedule && item.schedule.startsAt || null,
+    }, candidates.map((match) => ({
+      teamA: match.teams && match.teams.home && match.teams.home.name || '',
+      teamB: match.teams && match.teams.away && match.teams.away.name || '',
+      startsAt: Number.isFinite(Number(match.date))
+        ? new Date(Number(match.date)).toISOString()
+        : null,
+    })));
+    const match = result && candidates[result.index];
+    return match && streamedpkMatchTimeMatches(match, item) ? match : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function streamedpkFetchSourceLinks(source, sourceId) {
+  const links = await streamedpkFetchJson(
+    `/api/stream/${encodeURIComponent(source)}/${encodeURIComponent(sourceId)}`,
+  );
+  if (!Array.isArray(links)) return [];
+  return links.filter((link) => link && Number.isInteger(Number(link.streamNo)));
+}
+
+function streamedpkIsEmbedStUrl(value) {
+  return /^https:\/\/(?:www\.)?embed\.st(?:\/|$)/i.test(streamedpkText(value));
+}
+
+async function streamedpkSources(args) {
+  if (args.enabledProviders != null &&
+      !args.enabledProviders.includes(STREAMEDPK_PROVIDER_ID)) {
+    return {sources: []};
+  }
+  const item = args.item || {};
+  if (!item.ref || item.kind !== 'event') return {sources: []};
+  try {
+    const matches = await streamedpkFetchMatches(Date.now());
+    const match = streamedpkFindMatch(matches, item);
+    if (!match) return {sources: []};
+    const sourceEntries = (Array.isArray(match.sources) ? match.sources : [])
+      .filter((source) => source && streamedpkText(source.source) && streamedpkText(source.id));
+    const candidates = [];
+    for (const source of sourceEntries) {
+      const links = await streamedpkFetchSourceLinks(source.source, source.id);
+      for (const link of links) {
+        if (!link.id || !streamedpkIsEmbedStUrl(link.embedUrl)) continue;
+        candidates.push({
+          sourceType: String(source.source),
+          streamNo: Number(link.streamNo),
+          descriptor: {
+            id: streamedpkSourceId({
+              matchId: String(match.id),
+              source: String(source.source),
+              sourceId: String(source.id),
+              streamNo: Number(link.streamNo),
+            }),
+            label: streamedpkLabel(link),
+            provider: 'Nimora',
+            providerId: STREAMEDPK_PROVIDER_ID,
+          },
+        });
+      }
+    }
+    const labelCounts = new Map();
+    const sourceLabelCounts = new Map();
+    for (const candidate of candidates) {
+      const label = candidate.descriptor.label;
+      const sourceLabel = `${label}\u0000${candidate.sourceType}`;
+      labelCounts.set(label, (labelCounts.get(label) || 0) + 1);
+      sourceLabelCounts.set(sourceLabel, (sourceLabelCounts.get(sourceLabel) || 0) + 1);
+    }
+    for (const candidate of candidates) {
+      const descriptor = candidate.descriptor;
+      const label = descriptor.label;
+      if ((labelCounts.get(label) || 0) > 1) {
+        descriptor.label = `${label} · ${candidate.sourceType}`;
+        if ((sourceLabelCounts.get(`${label}\u0000${candidate.sourceType}`) || 0) > 1) {
+          descriptor.label += ` · ${candidate.streamNo}`;
+        }
+      }
+    }
+    return {sources: candidates.map((candidate) => candidate.descriptor)};
+  } catch (_) {
+    return {sources: []};
+  }
+}
+
+function streamedpkDecodeHtml(value) {
+  return streamedpkText(value)
+    .replace(/&amp;/gi, '&').replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'");
+}
+
+function streamedpkAbsoluteUrl(value, baseUrl) {
+  const target = streamedpkDecodeHtml(value).trim();
+  if (/^https?:\/\//i.test(target)) return target;
+  const base = streamedpkText(baseUrl).match(
+    /^(https?):\/\/([^/?#]+)([^?#]*)(?:\?([^#]*))?/i,
+  );
+  if (!base) return null;
+  const origin = `${base[1]}://${base[2]}`;
+  if (target.startsWith('//')) return `${base[1]}:${target}`;
+  if (target.startsWith('/')) return `${origin}${target}`;
+  if (target.startsWith('?')) return `${origin}${base[3] || '/'}${target}`;
+  const basePath = base[3] || '/';
+  const path = `${basePath.slice(0, basePath.lastIndexOf('/') + 1)}${target}`;
+  const normalized = [];
+  for (const segment of path.split('/')) {
+    if (segment === '..') normalized.pop();
+    else if (segment && segment !== '.') normalized.push(segment);
+  }
+  return `${origin}/${normalized.join('/')}`;
+}
+
+function streamedpkIframeUrl(html) {
+  const match = streamedpkText(html).match(
+    /<iframe\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')/i,
+  );
+  return match ? streamedpkDecodeHtml(match[1] || match[2]) : null;
+}
+
+function streamedpkFid(html) {
+  const match = streamedpkText(html).match(/\bfid\s*=\s*(["'])(.*?)\1/i);
+  return match ? streamedpkDecodeHtml(match[2]) : null;
+}
+
+function streamedpkPlayerM3u8(html) {
+  // Decode the HLS URL from the non-WASM embedhd/exposestrat player chain.
+  const match = streamedpkText(html).match(
+    /return\(\[("[^"]+"(?:,"[^"]+")*)\]\.join\(""\)/,
+  );
+  if (!match) return null;
+  try {
+    const url = JSON.parse(`[${match[1]}]`).join('');
+    return /^https?:\/\//i.test(url) ? url.replace(/\\\//g, '/') : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function streamedpkFetchPage(url, referer, extraHeaders = {}, timeoutMs) {
+  const options = {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+      Referer: referer,
+      'User-Agent': STREAMEDPK_USER_AGENT,
+      ...extraHeaders,
+    },
+  };
+  if (timeoutMs != null) options.timeoutMs = timeoutMs;
+  const response = await fetch(url, {
+    ...options,
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Streamed.pk page failed: ${response.status}`);
+  }
+  return response;
+}
+
+async function streamedpkValidateHls(url, referer, origin) {
+  const headers = {
+    Accept: 'application/vnd.apple.mpegurl,application/x-mpegURL,*/*',
+    ...(origin ? {Origin: origin} : {}),
+    Referer: referer,
+    'User-Agent': STREAMEDPK_USER_AGENT,
+  };
+  const root = await fetch(url, {headers});
+  let playlist = streamedpkText(root && root.body).trimStart();
+  if (root.status < 200 || root.status >= 300 || !playlist.startsWith('#EXTM3U')) {
+    throw new Error('Streamed.pk returned an invalid HLS playlist');
+  }
+  let playlistUrl = streamedpkText(root.url) || url;
+  const firstUri = (text) => text.split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith('#'));
+  let segmentUrl = firstUri(playlist);
+  if (/^#EXT-X-STREAM-INF/m.test(playlist)) {
+    if (!segmentUrl) throw new Error('Streamed.pk master playlist has no variant');
+    const variantUrl = streamedpkAbsoluteUrl(segmentUrl, playlistUrl);
+    if (!variantUrl) throw new Error('Streamed.pk variant URL is invalid');
+    const variant = await fetch(variantUrl, {headers});
+    playlist = streamedpkText(variant && variant.body).trimStart();
+    if (variant.status < 200 || variant.status >= 300 ||
+        !playlist.startsWith('#EXTM3U')) {
+      throw new Error('Streamed.pk returned an invalid HLS variant');
+    }
+    playlistUrl = streamedpkText(variant.url) || variantUrl;
+    segmentUrl = firstUri(playlist);
+  }
+  if (!segmentUrl) {
+    if (/#EXTINF|#EXT-X-PART/.test(playlist)) return;
+    throw new Error('Streamed.pk media playlist has no segment');
+  }
+  const absoluteSegmentUrl = streamedpkAbsoluteUrl(segmentUrl, playlistUrl);
+  if (!absoluteSegmentUrl) throw new Error('Streamed.pk segment URL is invalid');
+  const segment = await fetch(absoluteSegmentUrl, {
+    headers: {...headers, Range: 'bytes=0-0'},
+  });
+  if (segment.status < 200 || segment.status >= 300 ||
+      streamedpkText(segment.body).length === 0) {
+    throw new Error(`Streamed.pk segment request failed: ${segment.status}`);
+  }
+}
+
+async function streamedpkResolveEmbed(link) {
+  const embedUrl = streamedpkText(link.embedUrl);
+  if (!streamedpkIsEmbedStUrl(embedUrl)) {
+    throw new Error('Streamed.pk stream is not hosted on embed.st');
+  }
+  const embedReferer = `${STREAMEDPK_ORIGIN}/`;
+  const embed = await streamedpkFetchPage(embedUrl, embedReferer);
+  const iframe = streamedpkIframeUrl(embed.body);
+  let mediaUrl = null;
+  let mediaReferer = embedUrl;
+  let mediaOrigin = null;
+
+  if (iframe) {
+    const iframeUrl = streamedpkAbsoluteUrl(iframe, embed.url || embedUrl);
+    if (/^https:\/\/(?:www\.)?embedhd\.st(?:\/|$)/i.test(iframeUrl || '')) {
+      try {
+        const player = await streamedpkFetchPage(iframeUrl, embed.url || embedUrl);
+        const fid = streamedpkFid(player.body);
+        if (fid) {
+          const playerUrl = `${STREAMEDPK_PLAYER_ORIGIN}/maestrohd1.php` +
+            `?player=desktop&live=${encodeURIComponent(fid)}`;
+          const playerPage = await streamedpkFetchPage(playerUrl, iframeUrl);
+          mediaUrl = streamedpkPlayerM3u8(playerPage.body);
+          if (mediaUrl) {
+            mediaReferer = `${STREAMEDPK_PLAYER_ORIGIN}/`;
+            mediaOrigin = STREAMEDPK_PLAYER_ORIGIN;
+          }
+        }
+      } catch (_) {
+        // Fall through to the headless capture path for other embed variants.
+      }
+    }
+  }
+
+  if (!mediaUrl) {
+    const intercepted = await streamedpkFetchPage(
+      embedUrl,
+      embedReferer,
+      {'X-QJSR-WebView-Pattern': STREAMEDPK_WEBVIEW_PATTERN},
+      20000,
+    );
+    const candidate = streamedpkText(intercepted.url);
+    if (intercepted.status === 200 && /^https?:\/\//i.test(candidate) &&
+        /(?:m3u8|master\.txt)/i.test(candidate)) {
+      mediaUrl = candidate;
+      mediaReferer = embedUrl;
+    }
+  }
+
+  if (!mediaUrl) throw new Error('Streamed.pk embed produced no HLS URL');
+  await streamedpkValidateHls(mediaUrl, mediaReferer, mediaOrigin);
+  return {
+    url: mediaUrl,
+    headers: {
+      ...(mediaOrigin ? {Origin: mediaOrigin} : {}),
+      Referer: mediaReferer,
+      'User-Agent': STREAMEDPK_USER_AGENT,
+    },
+    format: 'hls',
+    label: streamedpkLabel(link),
+  };
+}
+
+async function streamedpkResolve(sourceId) {
+  const payload = streamedpkDecodeSourceId(sourceId);
+  const matches = await streamedpkFetchMatches(Date.now());
+  const match = matches.find((entry) => String(entry.id) === String(payload.matchId));
+  if (!match || !Array.isArray(match.sources) || !match.sources.some(
+    (source) => source && String(source.source) === String(payload.source) &&
+      String(source.id) === String(payload.sourceId),
+  )) {
+    throw new Error('Streamed.pk event or source changed; refresh sources');
+  }
+  const links = await streamedpkFetchSourceLinks(payload.source, payload.sourceId);
+  const link = links.find((entry) => Number(entry.streamNo) === Number(payload.streamNo));
+  if (!link || !link.id || !streamedpkIsEmbedStUrl(link.embedUrl)) {
+    throw new Error('Streamed.pk embed.st stream changed; refresh sources');
+  }
+  link.source = payload.source;
+  return streamedpkResolveEmbed(link);
+}
+
+globalThis.__streamedpkSportEntries = streamedpkSportEntries;
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: STREAMEDPK_PROVIDER_KEY,
+  sources: streamedpkSources,
+  resolve: streamedpkResolve,
 });
 
 // DaddyLive is a stream-only provider. FotMob/Nimora owns event identity,

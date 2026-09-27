@@ -3,13 +3,17 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.12",
+      "version": "2.0.16",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.16: renamed the Streamed provider and source labels from Streamed.pk to Streamed.",
+        "Nimora Compact 2.0.15: shortened Streamed.pk source labels to language and quality, using source type only for duplicate labels.",
+        "Nimora Compact 2.0.14: fixed Streamed.pk embed resolution with a headless WebView HLS capture fallback.",
+        "Nimora Compact 2.0.13: restored Streamed.pk event sources across source types via streamed.st, using embed.st links and the non-WASM resolver path.",
         "Nimora Compact 2.0.12: preserved distinct FCTV stream choices in the source list.",
         "Nimora Compact 2.0.11: removed the Streamed.pk provider from Compact.",
         "Nimora Compact 2.0.10: added embed.st-hosted Streamed.pk sources with headless WebView HLS capture.",
@@ -135,7 +139,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "1327edaa14d62a3f15ccf47ec57e730886e4a9dc69a20f7d841516ddcdafafeb"
+      "bundleSha256": "7cf3ebd453b5d6dc308e5343740b0a5399d5ef31983396c3941bfdadd3a31e02"
     }
   ]
 }
