@@ -2258,15 +2258,25 @@ async function fctvSources(args) {
   } catch (_) {
     return { sources: [] };
   }
-  return {
-    sources: streams.map((stream) => ({
+  return { sources: fctvSourceDescriptors(match, streams) };
+}
+
+function fctvSourceDescriptors(match, streams) {
+  const usedLabels = new Set();
+  return streams.map((stream) => {
+    const baseLabel = fctvSourceLabel(stream.name);
+    let label = baseLabel;
+    if (usedLabels.has(label)) label = `${baseLabel} · ${stream.streamId}`;
+    while (usedLabels.has(label)) label = `${label} · ${stream.siteType}`;
+    usedLabels.add(label);
+    return {
       id: `${FCTV_PROVIDER_KEY}:${match.matchId}:${match.sportType}:` +
         `${stream.siteType}:${stream.streamId}`,
-      label: fctvSourceLabel(stream.name),
+      label,
       provider: 'FCTV33',
       providerId: FCTV_PROVIDER_ID,
-    })),
-  };
+    };
+  });
 }
 
 function fctvSourceHeaders() {
@@ -2292,8 +2302,9 @@ function fctvSegmentHeaders(origin) {
   };
 }
 
-function fctvSourceLabel() {
-  return 'FCTV';
+function fctvSourceLabel(value) {
+  const name = String(value || '').trim();
+  return name || 'FCTV';
 }
 
 function fctvValidMediaUrl(value) {

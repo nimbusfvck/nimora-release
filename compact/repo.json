@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.11",
+      "version": "2.0.12",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.12: preserved distinct FCTV stream choices in the source list.",
         "Nimora Compact 2.0.11: removed the Streamed.pk provider from Compact.",
         "Nimora Compact 2.0.10: added embed.st-hosted Streamed.pk sources with headless WebView HLS capture.",
         "Nimora Compact 2.0.9: filtered stream providers by movie, series, anime, and live content domains.",

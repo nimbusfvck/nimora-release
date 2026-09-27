@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "2.0.11",
+      "version": "2.0.12",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora 2.0.12: preserved distinct FCTV stream choices in the source list.",
         "Nimora 2.0.11: removed the Streamed.pk provider from the Full profile.",
         "Nimora 2.0.10: added embed.st-hosted Streamed.pk sources with headless WebView HLS capture.",
         "Nimora 2.0.9: filtered stream providers by movie, series, anime, and live content domains.",
@@ -274,7 +275,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "7fcfeaf700c6b18f2d5e327c665e7be5ace6b9a472466880a94740ba5c82f84a"
+      "bundleSha256": "e65d8096e70ec9be8ffbb9b710297185eba1cd358364178116e4b2a6931a661c"
     }
   ]
 }
