@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "2.0.9",
+  "version": "2.0.11",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -53,12 +53,6 @@
     {
       "id": "nimora.timstreams",
       "name": "TimStreams",
-      "roles": ["stream"],
-      "streamDomains": ["live"]
-    },
-    {
-      "id": "nimora.streamedpk",
-      "name": "Streamed.pk Golf",
       "roles": ["stream"],
       "streamDomains": ["live"]
     },

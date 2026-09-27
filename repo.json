@@ -3,13 +3,15 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "2.0.9",
+      "version": "2.0.11",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora 2.0.11: removed the Streamed.pk provider from the Full profile.",
+        "Nimora 2.0.10: added embed.st-hosted Streamed.pk sources with headless WebView HLS capture.",
         "Nimora 2.0.9: filtered stream providers by movie, series, anime, and live content domains.",
         "Nimora 2.0.8: added Streamed.pk Golf live-event streams and raised VidRock HLS probe timeout to 20 seconds.",
         "Nimora 2.0.7: added the Live Events shelf and filtered TVNow/IPTV country categories and single-item categories from Home.",
@@ -272,7 +274,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "8b4bff6035b95e965b7ee4ab3f3da713162b4651a449d2f5da90984fbc135b9c"
+      "bundleSha256": "7fcfeaf700c6b18f2d5e327c665e7be5ace6b9a472466880a94740ba5c82f84a"
     }
   ]
 }
