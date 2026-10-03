@@ -45,13 +45,13 @@ const PROVIDER_ID = 'nimora.matches';
 const CATALOG_ID = 'fixtures';
 const LIVE_CATALOG_ID = 'fixtures_live';
 const SPORT_CATALOG_ID = 'fixtures_sport';
-const PROVIDER_SPORT_CATALOGS = {
-  fixtures_sport_cricfy: getCricfySportEntries,
-  fixtures_sport_fctv: getFctvSportEntries,
-  fixtures_sport_roxie: getRoxieSportEntries,
-  fixtures_sport_timstreams: getTimstreamsSportEntries,
-  fixtures_sport_streamed: getStreamedPkSportEntries,
-};
+const PROVIDER_SPORT_CATALOGS = [
+  { id: 'fixtures_sport_cricfy', name: 'Cricfy', load: getCricfySportEntries },
+  { id: 'fixtures_sport_fctv', name: 'FCTV', load: getFctvSportEntries },
+  { id: 'fixtures_sport_roxie', name: 'RoxieStreams', load: getRoxieSportEntries },
+  { id: 'fixtures_sport_timstreams', name: 'TimStreams', load: getTimstreamsSportEntries },
+  { id: 'fixtures_sport_streamed', name: 'Streamed', load: getStreamedPkSportEntries },
+];
 const FEATURED_CATALOG_ID = 'fixtures_featured';
 const LIVE_CATEGORY = 'live';
 const ALL_CATEGORY = 'all';
@@ -708,13 +708,8 @@ const VOLLEYBALL = { id: 'volleyball', name: 'Volleyball' };
 const HOCKEY = { id: 'hockey', name: 'Hockey' };
 const BASEBALL = { id: 'baseball', name: 'Baseball' };
 const TABLE_TENNIS = { id: 'table-tennis', name: 'Table Tennis' };
-const OTHER_LIVE_SPORTS = {
-  id: 'other-live-sports',
-  name: 'Other Live Sports',
-};
-
 // Keep the Sport page predictable while allowing new upstream categories to
-// arrive without creating a new shelf for every spelling or niche sport.
+// arrive without adding a generic catch-all shelf.
 const SPORT_SECTION_ORDER = [
   FOOTBALL,
   ASIAN_GAMES,
@@ -727,7 +722,6 @@ const SPORT_SECTION_ORDER = [
   HOCKEY,
   BASEBALL,
   TABLE_TENNIS,
-  OTHER_LIVE_SPORTS,
 ];
 
 function sportIdOf(name) {
@@ -776,12 +770,13 @@ function sportIdOf(name) {
   if (value.includes('baseball') || /\bmlb\b|\bnpb\b/.test(value)) {
     return BASEBALL.id;
   }
-  return OTHER_LIVE_SPORTS.id;
+  return null;
 }
 
 function sportNameOf(name) {
   const id = sportIdOf(name);
-  return SPORT_SECTION_ORDER.find((sport) => sport.id === id).name;
+  return SPORT_SECTION_ORDER.find((sport) => sport.id === id)?.name ||
+    `${name || ''}`.trim();
 }
 
 function isAsianGamesEntry(entry) {
@@ -1182,6 +1177,13 @@ function cricfyEventItem(event, status) {
 }
 
 async function getCricfySportEntries(nowMs) {
+  if (typeof globalThis.__cricfySportEntries === 'function') {
+    try {
+      return await globalThis.__cricfySportEntries(nowMs);
+    } catch (_) {
+      return [];
+    }
+  }
   if (typeof cricfyFetchEventsMemo !== 'function') return [];
   try {
     const events = await cricfyFetchEventsMemo(nowMs);
@@ -1278,6 +1280,10 @@ function catalogTitleKey(value) {
 }
 
 function sameProviderEvent(first, second) {
+  if (sportIdOf(first.sportName || first.sportId) !==
+      sportIdOf(second.sportName || second.sportId)) {
+    return false;
+  }
   const firstKickoff = Date.parse(first.item?.schedule?.startsAt);
   const secondKickoff = Date.parse(second.item?.schedule?.startsAt);
   if (!Number.isFinite(firstKickoff) || !Number.isFinite(secondKickoff)) {
@@ -1288,6 +1294,128 @@ function sameProviderEvent(first, second) {
     catalogTitleKey(second.item?.title);
   return (sameTeams || sameTitle) &&
     Math.abs(firstKickoff - secondKickoff) <= FOOTBALL_DEDUPE_WINDOW_MS;
+}
+
+function providerEventBucket(entry) {
+  const startsAt = Date.parse(entry.item?.schedule?.startsAt);
+  return Number.isFinite(startsAt)
+    ? Math.floor(startsAt / FOOTBALL_DEDUPE_WINDOW_MS)
+    : null;
+}
+
+function providerTeamNames(entry) {
+  let names = Array.isArray(entry.item?.participants) &&
+      entry.item.participants.length === 2
+    ? entry.item.participants.map((participant) => participant?.name)
+    : `${entry.item?.title || ''}`.split(
+      /\s+(?:v(?:s\.?)?|versus)\s+/i,
+    );
+  if (names.length !== 2) return [];
+  return names.map((name) => {
+    const key = footballNameKey(name);
+    return FOOTBALL_NAME_ALIASES.get(key) || key;
+  });
+}
+
+function providerTeamFingerprints(name) {
+  if (!name) return [];
+  const words = name.split(' ');
+  return [...new Set([name, words[0], words[words.length - 1]])];
+}
+
+function providerEventIndexKey(sportId, bucket) {
+  return `${sportId ?? ''}:${bucket}`;
+}
+
+function indexProviderEntry(index, entry) {
+  const bucket = providerEventBucket(entry);
+  if (bucket == null) return;
+  const sportId = sportIdOf(entry.sportName || entry.sportId);
+  const indexed = {
+    entry,
+    sportId,
+    bucket,
+    title: catalogTitleKey(entry.item?.title),
+    names: providerTeamNames(entry),
+  };
+  const bucketKey = providerEventIndexKey(sportId, bucket);
+  const values = index.buckets.get(bucketKey) || [];
+  values.push(indexed);
+  index.buckets.set(bucketKey, values);
+  if (indexed.title) {
+    const titleValues = index.titles.get(`${bucketKey}:${indexed.title}`) || [];
+    titleValues.push(indexed);
+    index.titles.set(`${bucketKey}:${indexed.title}`, titleValues);
+  }
+  for (const name of indexed.names) {
+    for (const fingerprint of providerTeamFingerprints(name)) {
+      const teamKey = `${bucketKey}:${fingerprint}`;
+      const teamValues = index.teams.get(teamKey) || [];
+      teamValues.push(indexed);
+      index.teams.set(teamKey, teamValues);
+    }
+  }
+}
+
+function providerEntriesIndex(entries) {
+  const index = { buckets: new Map(), titles: new Map(), teams: new Map() };
+  for (const entry of entries) indexProviderEntry(index, entry);
+  return index;
+}
+
+function providerNameCandidates(index, sportId, bucket, name) {
+  const candidates = new Set();
+  for (const fingerprint of providerTeamFingerprints(name)) {
+    for (const entry of index.teams.get(
+      `${providerEventIndexKey(sportId, bucket)}:${fingerprint}`,
+    ) || []) {
+      candidates.add(entry);
+    }
+  }
+  return candidates;
+}
+
+function providerEventCandidates(index, entry) {
+  const bucket = providerEventBucket(entry);
+  if (bucket == null) return [];
+  const sportId = sportIdOf(entry.sportName || entry.sportId);
+  const title = catalogTitleKey(entry.item?.title);
+  const names = providerTeamNames(entry);
+  const candidates = new Set();
+  for (let offset = -1; offset <= 1; offset++) {
+    const neighborBucket = bucket + offset;
+    const bucketKey = providerEventIndexKey(sportId, neighborBucket);
+    if (title) {
+      for (const candidate of index.titles.get(`${bucketKey}:${title}`) || []) {
+        candidates.add(candidate);
+      }
+    }
+    if (names.length === 2) {
+      const first = providerNameCandidates(
+        index,
+        sportId,
+        neighborBucket,
+        names[0],
+      );
+      const second = providerNameCandidates(
+        index,
+        sportId,
+        neighborBucket,
+        names[1],
+      );
+      const [smaller, larger] = first.size <= second.size
+        ? [first, second]
+        : [second, first];
+      for (const candidate of smaller) {
+        if (larger.has(candidate)) candidates.add(candidate);
+      }
+    }
+  }
+  return [...candidates].map((candidate) => candidate.entry);
+}
+
+function addProviderEventToIndex(index, entry) {
+  indexProviderEntry(index, entry);
 }
 
 function providerEntryIsLive(entry, nowMs) {
@@ -1564,6 +1692,23 @@ function buildPage(
     };
   }
 
+  if (query.catalogId === SPORT_CATALOG_ID) {
+    const items = footballCatalogItems(
+      matches,
+      providerEntries,
+      nowMs,
+      brandingByLeague,
+      false,
+      knownFotmobMatches,
+    ).filter((item) => !excludeEnded || item.schedule?.state !== 'ended');
+    return {
+      sections: items.length === 0
+        ? []
+        : [{ id: 'sport:football', title: FOOTBALL.name, items }],
+      subCategories,
+    };
+  }
+
   if (query.category === ALL_CATEGORY) {
     const asianGamesItems = providerEntries
       .filter((entry) => isAsianGamesEntry(entry))
@@ -1636,10 +1781,28 @@ async function fixturesCatalog(query) {
   // and the other catalog entries are judged against the same "now".
   const nowMs = Date.now();
 
-  const providerSportLoader = PROVIDER_SPORT_CATALOGS[query.catalogId];
-  if (providerSportLoader != null) {
-    const entries = await providerSportLoader(nowMs);
-    return buildProviderSportPage(query, entries, nowMs);
+  const providerSportIndex = PROVIDER_SPORT_CATALOGS.findIndex(
+    (catalog) => catalog.id === query.catalogId,
+  );
+  if (providerSportIndex !== -1) {
+    const source = PROVIDER_SPORT_CATALOGS[providerSportIndex];
+    const higherPrioritySources = PROVIDER_SPORT_CATALOGS.slice(
+      0,
+      providerSportIndex,
+    );
+    const [entries, fotmobMatches, ...higherPriorityEntries] = await Promise.all([
+      source.load(nowMs),
+      fetchFixturesMemo(nowMs).catch(() => []),
+      ...higherPrioritySources.map((catalog) => catalog.load(nowMs)),
+    ]);
+    return buildProviderSportPage(
+      query,
+      source,
+      entries,
+      higherPriorityEntries.flat(),
+      fotmobMatches,
+      nowMs,
+    );
   }
 
   if (query.catalogId === SPORT_CATALOG_ID) {
@@ -1704,52 +1867,57 @@ async function fixturesCatalog(query) {
   );
 }
 
-function buildProviderSportPage(query, providerEntries, nowMs) {
-  const entries = providerEntries
+function buildProviderSportPage(
+  query,
+  source,
+  providerEntries,
+  higherPriorityEntries,
+  fotmobMatches,
+  nowMs,
+) {
+  const normalizedEntries = providerEntries
     .map((entry) => normalizeProviderEntry(entry, nowMs))
     .filter((entry) => entry.item?.schedule?.state !== 'ended');
-  const subCategories = sportsOf([], entries);
-  const selectedName = typeof query.subCategory === 'string' &&
-    query.subCategory.startsWith('sport:')
-    ? query.subCategory.slice('sport:'.length)
-    : query.subCategory;
-  const selected = selectedName == null
-    ? null
-    : selectedName === ASIAN_GAMES.id
-      ? ASIAN_GAMES.id
-      : sportIdOf(selectedName);
-  const visible = selected == null
-    ? entries
-    : selected === ASIAN_GAMES.id
-      ? entries.filter(isAsianGamesEntry)
-      : entries.filter((entry) =>
-        sportIdOf(entry.sportName || entry.sportId) === selected);
-  const sections = [];
-  if (selected == null || selected === ASIAN_GAMES.id) {
-    const asianGames = visible.filter(isAsianGamesEntry);
-    if (asianGames.length > 0) {
-      sections.push({
-        id: 'sport:asian-games',
-        title: asianGames[0].item.subtitle || ASIAN_GAMES.name,
-        items: asianGames.map((entry) => entry.item),
-      });
-    }
+  const higherPriorityIndex = providerEntriesIndex(
+    higherPriorityEntries
+      .map((entry) => normalizeProviderEntry(entry, nowMs))
+      .filter((entry) => entry.item?.schedule?.state !== 'ended'),
+  );
+  const fotmobIndex = providerEntriesIndex(
+    fotmobMatches
+      .map((match) => toMediaItem(match, nowMs, null))
+      .filter((item) => item != null)
+      .map((item) => ({
+        sportId: FOOTBALL.id,
+        sportName: FOOTBALL.name,
+        item,
+      })),
+  );
+  const ownIndex = providerEntriesIndex([]);
+  const items = [];
+  for (const entry of normalizedEntries) {
+    const duplicatesEarlier = providerEventCandidates(
+      higherPriorityIndex,
+      entry,
+    ).some((candidate) => sameProviderEvent(candidate, entry));
+    const alreadyInFotmob = providerEventCandidates(fotmobIndex, entry)
+      .some((candidate) => sameProviderEvent(candidate, entry));
+    if (duplicatesEarlier || alreadyInFotmob) continue;
+    const duplicatesSelf = providerEventCandidates(ownIndex, entry)
+      .some((candidate) => sameProviderEvent(candidate, entry));
+    if (duplicatesSelf) continue;
+    addProviderEventToIndex(ownIndex, entry);
+    items.push(entry.item);
   }
-  for (const sport of subCategories) {
-    if (sport.id === ASIAN_GAMES.id ||
-        (selected != null && sport.id !== selected)) continue;
-    const items = visible
-      .filter((entry) =>
-        sportIdOf(entry.sportName || entry.sportId) === sport.id)
-      .map((entry) => entry.item)
-      .sort((first, second) =>
-        Date.parse(first.schedule?.startsAt) -
-        Date.parse(second.schedule?.startsAt));
-    if (items.length > 0) {
-      sections.push({ id: `sport:${sport.id}`, title: sport.name, items });
-    }
-  }
-  return { sections, subCategories };
+  items.sort((first, second) =>
+    Date.parse(first.schedule?.startsAt) -
+    Date.parse(second.schedule?.startsAt));
+  return {
+    sections: items.length === 0
+      ? []
+      : [{ id: `sport:provider:${source.id}`, title: source.name, items }],
+    subCategories: [],
+  };
 }
 
 // Registers into `__catalogProviders` rather than assigning
@@ -1768,8 +1936,11 @@ globalThis.__catalogProviders.push({
   catalogId: SPORT_CATALOG_ID,
   catalog: fixturesCatalog,
 });
-for (const catalogId of Object.keys(PROVIDER_SPORT_CATALOGS)) {
-  globalThis.__catalogProviders.push({ catalogId, catalog: fixturesCatalog });
+for (const source of PROVIDER_SPORT_CATALOGS) {
+  globalThis.__catalogProviders.push({
+    catalogId: source.id,
+    catalog: fixturesCatalog,
+  });
 }
 globalThis.__catalogProviders.push({
   catalogId: FEATURED_CATALOG_ID,

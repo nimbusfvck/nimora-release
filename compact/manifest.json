@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "2.0.20",
+  "version": "2.0.21",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -29,35 +29,35 @@
         },
         {
           "id": "fixtures_sport",
-          "name": "Sports",
+          "name": "Football",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
           "id": "fixtures_sport_cricfy",
-          "name": "Cricfy Sports",
+          "name": "Cricfy",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
           "id": "fixtures_sport_roxie",
-          "name": "Roxie Sports",
+          "name": "RoxieStreams",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
           "id": "fixtures_sport_timstreams",
-          "name": "TimStreams Sports",
+          "name": "TimStreams",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
           "id": "fixtures_sport_streamed",
-          "name": "Streamed Sports",
+          "name": "Streamed",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
