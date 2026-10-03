@@ -3,14 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.21",
+      "version": "2.0.22",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
-        "Nimora Compact 2.0.21: named each Sport section by provider, kept FotMob under Football, and removed events duplicated by FotMob or a higher-priority feed.",
+        "Nimora Compact 2.0.22: grouped sports into independent category catalogs and isolated provider failures.",
         "Nimora Compact 2.0.20: split Sport event feeds into independent catalogs so one interrupted provider cannot block the other sports.",
         "Nimora Compact 2.0.19: updated the FCTV API Origin and Referer to www.fctv33hd.cc.",
         "Nimora Compact 2.0.18: fixed Sport catalog loading by restoring serialized Cricfy and FCTV feed requests.",
@@ -144,7 +144,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "4d8d7c41f50712febd676e00aae06ca64933eddb7f64cf1ccb010e337c27452a"
+      "bundleSha256": "357fa1ad320c5d4269c144f57e4aaf1a1b289352e4197ac74677d7202b72d584"
     }
   ]
 }

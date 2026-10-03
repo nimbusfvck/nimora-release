@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "2.0.21",
+  "version": "2.0.22",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -46,36 +46,71 @@
           "display": "row"
         },
         {
-          "id": "fixtures_sport_cricfy",
-          "name": "Cricfy",
+          "id": "fixtures_sport_tennis",
+          "name": "Tennis",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
-          "id": "fixtures_sport_fctv",
-          "name": "FCTV",
+          "id": "fixtures_sport_motorsport",
+          "name": "Motorsport",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
-          "id": "fixtures_sport_roxie",
-          "name": "RoxieStreams",
+          "id": "fixtures_sport_fighting",
+          "name": "Fighting",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
-          "id": "fixtures_sport_timstreams",
-          "name": "TimStreams",
+          "id": "fixtures_sport_badminton",
+          "name": "Badminton",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
-          "id": "fixtures_sport_streamed",
-          "name": "Streamed",
+          "id": "fixtures_sport_cricket",
+          "name": "Cricket",
+          "categories": ["sport"],
+          "kind": "liveEvent",
+          "display": "row"
+        },
+        {
+          "id": "fixtures_sport_basketball",
+          "name": "Basketball",
+          "categories": ["sport"],
+          "kind": "liveEvent",
+          "display": "row"
+        },
+        {
+          "id": "fixtures_sport_volleyball",
+          "name": "Volleyball",
+          "categories": ["sport"],
+          "kind": "liveEvent",
+          "display": "row"
+        },
+        {
+          "id": "fixtures_sport_hockey",
+          "name": "Hockey",
+          "categories": ["sport"],
+          "kind": "liveEvent",
+          "display": "row"
+        },
+        {
+          "id": "fixtures_sport_baseball",
+          "name": "Baseball",
+          "categories": ["sport"],
+          "kind": "liveEvent",
+          "display": "row"
+        },
+        {
+          "id": "fixtures_sport_table-tennis",
+          "name": "Table Tennis",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
