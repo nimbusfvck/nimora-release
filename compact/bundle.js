@@ -45,6 +45,13 @@ const PROVIDER_ID = 'nimora.matches';
 const CATALOG_ID = 'fixtures';
 const LIVE_CATALOG_ID = 'fixtures_live';
 const SPORT_CATALOG_ID = 'fixtures_sport';
+const PROVIDER_SPORT_CATALOGS = {
+  fixtures_sport_cricfy: getCricfySportEntries,
+  fixtures_sport_fctv: getFctvSportEntries,
+  fixtures_sport_roxie: getRoxieSportEntries,
+  fixtures_sport_timstreams: getTimstreamsSportEntries,
+  fixtures_sport_streamed: getStreamedPkSportEntries,
+};
 const FEATURED_CATALOG_ID = 'fixtures_featured';
 const LIVE_CATEGORY = 'live';
 const ALL_CATEGORY = 'all';
@@ -941,6 +948,43 @@ function mergeProviderArtwork(item, providerItem) {
   };
 }
 
+function footballMatchBucket(startsAt) {
+  const startsAtMs = Date.parse(startsAt);
+  return Number.isFinite(startsAtMs)
+    ? Math.floor(startsAtMs / FOOTBALL_DEDUPE_WINDOW_MS)
+    : null;
+}
+
+function footballMatchIndex(values, getItem = (value) => value) {
+  const buckets = new Map();
+  const byRefId = new Map();
+  for (const value of values) {
+    const item = getItem(value);
+    const bucket = footballMatchBucket(item?.schedule?.startsAt);
+    if (bucket != null) {
+      const candidates = buckets.get(bucket) || [];
+      candidates.push(value);
+      buckets.set(bucket, candidates);
+    }
+    const refId = item?.ref?.id;
+    if (refId != null) byRefId.set(refId, value);
+  }
+  return { buckets, byRefId };
+}
+
+function footballMatchCandidates(index, item) {
+  const bucket = footballMatchBucket(item?.schedule?.startsAt);
+  if (bucket == null) return [];
+  const candidates = [];
+  // Events within the six-hour match window can only be in this bucket or
+  // one of its neighbors. Avoid comparing every provider against every match.
+  for (let offset = -1; offset <= 1; offset++) {
+    const bucketItems = index.buckets.get(bucket + offset);
+    if (bucketItems != null) candidates.push(...bucketItems);
+  }
+  return candidates;
+}
+
 // FotMob remains the canonical metadata source. Provider-only football events
 // are appended after it, and any matching provider event is discarded so the
 // FotMob title, branding, participants, status, and editorial ranking win.
@@ -958,25 +1002,52 @@ function footballCatalogItems(
   const knownFotmobItems = knownFotmobMatches
     .map((match) => toMediaItem(match, nowMs, brandingByLeague))
     .filter((item) => item != null);
+  const providerFootballEntries = entries.filter(isFootballEntry);
+  const providerIndex = footballMatchIndex(
+    providerFootballEntries,
+    (entry) => entry.item,
+  );
+  const knownIndex = footballMatchIndex(knownFotmobItems);
+  const itemIndex = footballMatchIndex(items);
   if (requireProviderMatch) {
-    items = items.filter((item) =>
-      entries.some((entry) => sameFootballEntry(item, entry)));
+    items = items.filter((item) => {
+      const matchingEntry = providerIndex.byRefId.get(item.ref?.id);
+      return matchingEntry != null ||
+        footballMatchCandidates(providerIndex, item).some((entry) =>
+          sameFootballEntry(item, entry));
+    });
   }
-  for (const entry of entries.filter(isFootballEntry)) {
+  for (const entry of providerFootballEntries) {
     const item = entry.item;
-    const matchingIndex = items.findIndex((existing) =>
-      sameFootballEntry(existing, entry));
+    const matchingIndex = footballMatchCandidates(itemIndex, item)
+      .map((candidate) => items.indexOf(candidate))
+      .find((index) => index !== -1 &&
+        sameFootballEntry(items[index], entry)) ?? -1;
     if (matchingIndex !== -1) {
-      items[matchingIndex] = mergeProviderArtwork(items[matchingIndex], item);
+      const previousItem = items[matchingIndex];
+      const mergedItem = mergeProviderArtwork(previousItem, item);
+      items[matchingIndex] = mergedItem;
+      const bucket = footballMatchBucket(previousItem.schedule?.startsAt);
+      const bucketItems = bucket == null ? null : itemIndex.buckets.get(bucket);
+      const bucketIndex = bucketItems?.indexOf(previousItem) ?? -1;
+      if (bucketIndex !== -1) bucketItems[bucketIndex] = mergedItem;
       continue;
     }
     if (
       item == null ||
-      knownFotmobItems.some((existing) => sameFootballEntry(existing, entry))
+      knownIndex.byRefId.has(fotmobRefId(leagueIdKey(entry?.fotmobId))) ||
+      footballMatchCandidates(knownIndex, item).some((existing) =>
+        sameFootballEntry(existing, entry))
     ) {
       continue;
     }
     items.push(item);
+    const bucket = footballMatchBucket(item?.schedule?.startsAt);
+    if (bucket != null) {
+      const candidates = itemIndex.buckets.get(bucket) || [];
+      candidates.push(item);
+      itemIndex.buckets.set(bucket, candidates);
+    }
   }
   return items.sort(
     (first, second) => Date.parse(first.schedule?.startsAt) -
@@ -1565,6 +1636,24 @@ async function fixturesCatalog(query) {
   // and the other catalog entries are judged against the same "now".
   const nowMs = Date.now();
 
+  const providerSportLoader = PROVIDER_SPORT_CATALOGS[query.catalogId];
+  if (providerSportLoader != null) {
+    const entries = await providerSportLoader(nowMs);
+    return buildProviderSportPage(query, entries, nowMs);
+  }
+
+  if (query.catalogId === SPORT_CATALOG_ID) {
+    let [matches, popularLeagues] = await Promise.all([
+      fetchFixturesMemo(nowMs).catch(() => []),
+      fetchPopularLeaguesMemo().catch(() => []),
+    ]);
+    matches = matches
+      .filter((match) => !isWomenMatch(match) && isRelevantMatch(match, nowMs));
+    matches = prioritizeTopClubMatches(filterPopularMatches(matches, popularLeagues));
+    const brandingByLeague = await leagueBrandingFor(matches);
+    return buildPage(query, matches, [], nowMs, brandingByLeague, true, matches);
+  }
+
   let [
     matches,
     popularLeagues,
@@ -1615,6 +1704,54 @@ async function fixturesCatalog(query) {
   );
 }
 
+function buildProviderSportPage(query, providerEntries, nowMs) {
+  const entries = providerEntries
+    .map((entry) => normalizeProviderEntry(entry, nowMs))
+    .filter((entry) => entry.item?.schedule?.state !== 'ended');
+  const subCategories = sportsOf([], entries);
+  const selectedName = typeof query.subCategory === 'string' &&
+    query.subCategory.startsWith('sport:')
+    ? query.subCategory.slice('sport:'.length)
+    : query.subCategory;
+  const selected = selectedName == null
+    ? null
+    : selectedName === ASIAN_GAMES.id
+      ? ASIAN_GAMES.id
+      : sportIdOf(selectedName);
+  const visible = selected == null
+    ? entries
+    : selected === ASIAN_GAMES.id
+      ? entries.filter(isAsianGamesEntry)
+      : entries.filter((entry) =>
+        sportIdOf(entry.sportName || entry.sportId) === selected);
+  const sections = [];
+  if (selected == null || selected === ASIAN_GAMES.id) {
+    const asianGames = visible.filter(isAsianGamesEntry);
+    if (asianGames.length > 0) {
+      sections.push({
+        id: 'sport:asian-games',
+        title: asianGames[0].item.subtitle || ASIAN_GAMES.name,
+        items: asianGames.map((entry) => entry.item),
+      });
+    }
+  }
+  for (const sport of subCategories) {
+    if (sport.id === ASIAN_GAMES.id ||
+        (selected != null && sport.id !== selected)) continue;
+    const items = visible
+      .filter((entry) =>
+        sportIdOf(entry.sportName || entry.sportId) === sport.id)
+      .map((entry) => entry.item)
+      .sort((first, second) =>
+        Date.parse(first.schedule?.startsAt) -
+        Date.parse(second.schedule?.startsAt));
+    if (items.length > 0) {
+      sections.push({ id: `sport:${sport.id}`, title: sport.name, items });
+    }
+  }
+  return { sections, subCategories };
+}
+
 // Registers into `__catalogProviders` rather than assigning
 // `__extension.catalog` outright, so catalog files can load in either order
 // without clobbering each other. This matches the stream provider registry.
@@ -1631,6 +1768,9 @@ globalThis.__catalogProviders.push({
   catalogId: SPORT_CATALOG_ID,
   catalog: fixturesCatalog,
 });
+for (const catalogId of Object.keys(PROVIDER_SPORT_CATALOGS)) {
+  globalThis.__catalogProviders.push({ catalogId, catalog: fixturesCatalog });
+}
 globalThis.__catalogProviders.push({
   catalogId: FEATURED_CATALOG_ID,
   catalog: fixturesCatalog,

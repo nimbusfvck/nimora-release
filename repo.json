@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "2.0.19",
+      "version": "2.0.20",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora 2.0.20: split Sport event feeds into independent catalogs so one interrupted provider cannot block the other sports.",
         "Nimora 2.0.19: updated the FCTV API Origin and Referer to www.fctv33hd.cc.",
         "Nimora 2.0.18: fixed Sport catalog loading by restoring serialized Cricfy and FCTV feed requests.",
         "Nimora 2.0.17: improved Other Sports loading by skipping unused football feed requests and fetching sport providers concurrently.",
@@ -282,7 +283,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "b922cfa06f5d22d9f41a3accaad4d5a6915932816fde38029a09629c478d7d33"
+      "bundleSha256": "44a50958fc993ea0722ae78893282dd7de2caa485e71077be4ccfbb3befe7904"
     }
   ]
 }
