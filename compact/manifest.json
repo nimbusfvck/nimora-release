@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "2.0.23",
+  "version": "2.0.24",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -17,47 +17,19 @@
   "providers": [
     {
       "id": "nimora.matches",
-      "name": "Sports Matches",
+      "name": "FotMob",
       "roles": ["catalog"],
       "catalogs": [
         {
           "id": "fixtures",
-          "name": "Sports Matches",
+          "name": "FotMob",
           "categories": ["all"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
           "id": "fixtures_sport",
-          "name": "Football",
-          "categories": ["sport"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
-        {
-          "id": "fixtures_sport_cricfy",
-          "name": "Cricfy",
-          "categories": ["sport"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
-        {
-          "id": "fixtures_sport_roxie",
-          "name": "RoxieStreams",
-          "categories": ["sport"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
-        {
-          "id": "fixtures_sport_timstreams",
-          "name": "TimStreams",
-          "categories": ["sport"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
-        {
-          "id": "fixtures_sport_streamed",
-          "name": "Streamed",
+          "name": "Football Leagues",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
@@ -71,6 +43,46 @@
           "surface": "featured"
         }
       ]
+    },
+    {
+      "id": "nimora.fctv.catalog",
+      "name": "FCTV Catalog",
+      "roles": ["catalog"],
+      "catalogs": [
+        {
+          "id": "fixtures_sport_fctv",
+          "name": "FCTV",
+          "categories": ["sport"],
+          "kind": "liveEvent",
+          "display": "row"
+        }
+      ]
+    },
+    {
+      "id": "nimora.daddylive.catalog",
+      "name": "DaddyLive Catalog",
+      "roles": ["catalog"],
+      "catalogs": [
+        {
+          "id": "fixtures_sport_daddylive",
+          "name": "DaddyLive",
+          "categories": ["sport"],
+          "kind": "liveEvent",
+          "display": "row"
+        }
+      ]
+    },
+    {
+      "id": "nimora.fctv",
+      "name": "FCTV33 Live Events",
+      "roles": ["stream"],
+      "streamDomains": ["live"]
+    },
+    {
+      "id": "nimora.daddylive",
+      "name": "DaddyLive",
+      "roles": ["stream"],
+      "streamDomains": ["live"]
     },
     {
       "id": "nimora.timesoccer",

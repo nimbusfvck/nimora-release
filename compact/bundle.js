@@ -27,7 +27,12 @@ const FOTMOB_LEAGUE_IMAGE_BASE =
 // FotMob's market list includes youth competitions but omits Saudi Pro League
 // for the US market. Keep the Football catalog focused on senior competitions
 // and explicitly include the requested Saudi top flight.
-const CURATED_INCLUDED_LEAGUE_IDS = new Set(['536']);
+const CURATED_INCLUDED_LEAGUE_IDS = new Set([
+  '536', // Saudi Pro League
+  '114', // International Friendlies
+  '9806', '9807', '9808', '9809', // UEFA Nations League A-D
+  '13287', // FIFA ASEAN Cup
+]);
 const CURATED_EXCLUDED_LEAGUE_IDS = new Set(['9741']);
 const CURATED_EXCLUDED_LEAGUE_NAMES = /\bUEFA Youth League\b/i;
 const FOTMOB_USER_AGENT =
@@ -46,11 +51,8 @@ const CATALOG_ID = 'fixtures';
 const LIVE_CATALOG_ID = 'fixtures_live';
 const SPORT_CATALOG_ID = 'fixtures_sport';
 const PROVIDER_SPORT_CATALOGS = [
-  { id: 'fixtures_sport_cricfy', name: 'Cricfy', load: getCricfySportEntries },
   { id: 'fixtures_sport_fctv', name: 'FCTV', load: getFctvSportEntries },
-  { id: 'fixtures_sport_roxie', name: 'RoxieStreams', load: getRoxieSportEntries },
-  { id: 'fixtures_sport_timstreams', name: 'TimStreams', load: getTimstreamsSportEntries },
-  { id: 'fixtures_sport_streamed', name: 'Streamed', load: getStreamedPkSportEntries },
+  { id: 'fixtures_sport_daddylive', name: 'DaddyLive', load: getDaddyliveSportEntries },
 ];
 const FEATURED_CATALOG_ID = 'fixtures_featured';
 const LIVE_CATEGORY = 'live';
@@ -695,6 +697,7 @@ function byDateItems(items, nowMs) {
 // --- catalog navigation ---
 
 const FOOTBALL = { id: 'football', name: 'Football' };
+const AMERICAN_FOOTBALL = { id: 'american-football', name: 'American Football' };
 // TODO(asian-games-2026): Remove the Asian Games Home shelf below and the
 // `fixtures` `all` catalog registration from both manifest files after the
 // event concludes.
@@ -722,10 +725,14 @@ const SPORT_SECTION_ORDER = [
   HOCKEY,
   BASEBALL,
   TABLE_TENNIS,
+  AMERICAN_FOOTBALL,
 ];
 
 function sportIdOf(name) {
   const value = `${name || ''}`.trim().toLowerCase();
+  if (/american football|\bnfl\b|\bcfl\b|ncaa football/.test(value)) {
+    return AMERICAN_FOOTBALL.id;
+  }
   if (value.includes('football') || value.includes('soccer')) {
     return FOOTBALL.id;
   }
@@ -1081,6 +1088,21 @@ const PROMINENT_FOOTBALL_LEAGUE_ROWS = [
     title: 'Ligue 1',
     match: /^(?:french )?ligue 1$/i,
   },
+  {
+    id: 'uefa-nations-league',
+    title: 'UEFA Nations League',
+    match: /^UEFA Nations League(?:\s+[A-D])?$/i,
+  },
+  {
+    id: 'international-friendlies',
+    title: 'International Friendlies',
+    match: /^(?:international )?friendlies$/i,
+  },
+  {
+    id: 'fifa-asean-cup',
+    title: 'FIFA ASEAN Cup',
+    match: /^FIFA ASEAN Cup$/i,
+  },
 ];
 
 function footballSportSections(footballItems, providerOnlyItems) {
@@ -1112,7 +1134,7 @@ function footballSportSections(footballItems, providerOnlyItems) {
   if (otherItems.length > 0) {
     sections.push({
       id: 'sport:football:other-leagues',
-      title: 'Other Leagues',
+      title: 'Other League',
       items: otherItems,
     });
   }
@@ -1256,6 +1278,15 @@ async function getStreamedPkSportEntries(nowMs) {
   if (typeof globalThis.__streamedpkSportEntries !== 'function') return [];
   try {
     return await globalThis.__streamedpkSportEntries(nowMs);
+  } catch (_) {
+    return [];
+  }
+}
+
+async function getDaddyliveSportEntries(nowMs) {
+  if (typeof globalThis.__daddyliveSportEntries !== 'function') return [];
+  try {
+    return await globalThis.__daddyliveSportEntries(nowMs);
   } catch (_) {
     return [];
   }
@@ -1693,6 +1724,7 @@ function buildPage(
   }
 
   if (query.catalogId === SPORT_CATALOG_ID) {
+    const today = jakartaDayIndex(nowMs);
     const items = footballCatalogItems(
       matches,
       providerEntries,
@@ -1700,12 +1732,15 @@ function buildPage(
       brandingByLeague,
       false,
       knownFotmobMatches,
-    ).filter((item) => !excludeEnded || item.schedule?.state !== 'ended');
+    ).filter((item) => {
+      const startsAt = Date.parse(item.schedule?.startsAt);
+      const day = Number.isFinite(startsAt) ? jakartaDayIndex(startsAt) : null;
+      return item.schedule?.state !== 'ended' &&
+        day != null && day >= today && day <= today + 1;
+    });
     return {
-      sections: items.length === 0
-        ? []
-        : [{ id: 'sport:football', title: FOOTBALL.name, items }],
-      subCategories,
+      sections: footballSportSections(items.filter(isFotmobItem), []),
+      subCategories: [],
     };
   }
 
@@ -1786,21 +1821,11 @@ async function fixturesCatalog(query) {
   );
   if (providerSportIndex !== -1) {
     const source = PROVIDER_SPORT_CATALOGS[providerSportIndex];
-    const higherPrioritySources = PROVIDER_SPORT_CATALOGS.slice(
-      0,
-      providerSportIndex,
-    );
-    const [entries, fotmobMatches, ...higherPriorityEntries] = await Promise.all([
-      source.load(nowMs),
-      fetchFixturesMemo(nowMs).catch(() => []),
-      ...higherPrioritySources.map((catalog) => catalog.load(nowMs)),
-    ]);
+    const entries = await source.load(nowMs);
     return buildProviderSportPage(
       query,
       source,
       entries,
-      higherPriorityEntries.flat(),
-      fotmobMatches,
       nowMs,
     );
   }
@@ -1812,7 +1837,8 @@ async function fixturesCatalog(query) {
     ]);
     matches = matches
       .filter((match) => !isWomenMatch(match) && isRelevantMatch(match, nowMs));
-    matches = prioritizeTopClubMatches(filterPopularMatches(matches, popularLeagues));
+    matches = filterPopularMatches(matches, popularLeagues);
+    matches = prioritizeTopClubMatches(matches);
     const brandingByLeague = await leagueBrandingFor(matches);
     return buildPage(query, matches, [], nowMs, brandingByLeague, true, matches);
   }
@@ -1820,17 +1846,9 @@ async function fixturesCatalog(query) {
   let [
     matches,
     popularLeagues,
-    roxieEntries,
-    timstreamsEntries,
-    streamedPkEntries,
   ] = await Promise.all([
-    // Canonical FotMob metadata is preferred, but provider-only shelves such
-    // as FCTV Asian Games must remain usable when FotMob has a DNS/HTTP outage.
     fetchFixturesMemo(nowMs).catch(() => []),
     fetchPopularLeaguesMemo().catch(() => []),
-    getRoxieSportEntries(nowMs),
-    getTimstreamsSportEntries(nowMs),
-    getStreamedPkSportEntries(nowMs),
   ]);
   // Keep the complete FotMob feed as the identity authority for provider
   // dedupe. Finished matches remain available to schedule, but a stale
@@ -1847,19 +1865,10 @@ async function fixturesCatalog(query) {
   const knownFotmobMatches = allFotmobMatches;
   const brandingByLeague = await leagueBrandingFor(matches);
 
-  let providerEntries = await getCricfySportEntries(nowMs);
-  const fctvEntries = await getFctvSportEntries(nowMs);
-  providerEntries = dedupeProviderEntries([
-    ...providerEntries,
-    ...fctvEntries,
-    ...roxieEntries,
-    ...timstreamsEntries,
-    ...streamedPkEntries,
-  ], nowMs);
   return buildPage(
     query,
     matches,
-    providerEntries,
+    [],
     nowMs,
     brandingByLeague,
     true,
@@ -1871,51 +1880,42 @@ function buildProviderSportPage(
   query,
   source,
   providerEntries,
-  higherPriorityEntries,
-  fotmobMatches,
   nowMs,
 ) {
   const normalizedEntries = providerEntries
     .map((entry) => normalizeProviderEntry(entry, nowMs))
-    .filter((entry) => entry.item?.schedule?.state !== 'ended');
-  const higherPriorityIndex = providerEntriesIndex(
-    higherPriorityEntries
-      .map((entry) => normalizeProviderEntry(entry, nowMs))
-      .filter((entry) => entry.item?.schedule?.state !== 'ended'),
-  );
-  const fotmobIndex = providerEntriesIndex(
-    fotmobMatches
-      .map((match) => toMediaItem(match, nowMs, null))
-      .filter((item) => item != null)
-      .map((item) => ({
-        sportId: FOOTBALL.id,
-        sportName: FOOTBALL.name,
-        item,
-      })),
-  );
+    .filter((entry) => entry.item?.schedule?.state !== 'ended')
+    .filter((entry) =>
+      sportIdOf(entry.sportName || entry.sportId) !== FOOTBALL.id);
   const ownIndex = providerEntriesIndex([]);
-  const items = [];
+  const grouped = new Map();
   for (const entry of normalizedEntries) {
-    const duplicatesEarlier = providerEventCandidates(
-      higherPriorityIndex,
-      entry,
-    ).some((candidate) => sameProviderEvent(candidate, entry));
-    const alreadyInFotmob = providerEventCandidates(fotmobIndex, entry)
-      .some((candidate) => sameProviderEvent(candidate, entry));
-    if (duplicatesEarlier || alreadyInFotmob) continue;
     const duplicatesSelf = providerEventCandidates(ownIndex, entry)
       .some((candidate) => sameProviderEvent(candidate, entry));
     if (duplicatesSelf) continue;
     addProviderEventToIndex(ownIndex, entry);
-    items.push(entry.item);
+    const rawName = `${entry.sportName || entry.sportId || ''}`.trim();
+    const sportId = sportIdOf(rawName);
+    const key = sportId || rawName.toLowerCase() || 'other-sports';
+    let section = grouped.get(key);
+    if (section == null) {
+      section = {
+        id: `sport:${source.id}:${key.replace(/[^a-z0-9-]+/g, '-')}`,
+        title: sportId ? sportNameOf(rawName) : rawName || 'Other Sports',
+        items: [],
+      };
+      grouped.set(key, section);
+    }
+    section.items.push(entry.item);
   }
-  items.sort((first, second) =>
-    Date.parse(first.schedule?.startsAt) -
-    Date.parse(second.schedule?.startsAt));
+  const sections = [...grouped.values()];
+  for (const section of sections) {
+    section.items.sort((first, second) =>
+      Date.parse(first.schedule?.startsAt) -
+      Date.parse(second.schedule?.startsAt));
+  }
   return {
-    sections: items.length === 0
-      ? []
-      : [{ id: `sport:provider:${source.id}`, title: source.name, items }],
+    sections,
     subCategories: [],
   };
 }
@@ -1958,6 +1958,1066 @@ if (!globalThis.__extension.catalog) {
     return provider.catalog(query);
   };
 }
+
+// FCTV33 live-event catalog and stream resolver.
+//
+// FCTV's public API returns protobuf payloads while the extension fetch bridge
+// exposes strings. The runtime marks binary responses as base64; this file
+// decodes only the small protobuf fields needed for event identity and HLS
+// source resolution. Signed media URLs are requested at playback time and are
+// never stored in the catalog or bundle.
+
+const FCTV_API_BASE =
+  globalThis.__fctvApiBaseUrl || 'https://apis-data10.tcllu137fien.ru';
+const FCTV_API_PATH_PREFIX =
+  globalThis.__fctvApiPathPrefix ||
+  '/sfverbb3711113fd545045e75134e6c1bdc41ee477e';
+const FCTV_PROVIDER_ID = 'nimora.fctv';
+const FCTV_CATALOG_PROVIDER_ID = 'nimora.fctv.catalog';
+const FCTV_PROVIDER_KEY = 'fctv';
+const FCTV_SITE_ORIGIN =
+  globalThis.__fctvSiteOrigin || 'https://www.fctv33hd.cc';
+const FCTV_LOGOS_BASE =
+  globalThis.__fctvLogosBaseUrl || 'https://logos1.tcllu137fien.ru';
+const FCTV_ASIAN_GAMES_LOGOS_BASE =
+  'https://www.aichi-nagoya2026.org/wp-content/uploads/2025/11';
+const FCTV_ASIAN_GAMES_LOGO_PROXY = 'https://wsrv.nl/?url=';
+const FCTV_ASIAN_GAMES_PRIMARY_COLOR = '#3a3454';
+const FCTV_ASIAN_GAMES_SECONDARY_COLOR = '#7468b8';
+const FCTV_USER_AGENT =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 ' +
+  '(KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
+const FCTV_LIVE_WINDOW_MS = 6 * 60 * 60 * 1000;
+const FCTV_UPCOMING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const FCTV_MEMO_TTL_MS = 60 * 1000;
+const FCTV_MEDIA_TIMEOUT_MS = 12000;
+const FCTV_MEDIA_HEALTH_TIMEOUT_MS = 5000;
+const FCTV_BUSINESS_SECRET_TTL_MS = 3000;
+const FCTV_TOKEN_KEY = 'a7981cc9eb2f4d19dcfea57b101ecd89';
+const FCTV_TOKEN_IV = '8017d3a8f1400d2f';
+const FCTV_FALLBACK_PLAYER_ORIGINS = [
+  'https://jack29eo.mpgreatestclgczbmiddle.my',
+  'https://nadia59bc.mp77g69ainei3gx2voxygen.ru',
+  'https://morgan33cg.006hndchurch05g7ifbreathing.sbs',
+];
+
+let fctvLiveMemo = null;
+let fctvGeoMemo = null;
+let fctvPlayerOriginsMemo = null;
+let fctvBusinessSecretMemo = null;
+
+function fctvHeader(response, wanted) {
+  const headers = response && response.headers;
+  if (headers == null || typeof headers !== 'object') return '';
+  const key = Object.keys(headers).find(
+    (name) => name.toLowerCase() === wanted.toLowerCase(),
+  );
+  return key == null ? '' : String(headers[key] || '');
+}
+
+function fctvHexToBytes(hex) {
+  const clean = String(hex || '').trim();
+  if (clean.length === 0 || clean.length % 2 !== 0) return [];
+  const bytes = [];
+  for (let i = 0; i < clean.length; i += 2) {
+    const value = Number.parseInt(clean.slice(i, i + 2), 16);
+    if (!Number.isFinite(value)) return [];
+    bytes.push(value);
+  }
+  return bytes;
+}
+
+function fctvBytesToHex(bytes) {
+  return bytes.map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function fctvReadVarint(bytes, state) {
+  let value = 0;
+  let shift = 0;
+  while (state.index < bytes.length && shift < 56) {
+    const next = bytes[state.index++];
+    value += (next & 0x7f) * (2 ** shift);
+    if ((next & 0x80) === 0) return value;
+    shift += 7;
+  }
+  throw new Error('invalid protobuf varint');
+}
+
+function fctvReadFields(bytes) {
+  const fields = [];
+  const state = { index: 0 };
+  while (state.index < bytes.length) {
+    const tag = fctvReadVarint(bytes, state);
+    const field = Math.floor(tag / 8);
+    const wire = tag & 7;
+    if (field <= 0) throw new Error('invalid protobuf field');
+    if (wire === 0) {
+      fields.push({ field, wire, value: fctvReadVarint(bytes, state) });
+    } else if (wire === 1) {
+      fields.push({ field, wire, value: bytes.slice(state.index, state.index + 8) });
+      state.index += 8;
+    } else if (wire === 2) {
+      const length = fctvReadVarint(bytes, state);
+      if (length < 0 || state.index + length > bytes.length) {
+        throw new Error('invalid protobuf length');
+      }
+      fields.push({
+        field,
+        wire,
+        value: bytes.slice(state.index, state.index + length),
+      });
+      state.index += length;
+    } else if (wire === 5) {
+      fields.push({ field, wire, value: bytes.slice(state.index, state.index + 4) });
+      state.index += 4;
+    } else {
+      throw new Error('unsupported protobuf wire type');
+    }
+  }
+  return fields;
+}
+
+function fctvFieldsOf(bytes, field, wire) {
+  return fctvReadFields(bytes).filter(
+    (entry) => entry.field === field && (wire == null || entry.wire === wire),
+  );
+}
+
+function fctvFirstField(bytes, field, wire) {
+  return fctvFieldsOf(bytes, field, wire)[0] || null;
+}
+
+function fctvString(bytes) {
+  if (!Array.isArray(bytes)) return '';
+  try {
+    return host.codec.base64ToText(
+      host.codec.hexToBase64(fctvBytesToHex(bytes)),
+    ).trim();
+  } catch (_) {
+    return '';
+  }
+}
+
+function fctvBodyHex(response) {
+  if (response == null || response.status < 200 || response.status >= 300) {
+    return null;
+  }
+  const body = String(response.body || '');
+  if (body.length === 0) return null;
+  try {
+    const encoding = fctvHeader(response, 'x-qjsr-body-encoding').toLowerCase();
+    return encoding === 'base64'
+      ? host.codec.base64ToHex(body)
+      : host.codec.base64ToHex(host.codec.textToBase64(body));
+  } catch (_) {
+    return null;
+  }
+}
+
+async function fctvFetchBinary(path, timeoutMs = 10000) {
+  const response = await fctvFetchBinaryResponse(path, timeoutMs);
+  return response.bytes;
+}
+
+function fctvApiTarget(path, businessSecret, usePathPrefix = true) {
+  const rawPath = String(path || '');
+  const prefix = String(FCTV_API_PATH_PREFIX || '').replace(/\/+$/, '');
+  const normalizedPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+  const targetPath = usePathPrefix
+    ? `${prefix}${normalizedPath}`
+    : normalizedPath;
+  if (!businessSecret) return `${FCTV_API_BASE}${targetPath}`;
+  const separator = targetPath.includes('?') ? '&' : '?';
+  return `${FCTV_API_BASE}${targetPath}${separator}bs=${encodeURIComponent(businessSecret)}`;
+}
+
+async function fctvBusinessSecret() {
+  const nowMs = Date.now();
+  if (
+    fctvBusinessSecretMemo != null &&
+    nowMs - fctvBusinessSecretMemo.fetchedAt < FCTV_BUSINESS_SECRET_TTL_MS
+  ) {
+    return fctvBusinessSecretMemo.promise;
+  }
+  const promise = (async () => {
+    const response = await fetch(
+      `${FCTV_API_BASE}/api/common/bs?code=100&sportType=0&stream=true`,
+      { timeoutMs: 10000, headers: fctvApiHeaders() },
+    );
+    const hex = fctvBodyHex(response);
+    if (hex == null) throw new Error(`FCTV business secret failed: ${response.status}`);
+    const root = fctvFirstField(fctvHexToBytes(hex), 10, 2);
+    const payload = root == null ? null : fctvFirstField(root.value, 1, 2);
+    const secret = payload == null
+      ? ''
+      : fctvString((fctvFirstField(payload.value, 2, 2) || {}).value || []);
+    if (!/^[a-f0-9]{32}$/i.test(secret)) {
+      throw new Error('FCTV business secret is malformed');
+    }
+    return secret;
+  })();
+  fctvBusinessSecretMemo = { fetchedAt: nowMs, promise };
+  return promise;
+}
+
+async function fctvFetchBinaryResponse(
+  path,
+  timeoutMs = 10000,
+  usePathPrefix = true,
+) {
+  const secret = await fctvBusinessSecret();
+  const response = await fetch(fctvApiTarget(path, secret, usePathPrefix), {
+    timeoutMs,
+    headers: fctvApiHeaders(),
+  });
+  const hex = fctvBodyHex(response);
+  if (hex == null) throw new Error(`FCTV request failed: ${response.status}`);
+  return {
+    bytes: fctvHexToBytes(hex),
+    rbSession: fctvHeader(response, 'rb-session'),
+  };
+}
+
+function fctvApiHeaders() {
+  return {
+    Accept: 'application/json, text/plain, */*',
+    'User-Agent': FCTV_USER_AGENT,
+    Origin: FCTV_SITE_ORIGIN,
+    Referer: `${FCTV_SITE_ORIGIN}/`,
+    platform: 'WEB',
+    countrycode: 'ID',
+    language: 'eng',
+    languagecode: 'eng',
+    local: 'IND',
+    originalcountry: 'ID',
+    tenant_identifier: 'master',
+    timezone: 'Asia/Jakarta',
+  };
+}
+
+function fctvLeagueName(matchBytes) {
+  const league = fctvFirstField(matchBytes, 10, 2);
+  if (league == null) return '';
+  const display = fctvFirstField(league.value, 3, 2);
+  if (display == null) return '';
+  const name = fctvFirstField(display.value, 2, 2);
+  return name == null ? '' : fctvString(name.value);
+}
+
+function fctvLogoUrl(value) {
+  const raw = String(value || '').trim();
+  if (!/^https?:\/\//i.test(raw)) return '';
+  const path = raw
+    .replace(/^https?:\/\/[^/]+\/?/i, '')
+    .split('!')[0]
+    .split('?')[0]
+    .replace(/^\/+/, '');
+  return path.length === 0
+    ? ''
+    : `${String(FCTV_LOGOS_BASE).replace(/\/+$/, '')}/${path}`;
+}
+
+function fctvLeagueLogo(matchBytes) {
+  const league = fctvFirstField(matchBytes, 10, 2);
+  if (league == null) return '';
+  const display = fctvFirstField(league.value, 3, 2);
+  const candidates = [
+    fctvFirstField(league.value, 4, 2),
+    display == null ? null : fctvFirstField(display.value, 4, 2),
+  ];
+  for (const candidate of candidates) {
+    const logo = fctvLogoUrl(candidate == null ? '' : fctvString(candidate.value));
+    if (logo.length > 0) return logo;
+  }
+  return '';
+}
+
+function fctvTeamName(wrapperBytes) {
+  const team = fctvFirstField(wrapperBytes, 10, 2);
+  if (team == null) return '';
+  const display = fctvFirstField(team.value, 3, 2);
+  if (display == null) return '';
+  const name = fctvFirstField(display.value, 2, 2);
+  return name == null ? '' : fctvString(name.value);
+}
+
+function fctvParseMatch(matchBytes) {
+  const id = fctvFirstField(matchBytes, 1, 0);
+  const sportType = fctvFirstField(matchBytes, 2, 0);
+  const startsAt = fctvFirstField(matchBytes, 3, 0);
+  if (id == null || sportType == null || startsAt == null) return null;
+
+  let title = '';
+  const participants = [];
+  const participantLogos = [];
+  for (const entry of fctvFieldsOf(matchBytes, 30, 2)) {
+    const directTitle = fctvFirstField(entry.value, 2, 2);
+    if (directTitle != null && title.length === 0) {
+      title = fctvString(directTitle.value);
+    }
+    if (fctvFirstField(entry.value, 10, 2) != null) {
+      const team = fctvTeamName(entry.value);
+      if (team.length > 0) {
+        participants.push(team);
+        const teamBlock = fctvFirstField(entry.value, 10, 2);
+        const logo = teamBlock == null
+          ? ''
+          : fctvLogoUrl(
+              fctvString((fctvFirstField(teamBlock.value, 4, 2) || {}).value || []),
+            );
+        participantLogos.push(logo);
+      }
+    }
+  }
+
+  const slugInfo = fctvFirstField(matchBytes, 150, 2);
+  const slug = slugInfo == null
+    ? ''
+    : fctvString((fctvFirstField(slugInfo.value, 20, 2) || {}).value || []);
+  return {
+    matchId: String(id.value),
+    sportType: Number(sportType.value),
+    startsAt: Number(startsAt.value),
+    title: title || participants.join(' vs '),
+    participants,
+    participantLogos,
+    leagueName: fctvLeagueName(matchBytes),
+    leagueLogo: fctvLeagueLogo(matchBytes),
+    slug,
+  };
+}
+
+function fctvParseLiveMatches(bytes) {
+  const data = fctvFirstField(bytes, 10, 2);
+  if (data == null) return [];
+  const matches = [];
+  for (const entry of fctvFieldsOf(data.value, 1, 2)) {
+    try {
+      const match = fctvParseMatch(entry.value);
+      if (match != null) matches.push(match);
+    } catch (_) {
+      // One malformed upstream item should not hide the remaining events.
+    }
+  }
+  return matches;
+}
+
+function fctvSportName(sportType) {
+  switch (Number(sportType)) {
+    case 1: return 'Football';
+    case 2: return 'Basketball';
+    case 3: return 'Tennis';
+    case 4: return 'Baseball';
+    case 5: return 'Volleyball';
+    case 7: return 'Motorsport';
+    case 11: return 'Hockey';
+    case 12: return 'Badminton';
+    case 13: return 'Volleyball';
+    case 15: return 'Fighting';
+    default: return 'Other Live Sports';
+  }
+}
+
+function fctvSportNameForMatch(match) {
+  const identity = `${match && match.leagueName || ''} ${match && match.title || ''}`;
+  if (/\bhockey\b|\bnhl\b|\baahl\b/i.test(identity)) return 'Hockey';
+  if (/\bbaseball\b|\bmlb\b|\bnpb\b/i.test(identity)) return 'Baseball';
+  if (/\btable tennis\b|\bping pong\b/i.test(identity)) return 'Table Tennis';
+  if (/\bbasketball\b|\bnba\b|\bwnba\b/i.test(identity)) return 'Basketball';
+  if (/\bvolleyball\b/i.test(identity)) return 'Volleyball';
+  if (/\bbadminton\b|\bbwf\b/i.test(identity)) return 'Badminton';
+  return fctvSportName(match && match.sportType);
+}
+
+function fctvNormalize(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&amp;/g, '&')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function fctvEntryIsLive(match, nowMs) {
+  return match.startsAt <= nowMs && nowMs - match.startsAt <= FCTV_LIVE_WINDOW_MS;
+}
+
+function fctvEntryState(match, nowMs) {
+  if (match.startsAt > nowMs) return 'scheduled';
+  return fctvEntryIsLive(match, nowMs) ? 'live' : 'ended';
+}
+
+function fctvIsHighlight(match) {
+  return fctvNormalize(
+    `${match.title || ''} ${match.leagueName || ''} ${match.slug || ''}`,
+  ).includes('sorotan');
+}
+
+function fctvIsAsianGames(match) {
+  return /\basian\s+(?:para\s+)?games?\b/i.test(
+    `${match.title || ''} ${match.leagueName || ''} ${match.slug || ''}`,
+  );
+}
+
+function fctvAsianGamesBrandLogo(match) {
+  if (!fctvIsAsianGames(match)) return '';
+  const identity = `${match.title || ''} ${match.leagueName || ''} ${match.slug || ''}`;
+  const sportType = Number(match.sportType);
+  const candidates = [
+    { code: 'BAS', match: /basketball|\bbsk\b/i },
+    { code: 'HOC', match: /hockey|\bnhl\b|\bhoc\b/i },
+    { code: 'BOX', match: /boxing|\bbox\b/i },
+    { code: 'TTE', match: /table\s*tennis|ping\s*pong|\btte\b/i },
+    { code: 'VVO', match: /volleyball|\bvvo\b/i, sportTypes: [5, 13] },
+    { code: 'BDM', match: /badminton|\bbwf\b|\bbdm\b/, sportTypes: [12] },
+    { code: 'TEN', match: /tennis|\bten\b/i, sportTypes: [3] },
+    { code: 'FBL', match: /football|soccer|\bfbl\b/i, sportTypes: [1] },
+    { code: 'SWI', match: /swimming|swim|\bswi\b/i, sportTypes: [6] },
+    { code: 'ARC', match: /archery|\barc\b/i },
+    { code: 'ATH', match: /athletics|\bath\b/i },
+    { code: 'BMX', match: /bmx/i },
+    { code: 'CSL', match: /canoe\s*slalom|\bcsl\b/i },
+    { code: 'CSP', match: /canoe\s*sprint|\bcsp\b/i },
+    { code: 'CRD', match: /cycling[- ]?road|road\s*cycling|\bcrd\b/i },
+    { code: 'CTR', match: /cycling[- ]?track|track\s*cycling|\bctr\b/i },
+    { code: 'MTB', match: /mountain\s*bike|\bmtb\b/i },
+    { code: 'DIV', match: /diving|\bdiv\b/i },
+    { code: 'EQU', match: /equestrian|\bequ\b/i },
+    { code: 'FEN', match: /fencing|\bfen\b/i },
+    { code: 'GAR', match: /artistic\s*gymnastics|gymnastics[- ]?artistic|\bgar\b/i },
+    { code: 'GRY', match: /rhythmic\s*gymnastics|gymnastics[- ]?rhythmic|\bgry\b/i },
+    { code: 'GTR', match: /trampoline\s*gymnastics|gymnastics[- ]?trampoline|\bgtr\b/i },
+    { code: 'JUD', match: /judo|\bjud\b/i },
+    { code: 'JJI', match: /jiu\s*jitsu|\bjji\b/i },
+    { code: 'KAB', match: /kabaddi|\bkab\b/i },
+    { code: 'KUR', match: /kurash|\bkur\b/i },
+    { code: 'MMA', match: /mixed\s*martial\s*arts|\bmma\b/i },
+    { code: 'ROW', match: /rowing|\brow\b/i },
+    { code: 'SHO', match: /shooting|\bsho\b/i },
+    { code: 'SKB', match: /skateboarding|\bskb\b/i },
+    { code: 'SQU', match: /squash|\bsqu\b/i },
+    { code: 'SRF', match: /surfing|\bsrf\b/i },
+    { code: 'TRI', match: /triathlon|\btri\b/i },
+    { code: 'WPO', match: /water\s*polo|\bwpo\b/i },
+    { code: 'WLF', match: /weightlifting|\bwlf\b/i },
+    { code: 'WRE', match: /wrestling|\bwre\b/i },
+    { code: 'WSU', match: /wushu|\bwsu\b/i },
+  ];
+  const selected = candidates.find((candidate) =>
+    candidate.match.test(identity) || candidate.sportTypes?.includes(sportType),
+  );
+  const code = selected == null ? '' : selected.code;
+  return code.length === 0
+    ? ''
+    : `${FCTV_ASIAN_GAMES_LOGO_PROXY}${encodeURIComponent(
+        `${FCTV_ASIAN_GAMES_LOGOS_BASE}/${code}.png`,
+      )}&output=webp`;
+}
+
+function fctvEntryToCatalog(match, nowMs) {
+  const sportName = fctvSportNameForMatch(match);
+  const state = fctvEntryState(match, nowMs);
+  const live = state === 'live';
+  const item = {
+    ref: {
+      extensionId: globalThis.__nimoraExtensionId || 'nimora',
+      providerId: FCTV_CATALOG_PROVIDER_ID,
+      id: `fctv:${match.matchId}:${match.sportType}`,
+    },
+    kind: 'event',
+    title: match.title || `${sportName} event`,
+    subtitle: match.leagueName || sportName,
+    schedule: {
+      startsAt: new Date(match.startsAt).toISOString(),
+      state,
+    },
+  };
+  if (match.participants.length === 2) {
+    item.participants = match.participants.map((name, index) => {
+      const logo = Array.isArray(match.participantLogos)
+        ? match.participantLogos[index]
+        : '';
+      return {
+        name,
+        ...(logo ? { logo: { url: logo } } : {}),
+      };
+    });
+  }
+  const brandingLogo = fctvAsianGamesBrandLogo(match) || match.leagueLogo;
+  if (fctvIsAsianGames(match)) {
+    item.branding = {
+      primaryColor: FCTV_ASIAN_GAMES_PRIMARY_COLOR,
+      secondaryColor: FCTV_ASIAN_GAMES_SECONDARY_COLOR,
+      ...(brandingLogo ? { logo: { url: brandingLogo } } : {}),
+    };
+  } else if (brandingLogo) {
+    item.branding = { logo: { url: brandingLogo } };
+  }
+  return {
+    sportId: sportName,
+    sportName,
+    live,
+    item,
+    ...(fctvIsAsianGames(match) ? { shelfIds: ['asian-games'] } : {}),
+  };
+}
+
+async function fctvFetchLiveMatches() {
+  const bytes = await fctvFetchBinary('/api/match/live?sportType=0&language=0&stream=true');
+  return fctvParseLiveMatches(bytes);
+}
+
+function fctvLiveMatchesMemo() {
+  const nowMs = Date.now();
+  if (fctvLiveMemo != null && nowMs - fctvLiveMemo.fetchedAt < FCTV_MEMO_TTL_MS) {
+    return fctvLiveMemo.promise;
+  }
+  const promise = fctvFetchLiveMatches().catch(() => []);
+  fctvLiveMemo = { fetchedAt: nowMs, promise };
+  return promise;
+}
+
+async function fctvSportEntries(nowMs) {
+  const matches = await fctvLiveMatchesMemo();
+  return matches
+    .filter((match) => !fctvIsHighlight(match))
+    .filter((match) => match.startsAt - nowMs <= FCTV_UPCOMING_WINDOW_MS)
+    .map((match) => fctvEntryToCatalog(match, nowMs));
+}
+
+function fctvMatchFromSourceId(sourceId) {
+  const parts = String(sourceId || '').split(':');
+  if ((parts.length !== 4 && parts.length !== 5) || parts[0] !== FCTV_PROVIDER_KEY) return null;
+  const matchId = parts[1];
+  const sportType = Number(parts[2]);
+  const siteType = parts.length === 5 ? Number(parts[3]) : 2001;
+  const streamId = parts.length === 5 ? parts[4] : parts[3];
+  if (!/^\d+$/.test(matchId) || !Number.isFinite(sportType) || !/^\d+$/.test(streamId)) {
+    return null;
+  }
+  return {
+    matchId,
+    sportType,
+    siteType: Number.isFinite(siteType) && siteType > 0 ? siteType : 2001,
+    streamId,
+  };
+}
+
+function fctvMatchFromItemId(itemId) {
+  const parts = String(itemId || '').split(':');
+  if (parts.length !== 3 || parts[0] !== FCTV_PROVIDER_KEY) return null;
+  const matchId = parts[1];
+  const sportType = Number(parts[2]);
+  if (!/^\d+$/.test(matchId) || !Number.isFinite(sportType)) return null;
+  return { matchId, sportType };
+}
+
+async function fctvMatchForItem(item) {
+  const direct = fctvMatchFromItemId(item && item.ref && item.ref.id);
+  if (direct != null) return direct;
+  const participants = Array.isArray(item && item.participants)
+    ? item.participants.map((part) => fctvNormalize(part && part.name)).filter(Boolean)
+    : [];
+  if (participants.length !== 2) return null;
+  const kickoff = Date.parse(item.schedule && item.schedule.startsAt);
+  const candidates = await fctvLiveMatchesMemo();
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    if (candidate.participants.length !== 2) continue;
+    const names = candidate.participants.map(fctvNormalize);
+    const sameOrder = names[0] === participants[0] && names[1] === participants[1];
+    const reverseOrder = names[0] === participants[1] && names[1] === participants[0];
+    if (!sameOrder && !reverseOrder) continue;
+    const timeDelta = Number.isFinite(kickoff)
+      ? Math.abs(candidate.startsAt - kickoff)
+      : 0;
+    if (timeDelta > FCTV_LIVE_WINDOW_MS) continue;
+    const score = timeDelta + (sameOrder ? 0 : 1);
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best == null ? null : {
+    matchId: best.matchId,
+    sportType: best.sportType,
+  };
+}
+
+function fctvStreamsFromDetail(bytes) {
+  const data = fctvFirstField(bytes, 10, 2);
+  if (data == null) return [];
+  return fctvFieldsOf(data.value, 2, 2)
+    .map((entry) => {
+      const stream = entry.value;
+      const id = fctvFirstField(stream, 1, 0);
+      const name = fctvFirstField(stream, 3, 2);
+      const status = fctvFirstField(stream, 5, 0);
+      const siteType = fctvFirstField(stream, 9, 0);
+      if (id == null || status == null || status.value !== 1) return null;
+      return {
+        streamId: String(id.value),
+        name: name == null ? 'Live stream' : fctvString(name.value),
+        siteType: siteType == null ? 0 : Number(siteType.value),
+      };
+    })
+    .filter((stream) => stream != null);
+}
+
+async function fctvMatchStreams(match) {
+  const bytes = await fctvFetchBinary(
+    `/api/match/detail?matchId=${encodeURIComponent(match.matchId)}` +
+    `&sportType=${encodeURIComponent(match.sportType)}&stream=true`,
+  );
+  return fctvStreamsFromDetail(bytes);
+}
+
+async function fctvSources(args) {
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && enabled.indexOf(FCTV_PROVIDER_ID) === -1) return { sources: [] };
+  const match = await fctvMatchForItem(args && args.item);
+  if (match == null) return { sources: [] };
+  let streams;
+  try {
+    streams = await fctvMatchStreams(match);
+  } catch (_) {
+    return { sources: [] };
+  }
+  return { sources: fctvSourceDescriptors(match, streams) };
+}
+
+function fctvSourceDescriptors(match, streams) {
+  const usedLabels = new Set();
+  return streams.map((stream) => {
+    const baseLabel = fctvSourceLabel(stream.name);
+    let label = baseLabel;
+    if (usedLabels.has(label)) label = `${baseLabel} · ${stream.streamId}`;
+    while (usedLabels.has(label)) label = `${label} · ${stream.siteType}`;
+    usedLabels.add(label);
+    return {
+      id: `${FCTV_PROVIDER_KEY}:${match.matchId}:${match.sportType}:` +
+        `${stream.siteType}:${stream.streamId}`,
+      label,
+      provider: 'FCTV33',
+      providerId: FCTV_PROVIDER_ID,
+    };
+  });
+}
+
+function fctvSourceHeaders() {
+  return {
+    Origin: FCTV_SITE_ORIGIN,
+    Referer: `${FCTV_SITE_ORIGIN}/`,
+    'User-Agent': FCTV_USER_AGENT,
+  };
+}
+
+function fctvPlaylistHeaders() {
+  // The upstream playlist rejects Referer/Origin. Keep this deliberately
+  // separate from the CDN headers used for child playlists and segments.
+  return { 'User-Agent': FCTV_USER_AGENT };
+}
+
+function fctvSegmentHeaders(origin) {
+  return {
+    'User-Agent': FCTV_USER_AGENT,
+    Accept: '*/*',
+    Origin: origin,
+    Referer: `${origin}/`,
+  };
+}
+
+function fctvSourceLabel(value) {
+  const name = String(value || '').trim();
+  return name || 'FCTV';
+}
+
+function fctvValidMediaUrl(value) {
+  return /^https?:\/\/[^\s]+$/i.test(String(value || ''));
+}
+
+function fctvRot47(value) {
+  return [...String(value || '')].map((char) => {
+    const code = char.charCodeAt(0);
+    if (code < 33 || code > 126) return char;
+    return String.fromCharCode(33 + ((code - 33 + 47) % 94));
+  }).join('');
+}
+
+function fctvDecodedMediaUrl(value) {
+  const raw = String(value || '').trim();
+  const decoded = fctvRot47(raw);
+  if (decoded.length > 8 && fctvValidMediaUrl(decoded.slice(8))) {
+    return decoded.slice(8);
+  }
+  if (fctvValidMediaUrl(decoded)) return decoded;
+  // `notConfuse=true` is useful for diagnostics and returns a plain URL.
+  if (fctvValidMediaUrl(raw)) return raw;
+  return '';
+}
+
+function fctvTokenizedMediaUrl(value, rbSession) {
+  const mediaUrl = fctvDecodedMediaUrl(value);
+  if (!fctvValidMediaUrl(mediaUrl)) return '';
+  const session = String(rbSession || '');
+  if (session.length === 0) return mediaUrl;
+  try {
+    const parsed = mediaUrl.match(
+      /^(https?:\/\/[^/]+)(\/[^?]*)?(\?.*)?$/i,
+    );
+    if (parsed == null) return '';
+    const encrypted = host.crypto.aesCbcEncrypt(
+      host.codec.textToBase64(FCTV_TOKEN_KEY),
+      host.codec.textToBase64(FCTV_TOKEN_IV),
+      host.codec.textToBase64(session),
+    );
+    const cipherHex = host.codec.base64ToHex(encrypted);
+    return `${parsed[1]}/token-${encodeURIComponent(cipherHex)}a` +
+      `${parsed[2] || '/'}${parsed[3] || ''}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+function fctvMediaUrlWithPath(candidate, primary) {
+  const candidateUrl = fctvDecodedMediaUrl(candidate);
+  const primaryUrl = fctvDecodedMediaUrl(primary);
+  if (!fctvValidMediaUrl(candidateUrl)) return '';
+  const candidatePathIndex = candidateUrl.indexOf('/', candidateUrl.indexOf('://') + 3);
+  if (candidatePathIndex >= 0 && candidateUrl.slice(candidatePathIndex) !== '/') {
+    return candidateUrl;
+  }
+  const primaryPathIndex = primaryUrl.indexOf('/', primaryUrl.indexOf('://') + 3);
+  if (primaryPathIndex < 0 || primaryUrl.slice(primaryPathIndex) === '/') return '';
+  return `${candidateUrl.replace(/\/$/, '')}${primaryUrl.slice(primaryPathIndex)}`;
+}
+
+function fctvResponseBytes(response) {
+  const hex = fctvBodyHex(response);
+  return hex == null ? null : fctvHexToBytes(hex);
+}
+
+function fctvBytesToText(bytes) {
+  if (!Array.isArray(bytes)) return '';
+  try {
+    return host.codec.base64ToText(
+      host.codec.hexToBase64(fctvBytesToHex(bytes)),
+    );
+  } catch (_) {
+    return '';
+  }
+}
+
+function fctvResolveRelativeUrl(baseUrl, value) {
+  const child = String(value || '').trim();
+  if (fctvValidMediaUrl(child)) return child;
+  const match = String(baseUrl || '').match(/^(https?:\/\/[^/]+)(\/.*)?$/i);
+  if (match == null) return '';
+  if (child.startsWith('/')) return `${match[1]}${child}`;
+  const path = match[2] || '/';
+  const directory = path.slice(0, path.lastIndexOf('/') + 1);
+  return `${match[1]}${directory}${child}`;
+}
+
+function fctvFirstHlsUri(text) {
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const value = line.trim();
+    if (value.length > 0 && !value.startsWith('#')) return value;
+  }
+  return '';
+}
+
+function fctvMediaBytesLookBinary(bytes) {
+  if (!Array.isArray(bytes) || bytes.length === 0) return false;
+  if (bytes[0] === 0x47) return true;
+  if (bytes.length >= 8) {
+    const brand = String.fromCharCode(
+      bytes[4], bytes[5], bytes[6], bytes[7],
+    );
+    if (brand === 'ftyp' || brand === 'moof') return true;
+  }
+  return bytes.length >= 2 && bytes[0] === 0xff &&
+    (bytes[1] === 0xf1 || bytes[1] === 0xf9);
+}
+
+function fctvMediaResponseIsUsable(response, bytes) {
+  if (response == null || response.status < 200 || response.status >= 300) {
+    return false;
+  }
+  if (!Array.isArray(bytes) || bytes.length === 0) return false;
+  const contentType = fctvHeader(response, 'content-type').toLowerCase();
+  if (/(text\/html|text\/plain)/i.test(contentType)) return false;
+  if (/application\/json/i.test(contentType)) {
+    return fctvMediaBytesLookBinary(bytes);
+  }
+  return true;
+}
+
+async function fctvValidateMediaUrl(mediaUrl, depth = 0) {
+  if (depth > 2) throw new Error('FCTV playlist nesting is too deep');
+  const response = await fetch(mediaUrl, {
+    timeoutMs: FCTV_MEDIA_TIMEOUT_MS,
+    headers: {
+      ...fctvSourceHeaders(),
+      Accept: '*/*',
+    },
+  });
+  const bytes = fctvResponseBytes(response);
+  if (bytes == null) throw new Error(`FCTV media HTTP ${response.status}`);
+  const text = fctvBytesToText(bytes);
+  if (text.trimLeft().startsWith('#EXTM3U')) {
+    const next = fctvFirstHlsUri(text);
+    if (next.length === 0) throw new Error('FCTV playlist has no media URI');
+    return fctvValidateMediaUrl(fctvResolveRelativeUrl(mediaUrl, next), depth + 1);
+  }
+  if (!fctvMediaResponseIsUsable(response, bytes)) {
+    throw new Error('FCTV media response is not playable');
+  }
+  return true;
+}
+
+function fctvPlayerOriginsFromConfig(raw) {
+  const origins = [];
+  const addOrigin = (value) => {
+    let candidate = String(value || '').trim().replace(/\\\//g, '/');
+    if (candidate.length > 0 && !/^https?:\/\//i.test(candidate)) {
+      candidate = `https://${candidate}`;
+    }
+    const match = candidate.match(
+      /^https?:\/\/([^/?#]+)/i,
+    );
+    if (match == null) return;
+    const origin = `${match[0].slice(0, match[0].length - match[1].length)}${match[1]}`
+      .replace(/\/$/, '');
+    if (!origins.includes(origin)) origins.push(origin);
+  };
+  const parseObject = (value) => {
+    if (value != null && typeof value === 'object' && !Array.isArray(value)) {
+      return value;
+    }
+    try {
+      const parsed = JSON.parse(String(value || ''));
+      return parsed != null && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed
+        : null;
+    } catch (_) {
+      return null;
+    }
+  };
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach((entry) => addOrigin(entry));
+      return;
+    }
+    const object = parseObject(value);
+    if (object == null) return;
+    const clients = parseObject(object['common:web:client']);
+    if (clients != null) {
+      Object.values(clients).forEach((client) => {
+        if (client == null || typeof client !== 'object') return;
+        const domains = client.iframePlayerDomains;
+        if (Array.isArray(domains)) addOrigin(domains[0]);
+      });
+    }
+    const playerDomains = parseObject(object.g_player_domains);
+    if (playerDomains != null) {
+      const siteDigit = globalThis.__fctvSiteDigit || 'foth';
+      visit(playerDomains[siteDigit]);
+    }
+  };
+
+  const rawText = String(raw || '');
+  visit(rawText);
+  visit(fctvRot47(rawText));
+  return origins;
+}
+
+async function fctvPlayerOrigins() {
+  if (fctvPlayerOriginsMemo != null) return fctvPlayerOriginsMemo;
+  let discovered = [];
+  try {
+    const response = await fetch(`${FCTV_API_BASE}/api/common/params`, {
+      timeoutMs: 10000,
+      headers: fctvApiHeaders(),
+    });
+    if (response.status >= 200 && response.status < 300) {
+      discovered = fctvPlayerOriginsFromConfig(response.body);
+    }
+  } catch (_) {
+    // The player origin is only a CDN header hint; fallback origins remain
+    // usable when the configuration endpoint is unavailable.
+  }
+  fctvPlayerOriginsMemo = [...new Set([
+    ...discovered,
+    FCTV_SITE_ORIGIN,
+    ...FCTV_FALLBACK_PLAYER_ORIGINS,
+  ])];
+  return fctvPlayerOriginsMemo;
+}
+
+async function fctvGeo() {
+  if (fctvGeoMemo != null) return fctvGeoMemo;
+  let result = null;
+  try {
+    const bytes = await fctvFetchBinary('/api/user/info');
+    const info = fctvFirstField(bytes, 10, 2);
+    const country = info == null ? '' : fctvString(
+      (fctvFirstField(info.value, 2, 2) || {}).value || [],
+    );
+    const continent = info == null ? '' : fctvString(
+      (fctvFirstField(info.value, 3, 2) || {}).value || [],
+    );
+    if (country.length > 0 && continent.length > 0) {
+      result = { country, continent };
+    }
+  } catch (_) {
+    // Use the local market fallback if the geo endpoint is challenged.
+  }
+  fctvGeoMemo = result || { country: 'ID', continent: 'AS' };
+  return fctvGeoMemo;
+}
+
+async function fctvPlaylistUrl(source) {
+  const geo = await fctvGeo();
+  const path =
+    `/api/stream/detail?streamId=${encodeURIComponent(source.streamId)}` +
+    `&matchId=${encodeURIComponent(source.matchId)}` +
+    `&sportType=${encodeURIComponent(source.sportType)}` +
+    `&siteType=${encodeURIComponent(source.siteType)}` +
+    `&country=${encodeURIComponent(geo.country)}` +
+    `&continent=${encodeURIComponent(geo.continent)}`;
+  // The current web client requests stream/detail from the API root. The
+  // older sfver-prefixed route still answers, but does not expose rb-session,
+  // which leaves the CDN URL unsigned for child media segments.
+  const response = await fctvFetchBinaryResponse(path, 10000, false);
+  const bytes = response.bytes;
+  const outer = fctvFirstField(bytes, 10, 2);
+  const stream = outer == null ? null : fctvFirstField(outer.value, 2, 2);
+  const encoded = stream == null ? '' : fctvString(
+    (fctvFirstField(stream.value, 4, 2) || {}).value || [],
+  );
+  // The CDN accepts the playlist path without a token, but redirects every
+  // child `.json` segment until the rb-session token is embedded after the
+  // media host. Preserve that response header through the resolver.
+  const decoded = await fctvSelectMediaUrl(
+    fctvMediaEntries(bytes),
+    response.rbSession,
+  ) || fctvTokenizedMediaUrl(encoded, response.rbSession) ||
+    fctvDecodedMediaUrl(encoded);
+  if (!fctvValidMediaUrl(decoded)) throw new Error('FCTV returned no playlist URL');
+  return decoded;
+}
+
+function fctvMediaEntries(bytes) {
+  const data = fctvFirstField(bytes, 10, 2);
+  if (data == null) return [];
+  const entries = [];
+  for (const entry of fctvFieldsOf(data.value, 2, 2)) {
+      const url = fctvFirstField(entry.value, 4, 2);
+      const name = fctvFirstField(entry.value, 3, 2);
+      const primaryUrl = url == null ? '' : fctvDecodedMediaUrl(fctvString(url.value));
+      if (!fctvValidMediaUrl(primaryUrl)) continue;
+      const entryName = name == null ? 'Live stream' : fctvString(name.value);
+      const urls = [primaryUrl];
+      // FCTV returns backup edge hosts in repeated field 12. Each backup
+      // reuses the primary signed HLS path for this resolve attempt.
+      for (const backup of fctvFieldsOf(entry.value, 12, 2)) {
+        const backupUrl = fctvMediaUrlWithPath(fctvString(backup.value), primaryUrl);
+        if (backupUrl.length > 0 && !urls.includes(backupUrl)) urls.push(backupUrl);
+      }
+      for (const mediaUrl of urls) {
+        entries.push({ mediaUrl, name: entryName });
+      }
+  }
+  return entries;
+}
+
+async function fctvMediaHostHealthy(host) {
+  try {
+    const response = await fetch(`https://${host}/cgi-trace`, {
+      timeoutMs: FCTV_MEDIA_HEALTH_TIMEOUT_MS,
+      headers: {
+        Accept: 'text/plain, */*',
+        'User-Agent': FCTV_USER_AGENT,
+      },
+    });
+    const body = String(response.body || '').trim().toLowerCase();
+    const statusOk = (response.status >= 200 && response.status < 300) ||
+      response.status === 304;
+    const bodyOk = body === '.' || body === '1' || body.includes('ok') ||
+      body.includes('success');
+    return statusOk || bodyOk;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function fctvSelectMediaUrl(entries, rbSession) {
+  const candidates = entries
+    .map((entry) => ({
+      ...entry,
+      mediaUrl: fctvTokenizedMediaUrl(entry.mediaUrl, rbSession),
+    }))
+    .filter((entry) => fctvValidMediaUrl(entry.mediaUrl));
+  if (candidates.length === 0) return '';
+
+  // Match the web player's selectHealthyStreamUrl behavior: probe the
+  // primary and backup hosts, then keep the signed URL's path and query.
+  for (const candidate of candidates) {
+    try {
+      const hostMatch = String(candidate.mediaUrl).match(
+        /^https?:\/\/([^/:?#]+)/i,
+      );
+      const host = hostMatch == null ? '' : hostMatch[1];
+      if (host.length === 0) continue;
+      if (await fctvMediaHostHealthy(host)) return candidate.mediaUrl;
+    } catch (_) {}
+  }
+  return candidates[0].mediaUrl;
+}
+
+async function fctvFirstPlayableMediaEntry(bytes, rbSession = '') {
+  const entries = fctvMediaEntries(bytes);
+  let lastError = null;
+  for (const entry of entries) {
+    const mediaUrl = fctvTokenizedMediaUrl(entry.mediaUrl, rbSession);
+    if (!fctvValidMediaUrl(mediaUrl)) continue;
+    try {
+      await fctvValidateMediaUrl(mediaUrl);
+      return { ...entry, mediaUrl };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError != null) throw lastError;
+  throw new Error('FCTV returned no playable media');
+}
+
+async function fctvResolve(sourceId) {
+  const source = fctvMatchFromSourceId(sourceId);
+  if (source == null) throw new Error(`Invalid FCTV source id: ${sourceId}`);
+  const playlist = await fctvPlaylistUrl(source);
+  const origins = await fctvPlayerOrigins();
+  const playerOrigin = origins[0] || FCTV_SITE_ORIGIN;
+  return {
+    url: playlist,
+    // Keep a conservative base map for consumers that do not know the
+    // specialised HLS fields. The app proxy prefers the two maps below.
+    headers: fctvPlaylistHeaders(),
+    playlistHeaders: fctvPlaylistHeaders(),
+    segmentHeaders: fctvSegmentHeaders(playerOrigin),
+    format: 'hls',
+    label: fctvSourceLabel(),
+  };
+}
+
+globalThis.__fctvSportEntries = fctvSportEntries;
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+globalThis.__streamProviders.push({
+  providerKey: FCTV_PROVIDER_KEY,
+  sources: fctvSources,
+  resolve: (sourceId) => fctvResolve(sourceId),
+});
 
 // Shared helpers for source labels.
 //
@@ -19782,10 +20842,10 @@ globalThis.__streamProviders.push({
   resolve: streamedpkResolve,
 });
 
-// DaddyLive is a stream-only provider. FotMob/Nimora owns event identity,
-// schedule, participants, and status; this module contributes channel sources
-// only after a user selects a FotMob event.
+// DaddyLive keeps a separate catalog identity and stream provider so users
+// can enable its schedule without enabling playback, or vice versa.
 const DADDYLIVE_PROVIDER_ID = 'nimora.daddylive';
+const DADDYLIVE_CATALOG_PROVIDER_ID = 'nimora.daddylive.catalog';
 const DADDYLIVE_PROVIDER_KEY = 'daddylive';
 const DADDYLIVE_ORIGIN = globalThis.__daddyliveOrigin || 'https://dlive.sx';
 const DADDYLIVE_PLAYERS = ['stream', 'cast', 'watch', 'plus', 'casting', 'player'];
@@ -19918,6 +20978,25 @@ function daddyliveScheduleEventContainer(node) {
   }
   return null;
 }
+function daddyliveScheduleDate(html, nowMs = Date.now()) {
+  const months = {
+    jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+    jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+  };
+  const date = daddyliveText(html).match(
+    /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+(\d{1,2})(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})\b/i,
+  );
+  if (date) {
+    return Date.UTC(Number(date[3]), months[date[2].slice(0, 3).toLowerCase()], Number(date[1]));
+  }
+  const today = new Date(nowMs);
+  return Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+}
+function daddyliveScheduleStart(dateMs, time) {
+  const match = daddyliveText(time).match(/^(\d{1,2}):([0-5]\d)$/);
+  if (!match) return null;
+  return dateMs + (Number(match[1]) * 60 + Number(match[2])) * 60 * 1000;
+}
 function daddyliveParseSchedule(html) {
   const root = daddyliveParseHtml(html);
   const nodes = [];
@@ -19954,6 +21033,21 @@ function daddyliveParseSchedule(html) {
   const headings = nodes.filter((node) => /^h[1-6]$/.test(node.tag))
     .map((node) => ({node, text: daddyliveNodeText(node, memo)}))
     .filter((entry) => entry.text && entry.text.length < 100 && !/schedule time|^schedule$/i.test(entry.text));
+  const scheduleDateMs = daddyliveScheduleDate(html);
+  const categoryFor = (container) => {
+    for (let parent = container; parent && parent.tag !== 'root'; parent = parent.parent) {
+      if (!/(^|\s)schedule__category(?:\s|$)/.test(parent.attrs.class || '')) continue;
+      const descendants = [];
+      daddyliveWalk(parent, descendants);
+      const label = descendants.find((node) =>
+        /(^|\s)card__meta(?:\s|$)/.test(node.attrs.class || ''));
+      const text = label && daddyliveNodeText(label, memo);
+      if (text) return text;
+    }
+    const position = order.get(container) || 0;
+    return headings.filter((heading) => (order.get(heading.node) || 0) < position)
+      .slice(-1)[0]?.text || 'Schedule';
+  };
   const events = [];
   for (const [container, group] of groups) {
     const channels = [...new Map(group.map((link) => [link.id, link])).values()]
@@ -19964,11 +21058,15 @@ function daddyliveParseSchedule(html) {
     for (const name of [...new Set(channels.map((channel) => channel.name))].sort((a, b) => b.length - a.length)) {
       title = title.replace(name, ' ');
     }
-    title = title.replace(/[|·•:–—-]+/g, ' ').replace(/\s+/g, ' ').trim();
-    const position = order.get(container) || 0;
-    let category = '';
-    for (const heading of headings) if ((order.get(heading.node) || 0) < position) category = heading.text;
-    events.push({category: category || 'Schedule', time, title, channels});
+    title = title.replace(/[|·•–—-]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const category = categoryFor(container);
+    events.push({
+      category: category || 'Schedule',
+      time,
+      startsAt: daddyliveScheduleStart(scheduleDateMs, time),
+      title,
+      channels,
+    });
   }
   return events.filter((event) => event.channels.length > 0);
 }
@@ -19988,6 +21086,106 @@ async function daddyliveFetchSchedule() {
   finally { daddyliveSchedulePending = null; }
 }
 
+function daddyliveRawSides(value) {
+  const match = daddyliveText(value).split(/\s*:\s*/).pop()
+    .match(/^(.+?)\s+(?:vs?\.?|@)\s+(.+)$/i);
+  return match ? [match[1].trim(), match[2].trim()] : [];
+}
+function daddyliveSportName(category, title) {
+  const value = `${category || ''} ${title || ''}`.toLowerCase();
+  const categories = [
+    {name: 'American Football', match: /american football|\bnfl\b|\bcfl\b|ncaa football/},
+    {name: 'Table Tennis', match: /table tennis|ping pong/},
+    {name: 'Cricket', match: /cricket|\bipl\b/},
+    {name: 'Tennis', match: /tennis|\batp\b|\bwta\b/},
+    {name: 'Motorsport', match: /motorsport|formula\s*1|\bf1\b|motogp|nascar|\bwrc\b|racing/},
+    {name: 'Fighting', match: /boxing|\bmma\b|\bufc\b|wrestling|\bwwe\b|combat|kickboxing/},
+    {name: 'Badminton', match: /badminton|\bbwf\b/},
+    {name: 'Basketball', match: /basketball|\bnba\b|\bwnba\b/},
+    {name: 'Volleyball', match: /volleyball/},
+    {name: 'Hockey', match: /hockey|\bnhl\b|\baahl\b/},
+    {name: 'Baseball', match: /baseball|\bmlb\b|\bnpb\b|softball/},
+    {name: 'Golf', match: /golf/},
+    {name: 'Rugby', match: /rugby/},
+    {name: 'Snooker', match: /snooker|pool|billiards/},
+    {name: 'Cycling', match: /cycling|cyclist/},
+    {name: 'Handball', match: /handball/},
+    {name: 'Horse Racing', match: /horse racing/},
+    {name: 'Athletics', match: /athletics|track and field/},
+    {name: 'Football', match: /soccer|football|premier league|premiership|championship|league one|league two|la liga|serie a|bundesliga|ligue 1|champions league|europa league|conference league|fa cup|efl cup|world cup|\bfifa\b|\bmls\b|\bnwsl\b|\busl\b|eredivisie|primeira liga|liga portugal|copa del rey|coppa italia/},
+  ];
+  const selected = categories.find((entry) => entry.match.test(value));
+  if (selected) return selected.name;
+  const rawCategory = daddyliveText(category);
+  if (!rawCategory || /^(?:schedule|upcoming events|live events|tv shows|big brother)$/i.test(rawCategory)) return null;
+  return rawCategory;
+}
+function daddyliveCatalogEventId(event) {
+  const identity = {
+    category: event.category,
+    time: event.time,
+    title: event.title,
+    channels: event.channels.map((channel) => String(channel.id)).sort(),
+  };
+  return `daddylive:event:${daddyliveEncode(identity)}`;
+}
+function daddyliveFindCatalogEvent(events, item) {
+  const id = daddyliveText(item && item.ref && item.ref.id);
+  if (!id.startsWith('daddylive:event:')) return null;
+  try {
+    const wanted = JSON.stringify(daddyliveDecode(id.slice('daddylive:event:'.length)));
+    return events.find((event) => JSON.stringify({
+      category: event.category,
+      time: event.time,
+      title: event.title,
+      channels: event.channels.map((channel) => String(channel.id)).sort(),
+    }) === wanted) || null;
+  } catch (_) {
+    return null;
+  }
+}
+function daddyliveEventDurationMs(sportName) {
+  if (/fighting|cricket/i.test(sportName)) return 4 * 60 * 60 * 1000;
+  if (/motorsport|american football|baseball/i.test(sportName)) return 3.5 * 60 * 60 * 1000;
+  if (/tennis|hockey/i.test(sportName)) return 3 * 60 * 60 * 1000;
+  return 2.5 * 60 * 60 * 1000;
+}
+async function daddyliveSportEntries(nowMs = Date.now()) {
+  const events = await daddyliveFetchSchedule();
+  const entries = [];
+  for (const event of events) {
+    const sportName = daddyliveSportName(event.category, event.title);
+    const sides = daddyliveRawSides(event.title);
+    const startsAt = Number(event.startsAt);
+    if (sportName == null || sportName === 'Football' ||
+        !Number.isFinite(startsAt) || event.channels.length === 0) continue;
+    const endsAt = startsAt + daddyliveEventDurationMs(sportName);
+    if (nowMs >= endsAt || startsAt - nowMs > 7 * 24 * 60 * 60 * 1000) continue;
+    const live = nowMs >= startsAt;
+    const title = sides.length === 2 ? `${sides[0]} vs ${sides[1]}` : event.title;
+    const item = {
+      ref: {
+        extensionId: globalThis.__nimoraExtensionId || 'nimora',
+        providerId: DADDYLIVE_CATALOG_PROVIDER_ID,
+        id: daddyliveCatalogEventId(event),
+      },
+      kind: 'event',
+      title,
+      subtitle: event.category,
+      schedule: {
+        startsAt: new Date(startsAt).toISOString(),
+        endsAt: new Date(endsAt).toISOString(),
+        state: live ? 'live' : 'scheduled',
+      },
+      ...(sides.length === 2 ? {
+        participants: sides.map((name) => ({name})),
+      } : {}),
+    };
+    entries.push({sportId: sportName, sportName, live, item});
+  }
+  return entries;
+}
+
 function daddyliveNormalizeTeam(value) {
   let text = daddyliveDecodeEntities(value).toLowerCase();
   try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (_) {}
@@ -20000,8 +21198,7 @@ function daddyliveNormalizeTeam(value) {
   return text.replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 function daddyliveSides(value) {
-  const parts = daddyliveText(value).split(/\s+(?:vs?\.?|@)\s+/i);
-  return parts.length === 2 ? parts.map(daddyliveNormalizeTeam) : [];
+  return daddyliveRawSides(value).map(daddyliveNormalizeTeam);
 }
 function daddyliveEventSides(item) {
   if (Array.isArray(item && item.participants) && item.participants.length === 2) {
@@ -20044,9 +21241,13 @@ function daddyliveSourceId(channel) {
 async function daddyliveSources(args) {
   if (args.enabledProviders && !args.enabledProviders.includes(DADDYLIVE_PROVIDER_ID)) return {sources: []};
   const item = args.item || {};
-  if (!item.ref || item.ref.providerId !== 'nimora.matches' || item.kind !== 'event') return {sources: []};
+  if (!item.ref ||
+      !['nimora.matches', DADDYLIVE_CATALOG_PROVIDER_ID].includes(item.ref.providerId) ||
+      item.kind !== 'event') return {sources: []};
   try {
-    const event = daddyliveFindEvent(await daddyliveFetchSchedule(), item);
+    const events = await daddyliveFetchSchedule();
+    const event = daddyliveFindCatalogEvent(events, item) ||
+      daddyliveFindEvent(events, item);
     if (!event) return {sources: []};
     // Keep the complete event list available. The bounded probe below still
     // opens only three channels at a time and stops as soon as three valid
@@ -20301,6 +21502,7 @@ async function daddyliveResolve(sourceId) {
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
 globalThis.__streamProviders.push({providerKey: DADDYLIVE_PROVIDER_KEY, sources: daddyliveSources, resolve: daddyliveResolve});
+globalThis.__daddyliveSportEntries = daddyliveSportEntries;
 
 // League channel catalog.
 //

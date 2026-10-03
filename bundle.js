@@ -26,7 +26,12 @@ const FOTMOB_LEAGUE_IMAGE_BASE =
 // FotMob's market list includes youth competitions but omits Saudi Pro League
 // for the US market. Keep the Football catalog focused on senior competitions
 // and explicitly include the requested Saudi top flight.
-const CURATED_INCLUDED_LEAGUE_IDS = new Set(['536']);
+const CURATED_INCLUDED_LEAGUE_IDS = new Set([
+  '536', // Saudi Pro League
+  '114', // International Friendlies
+  '9806', '9807', '9808', '9809', // UEFA Nations League A-D
+  '13287', // FIFA ASEAN Cup
+]);
 const CURATED_EXCLUDED_LEAGUE_IDS = new Set(['9741']);
 const CURATED_EXCLUDED_LEAGUE_NAMES = /\bUEFA Youth League\b/i;
 const FOTMOB_USER_AGENT =
@@ -45,11 +50,8 @@ const CATALOG_ID = 'fixtures';
 const LIVE_CATALOG_ID = 'fixtures_live';
 const SPORT_CATALOG_ID = 'fixtures_sport';
 const PROVIDER_SPORT_CATALOGS = [
-  { id: 'fixtures_sport_cricfy', name: 'Cricfy', load: getCricfySportEntries },
   { id: 'fixtures_sport_fctv', name: 'FCTV', load: getFctvSportEntries },
-  { id: 'fixtures_sport_roxie', name: 'RoxieStreams', load: getRoxieSportEntries },
-  { id: 'fixtures_sport_timstreams', name: 'TimStreams', load: getTimstreamsSportEntries },
-  { id: 'fixtures_sport_streamed', name: 'Streamed', load: getStreamedPkSportEntries },
+  { id: 'fixtures_sport_daddylive', name: 'DaddyLive', load: getDaddyliveSportEntries },
 ];
 const FEATURED_CATALOG_ID = 'fixtures_featured';
 const LIVE_CATEGORY = 'live';
@@ -694,6 +696,7 @@ function byDateItems(items, nowMs) {
 // --- catalog navigation ---
 
 const FOOTBALL = { id: 'football', name: 'Football' };
+const AMERICAN_FOOTBALL = { id: 'american-football', name: 'American Football' };
 // TODO(asian-games-2026): Remove the Asian Games Home shelf below and the
 // `fixtures` `all` catalog registration from both manifest files after the
 // event concludes.
@@ -721,10 +724,14 @@ const SPORT_SECTION_ORDER = [
   HOCKEY,
   BASEBALL,
   TABLE_TENNIS,
+  AMERICAN_FOOTBALL,
 ];
 
 function sportIdOf(name) {
   const value = `${name || ''}`.trim().toLowerCase();
+  if (/american football|\bnfl\b|\bcfl\b|ncaa football/.test(value)) {
+    return AMERICAN_FOOTBALL.id;
+  }
   if (value.includes('football') || value.includes('soccer')) {
     return FOOTBALL.id;
   }
@@ -1080,6 +1087,21 @@ const PROMINENT_FOOTBALL_LEAGUE_ROWS = [
     title: 'Ligue 1',
     match: /^(?:french )?ligue 1$/i,
   },
+  {
+    id: 'uefa-nations-league',
+    title: 'UEFA Nations League',
+    match: /^UEFA Nations League(?:\s+[A-D])?$/i,
+  },
+  {
+    id: 'international-friendlies',
+    title: 'International Friendlies',
+    match: /^(?:international )?friendlies$/i,
+  },
+  {
+    id: 'fifa-asean-cup',
+    title: 'FIFA ASEAN Cup',
+    match: /^FIFA ASEAN Cup$/i,
+  },
 ];
 
 function footballSportSections(footballItems, providerOnlyItems) {
@@ -1111,7 +1133,7 @@ function footballSportSections(footballItems, providerOnlyItems) {
   if (otherItems.length > 0) {
     sections.push({
       id: 'sport:football:other-leagues',
-      title: 'Other Leagues',
+      title: 'Other League',
       items: otherItems,
     });
   }
@@ -1255,6 +1277,15 @@ async function getStreamedPkSportEntries(nowMs) {
   if (typeof globalThis.__streamedpkSportEntries !== 'function') return [];
   try {
     return await globalThis.__streamedpkSportEntries(nowMs);
+  } catch (_) {
+    return [];
+  }
+}
+
+async function getDaddyliveSportEntries(nowMs) {
+  if (typeof globalThis.__daddyliveSportEntries !== 'function') return [];
+  try {
+    return await globalThis.__daddyliveSportEntries(nowMs);
   } catch (_) {
     return [];
   }
@@ -1692,6 +1723,7 @@ function buildPage(
   }
 
   if (query.catalogId === SPORT_CATALOG_ID) {
+    const today = jakartaDayIndex(nowMs);
     const items = footballCatalogItems(
       matches,
       providerEntries,
@@ -1699,12 +1731,15 @@ function buildPage(
       brandingByLeague,
       false,
       knownFotmobMatches,
-    ).filter((item) => !excludeEnded || item.schedule?.state !== 'ended');
+    ).filter((item) => {
+      const startsAt = Date.parse(item.schedule?.startsAt);
+      const day = Number.isFinite(startsAt) ? jakartaDayIndex(startsAt) : null;
+      return item.schedule?.state !== 'ended' &&
+        day != null && day >= today && day <= today + 1;
+    });
     return {
-      sections: items.length === 0
-        ? []
-        : [{ id: 'sport:football', title: FOOTBALL.name, items }],
-      subCategories,
+      sections: footballSportSections(items.filter(isFotmobItem), []),
+      subCategories: [],
     };
   }
 
@@ -1785,21 +1820,11 @@ async function fixturesCatalog(query) {
   );
   if (providerSportIndex !== -1) {
     const source = PROVIDER_SPORT_CATALOGS[providerSportIndex];
-    const higherPrioritySources = PROVIDER_SPORT_CATALOGS.slice(
-      0,
-      providerSportIndex,
-    );
-    const [entries, fotmobMatches, ...higherPriorityEntries] = await Promise.all([
-      source.load(nowMs),
-      fetchFixturesMemo(nowMs).catch(() => []),
-      ...higherPrioritySources.map((catalog) => catalog.load(nowMs)),
-    ]);
+    const entries = await source.load(nowMs);
     return buildProviderSportPage(
       query,
       source,
       entries,
-      higherPriorityEntries.flat(),
-      fotmobMatches,
       nowMs,
     );
   }
@@ -1811,7 +1836,8 @@ async function fixturesCatalog(query) {
     ]);
     matches = matches
       .filter((match) => !isWomenMatch(match) && isRelevantMatch(match, nowMs));
-    matches = prioritizeTopClubMatches(filterPopularMatches(matches, popularLeagues));
+    matches = filterPopularMatches(matches, popularLeagues);
+    matches = prioritizeTopClubMatches(matches);
     const brandingByLeague = await leagueBrandingFor(matches);
     return buildPage(query, matches, [], nowMs, brandingByLeague, true, matches);
   }
@@ -1819,17 +1845,9 @@ async function fixturesCatalog(query) {
   let [
     matches,
     popularLeagues,
-    roxieEntries,
-    timstreamsEntries,
-    streamedPkEntries,
   ] = await Promise.all([
-    // Canonical FotMob metadata is preferred, but provider-only shelves such
-    // as FCTV Asian Games must remain usable when FotMob has a DNS/HTTP outage.
     fetchFixturesMemo(nowMs).catch(() => []),
     fetchPopularLeaguesMemo().catch(() => []),
-    getRoxieSportEntries(nowMs),
-    getTimstreamsSportEntries(nowMs),
-    getStreamedPkSportEntries(nowMs),
   ]);
   // Keep the complete FotMob feed as the identity authority for provider
   // dedupe. Finished matches remain available to schedule, but a stale
@@ -1846,19 +1864,10 @@ async function fixturesCatalog(query) {
   const knownFotmobMatches = allFotmobMatches;
   const brandingByLeague = await leagueBrandingFor(matches);
 
-  let providerEntries = await getCricfySportEntries(nowMs);
-  const fctvEntries = await getFctvSportEntries(nowMs);
-  providerEntries = dedupeProviderEntries([
-    ...providerEntries,
-    ...fctvEntries,
-    ...roxieEntries,
-    ...timstreamsEntries,
-    ...streamedPkEntries,
-  ], nowMs);
   return buildPage(
     query,
     matches,
-    providerEntries,
+    [],
     nowMs,
     brandingByLeague,
     true,
@@ -1870,51 +1879,42 @@ function buildProviderSportPage(
   query,
   source,
   providerEntries,
-  higherPriorityEntries,
-  fotmobMatches,
   nowMs,
 ) {
   const normalizedEntries = providerEntries
     .map((entry) => normalizeProviderEntry(entry, nowMs))
-    .filter((entry) => entry.item?.schedule?.state !== 'ended');
-  const higherPriorityIndex = providerEntriesIndex(
-    higherPriorityEntries
-      .map((entry) => normalizeProviderEntry(entry, nowMs))
-      .filter((entry) => entry.item?.schedule?.state !== 'ended'),
-  );
-  const fotmobIndex = providerEntriesIndex(
-    fotmobMatches
-      .map((match) => toMediaItem(match, nowMs, null))
-      .filter((item) => item != null)
-      .map((item) => ({
-        sportId: FOOTBALL.id,
-        sportName: FOOTBALL.name,
-        item,
-      })),
-  );
+    .filter((entry) => entry.item?.schedule?.state !== 'ended')
+    .filter((entry) =>
+      sportIdOf(entry.sportName || entry.sportId) !== FOOTBALL.id);
   const ownIndex = providerEntriesIndex([]);
-  const items = [];
+  const grouped = new Map();
   for (const entry of normalizedEntries) {
-    const duplicatesEarlier = providerEventCandidates(
-      higherPriorityIndex,
-      entry,
-    ).some((candidate) => sameProviderEvent(candidate, entry));
-    const alreadyInFotmob = providerEventCandidates(fotmobIndex, entry)
-      .some((candidate) => sameProviderEvent(candidate, entry));
-    if (duplicatesEarlier || alreadyInFotmob) continue;
     const duplicatesSelf = providerEventCandidates(ownIndex, entry)
       .some((candidate) => sameProviderEvent(candidate, entry));
     if (duplicatesSelf) continue;
     addProviderEventToIndex(ownIndex, entry);
-    items.push(entry.item);
+    const rawName = `${entry.sportName || entry.sportId || ''}`.trim();
+    const sportId = sportIdOf(rawName);
+    const key = sportId || rawName.toLowerCase() || 'other-sports';
+    let section = grouped.get(key);
+    if (section == null) {
+      section = {
+        id: `sport:${source.id}:${key.replace(/[^a-z0-9-]+/g, '-')}`,
+        title: sportId ? sportNameOf(rawName) : rawName || 'Other Sports',
+        items: [],
+      };
+      grouped.set(key, section);
+    }
+    section.items.push(entry.item);
   }
-  items.sort((first, second) =>
-    Date.parse(first.schedule?.startsAt) -
-    Date.parse(second.schedule?.startsAt));
+  const sections = [...grouped.values()];
+  for (const section of sections) {
+    section.items.sort((first, second) =>
+      Date.parse(first.schedule?.startsAt) -
+      Date.parse(second.schedule?.startsAt));
+  }
   return {
-    sections: items.length === 0
-      ? []
-      : [{ id: `sport:provider:${source.id}`, title: source.name, items }],
+    sections,
     subCategories: [],
   };
 }
@@ -1972,6 +1972,7 @@ const FCTV_API_PATH_PREFIX =
   globalThis.__fctvApiPathPrefix ||
   '/sfverbb3711113fd545045e75134e6c1bdc41ee477e';
 const FCTV_PROVIDER_ID = 'nimora.fctv';
+const FCTV_CATALOG_PROVIDER_ID = 'nimora.fctv.catalog';
 const FCTV_PROVIDER_KEY = 'fctv';
 const FCTV_SITE_ORIGIN =
   globalThis.__fctvSiteOrigin || 'https://www.fctv33hd.cc';
@@ -2418,7 +2419,7 @@ function fctvEntryToCatalog(match, nowMs) {
   const item = {
     ref: {
       extensionId: globalThis.__nimoraExtensionId || 'nimora',
-      providerId: 'nimora.matches',
+      providerId: FCTV_CATALOG_PROVIDER_ID,
       id: `fctv:${match.matchId}:${match.sportType}`,
     },
     kind: 'event',
@@ -23919,10 +23920,10 @@ globalThis.__streamProviders.push({
   resolve: streamedpkResolve,
 });
 
-// DaddyLive is a stream-only provider. FotMob/Nimora owns event identity,
-// schedule, participants, and status; this module contributes channel sources
-// only after a user selects a FotMob event.
+// DaddyLive keeps a separate catalog identity and stream provider so users
+// can enable its schedule without enabling playback, or vice versa.
 const DADDYLIVE_PROVIDER_ID = 'nimora.daddylive';
+const DADDYLIVE_CATALOG_PROVIDER_ID = 'nimora.daddylive.catalog';
 const DADDYLIVE_PROVIDER_KEY = 'daddylive';
 const DADDYLIVE_ORIGIN = globalThis.__daddyliveOrigin || 'https://dlive.sx';
 const DADDYLIVE_PLAYERS = ['stream', 'cast', 'watch', 'plus', 'casting', 'player'];
@@ -24055,6 +24056,25 @@ function daddyliveScheduleEventContainer(node) {
   }
   return null;
 }
+function daddyliveScheduleDate(html, nowMs = Date.now()) {
+  const months = {
+    jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+    jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+  };
+  const date = daddyliveText(html).match(
+    /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+(\d{1,2})(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})\b/i,
+  );
+  if (date) {
+    return Date.UTC(Number(date[3]), months[date[2].slice(0, 3).toLowerCase()], Number(date[1]));
+  }
+  const today = new Date(nowMs);
+  return Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+}
+function daddyliveScheduleStart(dateMs, time) {
+  const match = daddyliveText(time).match(/^(\d{1,2}):([0-5]\d)$/);
+  if (!match) return null;
+  return dateMs + (Number(match[1]) * 60 + Number(match[2])) * 60 * 1000;
+}
 function daddyliveParseSchedule(html) {
   const root = daddyliveParseHtml(html);
   const nodes = [];
@@ -24091,6 +24111,21 @@ function daddyliveParseSchedule(html) {
   const headings = nodes.filter((node) => /^h[1-6]$/.test(node.tag))
     .map((node) => ({node, text: daddyliveNodeText(node, memo)}))
     .filter((entry) => entry.text && entry.text.length < 100 && !/schedule time|^schedule$/i.test(entry.text));
+  const scheduleDateMs = daddyliveScheduleDate(html);
+  const categoryFor = (container) => {
+    for (let parent = container; parent && parent.tag !== 'root'; parent = parent.parent) {
+      if (!/(^|\s)schedule__category(?:\s|$)/.test(parent.attrs.class || '')) continue;
+      const descendants = [];
+      daddyliveWalk(parent, descendants);
+      const label = descendants.find((node) =>
+        /(^|\s)card__meta(?:\s|$)/.test(node.attrs.class || ''));
+      const text = label && daddyliveNodeText(label, memo);
+      if (text) return text;
+    }
+    const position = order.get(container) || 0;
+    return headings.filter((heading) => (order.get(heading.node) || 0) < position)
+      .slice(-1)[0]?.text || 'Schedule';
+  };
   const events = [];
   for (const [container, group] of groups) {
     const channels = [...new Map(group.map((link) => [link.id, link])).values()]
@@ -24101,11 +24136,15 @@ function daddyliveParseSchedule(html) {
     for (const name of [...new Set(channels.map((channel) => channel.name))].sort((a, b) => b.length - a.length)) {
       title = title.replace(name, ' ');
     }
-    title = title.replace(/[|·•:–—-]+/g, ' ').replace(/\s+/g, ' ').trim();
-    const position = order.get(container) || 0;
-    let category = '';
-    for (const heading of headings) if ((order.get(heading.node) || 0) < position) category = heading.text;
-    events.push({category: category || 'Schedule', time, title, channels});
+    title = title.replace(/[|·•–—-]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const category = categoryFor(container);
+    events.push({
+      category: category || 'Schedule',
+      time,
+      startsAt: daddyliveScheduleStart(scheduleDateMs, time),
+      title,
+      channels,
+    });
   }
   return events.filter((event) => event.channels.length > 0);
 }
@@ -24125,6 +24164,106 @@ async function daddyliveFetchSchedule() {
   finally { daddyliveSchedulePending = null; }
 }
 
+function daddyliveRawSides(value) {
+  const match = daddyliveText(value).split(/\s*:\s*/).pop()
+    .match(/^(.+?)\s+(?:vs?\.?|@)\s+(.+)$/i);
+  return match ? [match[1].trim(), match[2].trim()] : [];
+}
+function daddyliveSportName(category, title) {
+  const value = `${category || ''} ${title || ''}`.toLowerCase();
+  const categories = [
+    {name: 'American Football', match: /american football|\bnfl\b|\bcfl\b|ncaa football/},
+    {name: 'Table Tennis', match: /table tennis|ping pong/},
+    {name: 'Cricket', match: /cricket|\bipl\b/},
+    {name: 'Tennis', match: /tennis|\batp\b|\bwta\b/},
+    {name: 'Motorsport', match: /motorsport|formula\s*1|\bf1\b|motogp|nascar|\bwrc\b|racing/},
+    {name: 'Fighting', match: /boxing|\bmma\b|\bufc\b|wrestling|\bwwe\b|combat|kickboxing/},
+    {name: 'Badminton', match: /badminton|\bbwf\b/},
+    {name: 'Basketball', match: /basketball|\bnba\b|\bwnba\b/},
+    {name: 'Volleyball', match: /volleyball/},
+    {name: 'Hockey', match: /hockey|\bnhl\b|\baahl\b/},
+    {name: 'Baseball', match: /baseball|\bmlb\b|\bnpb\b|softball/},
+    {name: 'Golf', match: /golf/},
+    {name: 'Rugby', match: /rugby/},
+    {name: 'Snooker', match: /snooker|pool|billiards/},
+    {name: 'Cycling', match: /cycling|cyclist/},
+    {name: 'Handball', match: /handball/},
+    {name: 'Horse Racing', match: /horse racing/},
+    {name: 'Athletics', match: /athletics|track and field/},
+    {name: 'Football', match: /soccer|football|premier league|premiership|championship|league one|league two|la liga|serie a|bundesliga|ligue 1|champions league|europa league|conference league|fa cup|efl cup|world cup|\bfifa\b|\bmls\b|\bnwsl\b|\busl\b|eredivisie|primeira liga|liga portugal|copa del rey|coppa italia/},
+  ];
+  const selected = categories.find((entry) => entry.match.test(value));
+  if (selected) return selected.name;
+  const rawCategory = daddyliveText(category);
+  if (!rawCategory || /^(?:schedule|upcoming events|live events|tv shows|big brother)$/i.test(rawCategory)) return null;
+  return rawCategory;
+}
+function daddyliveCatalogEventId(event) {
+  const identity = {
+    category: event.category,
+    time: event.time,
+    title: event.title,
+    channels: event.channels.map((channel) => String(channel.id)).sort(),
+  };
+  return `daddylive:event:${daddyliveEncode(identity)}`;
+}
+function daddyliveFindCatalogEvent(events, item) {
+  const id = daddyliveText(item && item.ref && item.ref.id);
+  if (!id.startsWith('daddylive:event:')) return null;
+  try {
+    const wanted = JSON.stringify(daddyliveDecode(id.slice('daddylive:event:'.length)));
+    return events.find((event) => JSON.stringify({
+      category: event.category,
+      time: event.time,
+      title: event.title,
+      channels: event.channels.map((channel) => String(channel.id)).sort(),
+    }) === wanted) || null;
+  } catch (_) {
+    return null;
+  }
+}
+function daddyliveEventDurationMs(sportName) {
+  if (/fighting|cricket/i.test(sportName)) return 4 * 60 * 60 * 1000;
+  if (/motorsport|american football|baseball/i.test(sportName)) return 3.5 * 60 * 60 * 1000;
+  if (/tennis|hockey/i.test(sportName)) return 3 * 60 * 60 * 1000;
+  return 2.5 * 60 * 60 * 1000;
+}
+async function daddyliveSportEntries(nowMs = Date.now()) {
+  const events = await daddyliveFetchSchedule();
+  const entries = [];
+  for (const event of events) {
+    const sportName = daddyliveSportName(event.category, event.title);
+    const sides = daddyliveRawSides(event.title);
+    const startsAt = Number(event.startsAt);
+    if (sportName == null || sportName === 'Football' ||
+        !Number.isFinite(startsAt) || event.channels.length === 0) continue;
+    const endsAt = startsAt + daddyliveEventDurationMs(sportName);
+    if (nowMs >= endsAt || startsAt - nowMs > 7 * 24 * 60 * 60 * 1000) continue;
+    const live = nowMs >= startsAt;
+    const title = sides.length === 2 ? `${sides[0]} vs ${sides[1]}` : event.title;
+    const item = {
+      ref: {
+        extensionId: globalThis.__nimoraExtensionId || 'nimora',
+        providerId: DADDYLIVE_CATALOG_PROVIDER_ID,
+        id: daddyliveCatalogEventId(event),
+      },
+      kind: 'event',
+      title,
+      subtitle: event.category,
+      schedule: {
+        startsAt: new Date(startsAt).toISOString(),
+        endsAt: new Date(endsAt).toISOString(),
+        state: live ? 'live' : 'scheduled',
+      },
+      ...(sides.length === 2 ? {
+        participants: sides.map((name) => ({name})),
+      } : {}),
+    };
+    entries.push({sportId: sportName, sportName, live, item});
+  }
+  return entries;
+}
+
 function daddyliveNormalizeTeam(value) {
   let text = daddyliveDecodeEntities(value).toLowerCase();
   try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (_) {}
@@ -24137,8 +24276,7 @@ function daddyliveNormalizeTeam(value) {
   return text.replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 function daddyliveSides(value) {
-  const parts = daddyliveText(value).split(/\s+(?:vs?\.?|@)\s+/i);
-  return parts.length === 2 ? parts.map(daddyliveNormalizeTeam) : [];
+  return daddyliveRawSides(value).map(daddyliveNormalizeTeam);
 }
 function daddyliveEventSides(item) {
   if (Array.isArray(item && item.participants) && item.participants.length === 2) {
@@ -24181,9 +24319,13 @@ function daddyliveSourceId(channel) {
 async function daddyliveSources(args) {
   if (args.enabledProviders && !args.enabledProviders.includes(DADDYLIVE_PROVIDER_ID)) return {sources: []};
   const item = args.item || {};
-  if (!item.ref || item.ref.providerId !== 'nimora.matches' || item.kind !== 'event') return {sources: []};
+  if (!item.ref ||
+      !['nimora.matches', DADDYLIVE_CATALOG_PROVIDER_ID].includes(item.ref.providerId) ||
+      item.kind !== 'event') return {sources: []};
   try {
-    const event = daddyliveFindEvent(await daddyliveFetchSchedule(), item);
+    const events = await daddyliveFetchSchedule();
+    const event = daddyliveFindCatalogEvent(events, item) ||
+      daddyliveFindEvent(events, item);
     if (!event) return {sources: []};
     // Keep the complete event list available. The bounded probe below still
     // opens only three channels at a time and stops as soon as three valid
@@ -24438,6 +24580,7 @@ async function daddyliveResolve(sourceId) {
 
 globalThis.__streamProviders = globalThis.__streamProviders || [];
 globalThis.__streamProviders.push({providerKey: DADDYLIVE_PROVIDER_KEY, sources: daddyliveSources, resolve: daddyliveResolve});
+globalThis.__daddyliveSportEntries = daddyliveSportEntries;
 
 // League channel catalog.
 //
