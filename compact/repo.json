@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.16",
+      "version": "2.0.17",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.17: improved Other Sports loading by skipping unused football feed requests and fetching sport providers concurrently.",
         "Nimora Compact 2.0.16: renamed the Streamed provider and source labels from Streamed.pk to Streamed.",
         "Nimora Compact 2.0.15: shortened Streamed.pk source labels to language and quality, using source type only for duplicate labels.",
         "Nimora Compact 2.0.14: fixed Streamed.pk embed resolution with a headless WebView HLS capture fallback.",
@@ -139,7 +140,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "7cf3ebd453b5d6dc308e5343740b0a5399d5ef31983396c3941bfdadd3a31e02"
+      "bundleSha256": "49974ef3056b94c13304c66922e996585145ac2881747b1c1f4cf6e633a6aca4"
     }
   ]
 }
