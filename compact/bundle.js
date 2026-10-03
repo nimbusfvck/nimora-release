@@ -19912,10 +19912,10 @@ globalThis.__streamProviders.push({
 // for football, while TimStreams can still contribute other live sports.
 
 const TIMSTREAMS_API_URL =
-  globalThis.__timstreamsApiUrl || 'https://timst.cfd/api/live-upcoming';
+  globalThis.__timstreamsApiUrl || 'https://timst.top/api/live-upcoming';
 const TIMSTREAMS_PROVIDER_ID = 'nimora.timstreams';
 const TIMSTREAMS_PROVIDER_KEY = 'timstreams';
-const TIMSTREAMS_ORIGIN = 'https://timst.cfd';
+const TIMSTREAMS_ORIGIN = globalThis.__timstreamsOrigin || 'https://timst.top';
 const TIMSTREAMS_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36';
