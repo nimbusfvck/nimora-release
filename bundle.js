@@ -1663,7 +1663,7 @@ const FCTV_API_PATH_PREFIX =
 const FCTV_PROVIDER_ID = 'nimora.fctv';
 const FCTV_PROVIDER_KEY = 'fctv';
 const FCTV_SITE_ORIGIN =
-  globalThis.__fctvSiteOrigin || 'https://www.fctv33hd.pw';
+  globalThis.__fctvSiteOrigin || 'https://www.fctv33hd.cc';
 const FCTV_LOGOS_BASE =
   globalThis.__fctvLogosBaseUrl || 'https://logos1.tcllu137fien.ru';
 const FCTV_ASIAN_GAMES_LOGOS_BASE =
