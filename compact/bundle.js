@@ -1565,43 +1565,20 @@ async function fixturesCatalog(query) {
   // and the other catalog entries are judged against the same "now".
   const nowMs = Date.now();
 
-  // A selected non-football shelf is built entirely from provider entries.
-  // Avoid making it wait for FotMob's five-date football feed and popular
-  // league list; those requests are only needed for the unfiltered Sport page
-  // and the Football shelf. `sport:asian-games` is provider-backed as well.
-  const subCategory = typeof query?.subCategory === 'string'
-    ? query.subCategory.replace(/^sport:/, '')
-    : null;
-  const selectedSport = subCategory == null
-    ? null
-    : subCategory === ASIAN_GAMES.id
-      ? ASIAN_GAMES.id
-      : sportIdOf(subCategory);
-  const needsFootballMetadata =
-    selectedSport == null || selectedSport === FOOTBALL.id;
-
   let [
     matches,
     popularLeagues,
     roxieEntries,
     timstreamsEntries,
     streamedPkEntries,
-    cricfyEntries,
-    fctvEntries,
   ] = await Promise.all([
     // Canonical FotMob metadata is preferred, but provider-only shelves such
     // as FCTV Asian Games must remain usable when FotMob has a DNS/HTTP outage.
-    needsFootballMetadata
-      ? fetchFixturesMemo(nowMs).catch(() => [])
-      : Promise.resolve([]),
-    needsFootballMetadata
-      ? fetchPopularLeaguesMemo().catch(() => [])
-      : Promise.resolve([]),
+    fetchFixturesMemo(nowMs).catch(() => []),
+    fetchPopularLeaguesMemo().catch(() => []),
     getRoxieSportEntries(nowMs),
     getTimstreamsSportEntries(nowMs),
     getStreamedPkSportEntries(nowMs),
-    getCricfySportEntries(nowMs),
-    getFctvSportEntries(nowMs),
   ]);
   // Keep the complete FotMob feed as the identity authority for provider
   // dedupe. Finished matches remain available to schedule, but a stale
@@ -1618,8 +1595,10 @@ async function fixturesCatalog(query) {
   const knownFotmobMatches = allFotmobMatches;
   const brandingByLeague = await leagueBrandingFor(matches);
 
-  const providerEntries = dedupeProviderEntries([
-    ...cricfyEntries,
+  let providerEntries = await getCricfySportEntries(nowMs);
+  const fctvEntries = await getFctvSportEntries(nowMs);
+  providerEntries = dedupeProviderEntries([
+    ...providerEntries,
     ...fctvEntries,
     ...roxieEntries,
     ...timstreamsEntries,
