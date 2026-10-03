@@ -33,6 +33,7 @@ const CURATED_INCLUDED_LEAGUE_IDS = new Set([
   '9806', '9807', '9808', '9809', // UEFA Nations League A-D
   '13287', // FIFA ASEAN Cup
 ]);
+const UEFA_NATIONS_LEAGUE_IDS = new Set(['9806', '9807', '9808', '9809']);
 const CURATED_EXCLUDED_LEAGUE_IDS = new Set(['9741']);
 const CURATED_EXCLUDED_LEAGUE_NAMES = /\bUEFA Youth League\b/i;
 const FOTMOB_USER_AGENT =
@@ -229,6 +230,13 @@ function leagueIdKey(value) {
 
 function brandingLeagueId(match) {
   return leagueIdKey(match.primaryLeagueId) || leagueIdKey(match.leagueId);
+}
+
+function footballSectionLeagueName(match) {
+  if (footballLeagueIds(match).some((id) => UEFA_NATIONS_LEAGUE_IDS.has(id))) {
+    return 'UEFA Nations League';
+  }
+  return match.leagueName;
 }
 
 function footballLeagueIds(match) {
@@ -604,7 +612,8 @@ function toMediaItem(match, nowMs, brandingByLeague) {
   const editorialRating = footballEditorialRating(match);
   if (editorialRating != null) item.rating = editorialRating;
 
-  if (match.leagueName != null) item.subtitle = match.leagueName;
+  const sectionLeagueName = footballSectionLeagueName(match);
+  if (sectionLeagueName != null) item.subtitle = sectionLeagueName;
   const participants = fotmobParticipantsOf(match);
   if (participants.length > 0) item.participants = participants;
   const branding = brandingByLeague?.get(brandingLeagueId(match));
@@ -1091,7 +1100,7 @@ const PROMINENT_FOOTBALL_LEAGUE_ROWS = [
   {
     id: 'uefa-nations-league',
     title: 'UEFA Nations League',
-    match: /^UEFA Nations League(?:\s+[A-D])?$/i,
+    match: /^UEFA Nations League\b.*$/i,
   },
   {
     id: 'international-friendlies',

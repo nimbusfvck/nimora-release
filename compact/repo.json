@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.24",
+      "version": "2.0.25",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.25: fixed UEFA Nations League matches appearing under Other League when FotMob includes a league-tier suffix.",
         "Nimora Compact 2.0.24: added separate FotMob, FCTV, and DaddyLive sports catalogs, curated international football competitions, and fixed DaddyLive schedule parsing.",
         "Nimora Compact 2.0.23: reverted Sport to the provider-based sections from 2.0.21 for lighter loading, with FotMob as Football.",
         "Nimora Compact 2.0.20: split Sport event feeds into independent catalogs so one interrupted provider cannot block the other sports.",
@@ -145,7 +146,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "00278075cb05d2ddd8a0299b5ea03a53c59d4770dd4710b0dae26b41b5f29132"
+      "bundleSha256": "4e52c69211300077e3766d4007f1295e31e99a290be62afd365a6878ed0c5725"
     }
   ]
 }
