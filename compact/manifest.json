@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "2.0.22",
+  "version": "2.0.23",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -35,71 +35,29 @@
           "display": "row"
         },
         {
-          "id": "fixtures_sport_tennis",
-          "name": "Tennis",
+          "id": "fixtures_sport_cricfy",
+          "name": "Cricfy",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
-          "id": "fixtures_sport_motorsport",
-          "name": "Motorsport",
+          "id": "fixtures_sport_roxie",
+          "name": "RoxieStreams",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
-          "id": "fixtures_sport_fighting",
-          "name": "Fighting",
+          "id": "fixtures_sport_timstreams",
+          "name": "TimStreams",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"
         },
         {
-          "id": "fixtures_sport_badminton",
-          "name": "Badminton",
-          "categories": ["sport"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
-        {
-          "id": "fixtures_sport_cricket",
-          "name": "Cricket",
-          "categories": ["sport"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
-        {
-          "id": "fixtures_sport_basketball",
-          "name": "Basketball",
-          "categories": ["sport"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
-        {
-          "id": "fixtures_sport_volleyball",
-          "name": "Volleyball",
-          "categories": ["sport"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
-        {
-          "id": "fixtures_sport_hockey",
-          "name": "Hockey",
-          "categories": ["sport"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
-        {
-          "id": "fixtures_sport_baseball",
-          "name": "Baseball",
-          "categories": ["sport"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
-        {
-          "id": "fixtures_sport_table-tennis",
-          "name": "Table Tennis",
+          "id": "fixtures_sport_streamed",
+          "name": "Streamed",
           "categories": ["sport"],
           "kind": "liveEvent",
           "display": "row"

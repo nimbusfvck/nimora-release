@@ -37,19 +37,19 @@ const TIME_ZONE = 'Asia/Jakarta';
 const EXTENSION_ID = globalThis.__nimoraExtensionId || 'nimora';
 const PROVIDER_ID = 'nimora.matches';
 
-// Main match catalogs plus independently loaded sport-category catalogs.
+// The one catalog this extension declares, and the categories inside it.
 // `live` is based on FotMob's match status; `schedule` is the daily match
 // schedule. `all` can expose provider-owned editorial shelves such as Asian
 // Games, while the dedicated `live` catalog remains the live timeline.
 const CATALOG_ID = 'fixtures';
 const LIVE_CATALOG_ID = 'fixtures_live';
 const SPORT_CATALOG_ID = 'fixtures_sport';
-const PROVIDER_SPORT_SOURCES = [
-  getCricfySportEntries,
-  getFctvSportEntries,
-  getRoxieSportEntries,
-  getTimstreamsSportEntries,
-  getStreamedPkSportEntries,
+const PROVIDER_SPORT_CATALOGS = [
+  { id: 'fixtures_sport_cricfy', name: 'Cricfy', load: getCricfySportEntries },
+  { id: 'fixtures_sport_fctv', name: 'FCTV', load: getFctvSportEntries },
+  { id: 'fixtures_sport_roxie', name: 'RoxieStreams', load: getRoxieSportEntries },
+  { id: 'fixtures_sport_timstreams', name: 'TimStreams', load: getTimstreamsSportEntries },
+  { id: 'fixtures_sport_streamed', name: 'Streamed', load: getStreamedPkSportEntries },
 ];
 const FEATURED_CATALOG_ID = 'fixtures_featured';
 const LIVE_CATEGORY = 'live';
@@ -702,7 +702,6 @@ const TENNIS = { id: 'tennis', name: 'Tennis' };
 const MOTORSPORT = { id: 'motorsport', name: 'Motorsport' };
 const FIGHTING = { id: 'fighting', name: 'Fighting' };
 const BADMINTON = { id: 'badminton', name: 'Badminton' };
-const CRICKET = { id: 'cricket', name: 'Cricket' };
 const BASKETBALL = { id: 'basketball', name: 'Basketball' };
 const VOLLEYBALL = { id: 'volleyball', name: 'Volleyball' };
 const HOCKEY = { id: 'hockey', name: 'Hockey' };
@@ -717,22 +716,12 @@ const SPORT_SECTION_ORDER = [
   MOTORSPORT,
   FIGHTING,
   BADMINTON,
-  CRICKET,
   BASKETBALL,
   VOLLEYBALL,
   HOCKEY,
   BASEBALL,
   TABLE_TENNIS,
 ];
-
-const SPORT_CATEGORY_CATALOGS = SPORT_SECTION_ORDER
-  .filter((sport) => sport.id !== ASIAN_GAMES.id)
-  .map((sport) => ({
-    id: sport.id === FOOTBALL.id
-      ? SPORT_CATALOG_ID
-      : `fixtures_sport_${sport.id}`,
-    sport,
-  }));
 
 function sportIdOf(name) {
   const value = `${name || ''}`.trim().toLowerCase();
@@ -769,9 +758,6 @@ function sportIdOf(name) {
   }
   if (value.includes('badminton') || value.includes('bwf')) {
     return BADMINTON.id;
-  }
-  if (value.includes('cricket') || /\bipl\b/.test(value)) {
-    return CRICKET.id;
   }
   if (value.includes('basketball') || /\bnba\b|\bwnba\b/.test(value)) {
     return BASKETBALL.id;
@@ -1794,11 +1780,40 @@ async function fixturesCatalog(query) {
   // and the other catalog entries are judged against the same "now".
   const nowMs = Date.now();
 
-  const sportCatalog = SPORT_CATEGORY_CATALOGS.find(
+  const providerSportIndex = PROVIDER_SPORT_CATALOGS.findIndex(
     (catalog) => catalog.id === query.catalogId,
   );
-  if (sportCatalog != null) {
-    return loadSportCategoryCatalog(sportCatalog.sport, nowMs);
+  if (providerSportIndex !== -1) {
+    const source = PROVIDER_SPORT_CATALOGS[providerSportIndex];
+    const higherPrioritySources = PROVIDER_SPORT_CATALOGS.slice(
+      0,
+      providerSportIndex,
+    );
+    const [entries, fotmobMatches, ...higherPriorityEntries] = await Promise.all([
+      source.load(nowMs),
+      fetchFixturesMemo(nowMs).catch(() => []),
+      ...higherPrioritySources.map((catalog) => catalog.load(nowMs)),
+    ]);
+    return buildProviderSportPage(
+      query,
+      source,
+      entries,
+      higherPriorityEntries.flat(),
+      fotmobMatches,
+      nowMs,
+    );
+  }
+
+  if (query.catalogId === SPORT_CATALOG_ID) {
+    let [matches, popularLeagues] = await Promise.all([
+      fetchFixturesMemo(nowMs).catch(() => []),
+      fetchPopularLeaguesMemo().catch(() => []),
+    ]);
+    matches = matches
+      .filter((match) => !isWomenMatch(match) && isRelevantMatch(match, nowMs));
+    matches = prioritizeTopClubMatches(filterPopularMatches(matches, popularLeagues));
+    const brandingByLeague = await leagueBrandingFor(matches);
+    return buildPage(query, matches, [], nowMs, brandingByLeague, true, matches);
   }
 
   let [
@@ -1851,58 +1866,55 @@ async function fixturesCatalog(query) {
   );
 }
 
-async function loadSportCategoryCatalog(sport, nowMs) {
-  const providerResults = await Promise.all(
-    PROVIDER_SPORT_SOURCES.map(async (load) => {
-      try {
-        return await load(nowMs);
-      } catch (_) {
-        return [];
-      }
-    }),
+function buildProviderSportPage(
+  query,
+  source,
+  providerEntries,
+  higherPriorityEntries,
+  fotmobMatches,
+  nowMs,
+) {
+  const normalizedEntries = providerEntries
+    .map((entry) => normalizeProviderEntry(entry, nowMs))
+    .filter((entry) => entry.item?.schedule?.state !== 'ended');
+  const higherPriorityIndex = providerEntriesIndex(
+    higherPriorityEntries
+      .map((entry) => normalizeProviderEntry(entry, nowMs))
+      .filter((entry) => entry.item?.schedule?.state !== 'ended'),
   );
-  const providerEntries = dedupeProviderEntries(
-    providerResults.flat(),
-    nowMs,
-  ).filter((entry) => entry.item?.schedule?.state !== 'ended');
-
-  let items;
-  if (sport.id === FOOTBALL.id) {
-    const [allFotmobMatches, popularLeagues] = await Promise.all([
-      fetchFixturesMemo(nowMs).catch(() => []),
-      fetchPopularLeaguesMemo().catch(() => []),
-    ]);
-    const matches = prioritizeTopClubMatches(
-      filterPopularMatches(
-        allFotmobMatches.filter(
-          (match) => !isWomenMatch(match) && isRelevantMatch(match, nowMs),
-        ),
-        popularLeagues,
-      ),
-    );
-    const brandingByLeague = await leagueBrandingFor(matches);
-    items = footballCatalogItems(
-      matches,
-      providerEntries,
-      nowMs,
-      brandingByLeague,
-      false,
-      allFotmobMatches,
-    ).filter((item) => item.schedule?.state !== 'ended');
-  } else {
-    items = providerEntries
-      .filter((entry) =>
-        sportIdOf(entry.sportName || entry.sportId) === sport.id)
-      .map((entry) => entry.item)
-      .sort((first, second) =>
-        Date.parse(first.schedule?.startsAt) -
-        Date.parse(second.schedule?.startsAt));
+  const fotmobIndex = providerEntriesIndex(
+    fotmobMatches
+      .map((match) => toMediaItem(match, nowMs, null))
+      .filter((item) => item != null)
+      .map((item) => ({
+        sportId: FOOTBALL.id,
+        sportName: FOOTBALL.name,
+        item,
+      })),
+  );
+  const ownIndex = providerEntriesIndex([]);
+  const items = [];
+  for (const entry of normalizedEntries) {
+    const duplicatesEarlier = providerEventCandidates(
+      higherPriorityIndex,
+      entry,
+    ).some((candidate) => sameProviderEvent(candidate, entry));
+    const alreadyInFotmob = providerEventCandidates(fotmobIndex, entry)
+      .some((candidate) => sameProviderEvent(candidate, entry));
+    if (duplicatesEarlier || alreadyInFotmob) continue;
+    const duplicatesSelf = providerEventCandidates(ownIndex, entry)
+      .some((candidate) => sameProviderEvent(candidate, entry));
+    if (duplicatesSelf) continue;
+    addProviderEventToIndex(ownIndex, entry);
+    items.push(entry.item);
   }
-
+  items.sort((first, second) =>
+    Date.parse(first.schedule?.startsAt) -
+    Date.parse(second.schedule?.startsAt));
   return {
     sections: items.length === 0
       ? []
-      : [{ id: `sport:${sport.id}`, title: sport.name, items }],
+      : [{ id: `sport:provider:${source.id}`, title: source.name, items }],
     subCategories: [],
   };
 }
@@ -1919,9 +1931,13 @@ globalThis.__catalogProviders.push({
   catalogId: LIVE_CATALOG_ID,
   catalog: fixturesCatalog,
 });
-for (const sport of SPORT_CATEGORY_CATALOGS) {
+globalThis.__catalogProviders.push({
+  catalogId: SPORT_CATALOG_ID,
+  catalog: fixturesCatalog,
+});
+for (const source of PROVIDER_SPORT_CATALOGS) {
   globalThis.__catalogProviders.push({
-    catalogId: sport.id,
+    catalogId: source.id,
     catalog: fixturesCatalog,
   });
 }
