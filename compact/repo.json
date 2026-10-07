@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.26",
+      "version": "2.0.27",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.27: removed the FotMob catalog row from Home while keeping the Football and Featured Sports catalogs available.",
         "Nimora Compact 2.0.26: updated the TimStreams catalog API and playback Referer to timst.top.",
         "Nimora Compact 2.0.25: fixed UEFA Nations League matches appearing under Other League when FotMob includes a league-tier suffix.",
         "Nimora Compact 2.0.24: added separate FotMob, FCTV, and DaddyLive sports catalogs, curated international football competitions, and fixed DaddyLive schedule parsing.",
@@ -147,7 +148,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "2c0feb8716902ca7a3d37489169e158de6c581c1e714ef56bad057fb58c68373"
+      "bundleSha256": "fe0508739227012df5d4c80943fd2530b534698fecfd7f17514f0bc2b9f2ba18"
     }
   ]
 }

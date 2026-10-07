@@ -706,8 +706,7 @@ function byDateItems(items, nowMs) {
 
 const FOOTBALL = { id: 'football', name: 'Football' };
 const AMERICAN_FOOTBALL = { id: 'american-football', name: 'American Football' };
-// TODO(asian-games-2026): Remove the Asian Games Home shelf below and the
-// `fixtures` `all` catalog registration from both manifest files after the
+// TODO(asian-games-2026): Remove the Asian Games Home shelf below after the
 // event concludes.
 const ASIAN_GAMES = { id: 'asian-games', name: 'Asian Games 2026' };
 const TENNIS = { id: 'tennis', name: 'Tennis' };

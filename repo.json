@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "2.0.26",
+      "version": "2.0.27",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora 2.0.27: removed the FotMob catalog row from Home while keeping the Football and Featured Sports catalogs available.",
         "Nimora 2.0.26: updated the TimStreams catalog API and playback Referer to timst.top.",
         "Nimora 2.0.25: fixed UEFA Nations League matches appearing under Other League when FotMob includes a league-tier suffix.",
         "Nimora 2.0.24: added separate FotMob, FCTV, and DaddyLive sports catalogs, curated international football competitions, and fixed DaddyLive schedule parsing.",
@@ -287,7 +288,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "db3499f76dd279f303bddbff5187ca13dfdf870e1b54a74cf1ae5c21468e7e39"
+      "bundleSha256": "aec69de4d64b4ff003cd96569968db129a48540814fc7fd0a66e2d86d0ab7b27"
     }
   ]
 }

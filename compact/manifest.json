@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "2.0.26",
+  "version": "2.0.27",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -20,13 +20,6 @@
       "name": "FotMob",
       "roles": ["catalog"],
       "catalogs": [
-        {
-          "id": "fixtures",
-          "name": "FotMob",
-          "categories": ["all"],
-          "kind": "liveEvent",
-          "display": "row"
-        },
         {
           "id": "fixtures_sport",
           "name": "Football Leagues",
