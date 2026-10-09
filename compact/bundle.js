@@ -3667,22 +3667,43 @@ if (!globalThis.__extension.sources) {
       const perProvider = await Promise.all(calls);
       return { sources: perProvider.flatMap((r) => r.sources) };
     }
+    // Prefer VaPlayer when enabled. Keep the fastest non-empty fallback ready
+    // while its discovery settles; this does not validate playback.
+    const preferredIndex = globalThis.__streamProviders.findIndex((provider) =>
+      provider.providerKey === 'vaplayer' &&
+      (!Array.isArray(args.enabledProviders) ||
+        args.enabledProviders.includes('nimora.vaplayer')),
+    );
     return new Promise((resolve) => {
       let remaining = calls.length;
       let returned = false;
-      for (const call of calls) {
+      let preferredPending = preferredIndex >= 0;
+      let fallback = null;
+      if (remaining === 0) { resolve({ sources: [] }); return; }
+      calls.forEach((call, index) => {
         call.then((result) => {
           if (returned) return;
           const sources = Array.isArray(result.sources) ? result.sources : [];
-          if (sources.length > 0) {
-            returned = true;
-            resolve({ sources });
-            return;
-          }
           remaining -= 1;
-          if (remaining === 0) resolve({ sources: [] });
+          if (index === preferredIndex) {
+            preferredPending = false;
+            if (sources.length > 0) {
+              returned = true;
+              resolve({ sources });
+              return;
+            }
+          } else if (sources.length > 0 && fallback === null) {
+            fallback = sources;
+          }
+          if (!preferredPending && fallback !== null) {
+            returned = true;
+            resolve({ sources: fallback });
+          } else if (remaining === 0) {
+            returned = true;
+            resolve({ sources: [] });
+          }
         });
-      }
+      });
     });
   };
   globalThis.__extension.resolve = async (args) => {
