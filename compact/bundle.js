@@ -1984,7 +1984,7 @@ const FCTV_PROVIDER_ID = 'nimora.fctv';
 const FCTV_CATALOG_PROVIDER_ID = 'nimora.fctv.catalog';
 const FCTV_PROVIDER_KEY = 'fctv';
 const FCTV_SITE_ORIGIN =
-  globalThis.__fctvSiteOrigin || 'https://www.fctv33hd.cc';
+  globalThis.__fctvSiteOrigin || 'https://www.fctv33hd.host';
 const FCTV_LOGOS_BASE =
   globalThis.__fctvLogosBaseUrl || 'https://logos1.tcllu137fien.ru';
 const FCTV_ASIAN_GAMES_LOGOS_BASE =
@@ -2664,6 +2664,35 @@ function fctvDecodedMediaUrl(value) {
   return '';
 }
 
+function fctvSessionCipher(session) {
+  const key = host.codec.textToBase64(FCTV_TOKEN_KEY);
+  const zeroIv = host.codec.hexToBase64('00'.repeat(16));
+  const counter = fctvHexToBytes(
+    host.codec.base64ToHex(host.codec.textToBase64(FCTV_TOKEN_IV)),
+  );
+  const input = fctvHexToBytes(
+    host.codec.base64ToHex(host.codec.textToBase64(session)),
+  );
+  const output = [];
+  for (let offset = 0; offset < input.length; offset += 16) {
+    // CBC's first block with a zero IV is AES(counter). Discard its padding
+    // block and XOR the keystream to match CryptoJS CTR with NoPadding.
+    const encrypted = host.crypto.aesCbcEncrypt(
+      key, zeroIv, host.codec.hexToBase64(fctvBytesToHex(counter)),
+    );
+    const stream = fctvHexToBytes(host.codec.base64ToHex(encrypted).slice(0, 32));
+    for (let index = 0; index < Math.min(16, input.length - offset); index += 1) {
+      output.push(input[offset + index] ^ stream[index]);
+    }
+    // CryptoJS increments only the final 32-bit counter word.
+    for (let index = 15; index >= 12; index -= 1) {
+      counter[index] = (counter[index] + 1) & 0xff;
+      if (counter[index] !== 0) break;
+    }
+  }
+  return host.codec.hexToBase64(fctvBytesToHex(output));
+}
+
 function fctvTokenizedMediaUrl(value, rbSession) {
   const mediaUrl = fctvDecodedMediaUrl(value);
   if (!fctvValidMediaUrl(mediaUrl)) return '';
@@ -2674,13 +2703,8 @@ function fctvTokenizedMediaUrl(value, rbSession) {
       /^(https?:\/\/[^/]+)(\/[^?]*)?(\?.*)?$/i,
     );
     if (parsed == null) return '';
-    const encrypted = host.crypto.aesCbcEncrypt(
-      host.codec.textToBase64(FCTV_TOKEN_KEY),
-      host.codec.textToBase64(FCTV_TOKEN_IV),
-      host.codec.textToBase64(session),
-    );
-    const cipherHex = host.codec.base64ToHex(encrypted);
-    return `${parsed[1]}/token-${encodeURIComponent(cipherHex)}a` +
+    const encrypted = fctvSessionCipher(session);
+    return `${parsed[1]}/token-${encodeURIComponent(encrypted)}a` +
       `${parsed[2] || '/'}${parsed[3] || ''}`;
   } catch (_) {
     return '';
