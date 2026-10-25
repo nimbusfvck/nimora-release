@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.29",
+      "version": "2.0.30",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.30: prevented RoxieStreams Cloudflare responses from opening the generic WebView automatically.",
         "Nimora Compact 2.0.29: fixed FCTV stream signing and updated the website origin to fctv33hd.host.",
         "Nimora Compact 2.0.28: Fast source discovery now prefers VaPlayer and falls back to the fastest available provider when VaPlayer has no sources or fails.",
         "Nimora Compact 2.0.27: removed the FotMob catalog row from Home while keeping the Football and Featured Sports catalogs available.",
@@ -150,7 +151,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "3b10549210fe0428d6e33b74f74876dac3fe510829541a452e3e7e782ca505c9"
+      "bundleSha256": "47de962dc922a4f3951de503f554dea690ca013ca20a5e5ad9f34a88c2356380"
     }
   ]
 }

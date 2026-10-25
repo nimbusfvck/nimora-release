@@ -19124,7 +19124,16 @@ function roxiePageUrl(path) {
 }
 
 async function roxieFetch(path, options) {
-  const response = await fetch(roxiePageUrl(path), options || {});
+  const request = options || {};
+  const response = await fetch(roxiePageUrl(path), {
+    ...request,
+    headers: {
+      ...(request.headers || {}),
+      // Roxie may answer with a Cloudflare challenge. Fail this request
+      // without launching the generic visible Cloudflare WebView.
+      'x-qjsr-disable-cloudflare': '1',
+    },
+  });
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`RoxieStreams request failed: ${response.status}`);
   }
@@ -19560,9 +19569,8 @@ async function roxieResolve(sourceId) {
     Origin: origin,
     Referer: `${origin}${payload.p}`,
     'User-Agent': ROXIE_UA,
-    // A Roxie edge may be Cloudflare-protected. Do not open a challenge
-    // automatically during source discovery; expose the event page instead
-    // so the user can explicitly choose WebView playback.
+    // A Roxie edge may be Cloudflare-protected. Do not launch the generic
+    // visible Cloudflare WebView for this native HLS request.
     'x-qjsr-disable-cloudflare': '1',
   };
   const url = roxieStreamUrl(payload.h, payload.d, payload.s);
