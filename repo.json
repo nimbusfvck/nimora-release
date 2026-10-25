@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "2.0.30",
+      "version": "2.0.31",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora 2.0.31: fast live source discovery prefers FCTV, then Cricfy, before falling back to the first available provider.",
         "Nimora 2.0.30: prevented RoxieStreams Cloudflare responses from opening the generic WebView automatically.",
         "Nimora 2.0.29: fixed FCTV stream signing and updated the website origin to fctv33hd.host.",
         "Nimora 2.0.28: Fast source discovery now prefers VaPlayer and falls back to the fastest available provider when VaPlayer has no sources or fails.",
@@ -291,7 +292,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "9fdec7df36aa6efaa3af5463abde85e73fe43bcf9b3a47944411c343a78383c9"
+      "bundleSha256": "84bd8b821212b5179dd2e91f6a83fd1f942d928906f42453752a6efcf52c3551"
     }
   ]
 }

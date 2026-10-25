@@ -43,6 +43,43 @@ const TIME_ZONE = 'Asia/Jakarta';
 
 const EXTENSION_ID = globalThis.__nimoraExtensionId || 'nimora';
 const PROVIDER_ID = 'nimora.matches';
+const FAST_SOURCE_PROVIDER_PRIORITY = ['fctv', 'cricfy'];
+
+async function nimoraFastSourceResult(providers, calls) {
+  const firstAvailable = new Promise((resolve) => {
+    let remaining = calls.length;
+    if (remaining === 0) {
+      resolve({ sources: [] });
+      return;
+    }
+    let returned = false;
+    for (const call of calls) {
+      call.then((result) => {
+        if (returned) return;
+        const sources = Array.isArray(result.sources) ? result.sources : [];
+        if (sources.length > 0) {
+          returned = true;
+          resolve({ sources });
+          return;
+        }
+        remaining -= 1;
+        if (remaining === 0) resolve({ sources: [] });
+      });
+    }
+  });
+
+  const callsByProvider = new Map(
+    providers.map((provider, index) => [provider.providerKey, calls[index]]),
+  );
+  for (const providerKey of FAST_SOURCE_PROVIDER_PRIORITY) {
+    const call = callsByProvider.get(providerKey);
+    if (!call) continue;
+    const result = await call;
+    const sources = Array.isArray(result.sources) ? result.sources : [];
+    if (sources.length > 0) return { sources };
+  }
+  return firstAvailable;
+}
 
 // The one catalog this extension declares, and the categories inside it.
 // `live` is based on FotMob's match status; `schedule` is the daily match
@@ -8041,7 +8078,8 @@ globalThis.__streamProviders.push({
 globalThis.__extension = globalThis.__extension || {};
 if (!globalThis.__extension.sources) {
   globalThis.__extension.sources = async (args) => {
-    const calls = globalThis.__streamProviders.map((p) =>
+    const providers = globalThis.__streamProviders;
+    const calls = providers.map((p) =>
       Promise.resolve()
         .then(() => p.sources(args))
         .catch(() => ({ sources: [] })),
@@ -8050,23 +8088,7 @@ if (!globalThis.__extension.sources) {
       const perProvider = await Promise.all(calls);
       return { sources: perProvider.flatMap((r) => r.sources) };
     }
-    return new Promise((resolve) => {
-      let remaining = calls.length;
-      let returned = false;
-      for (const call of calls) {
-        call.then((result) => {
-          if (returned) return;
-          const sources = Array.isArray(result.sources) ? result.sources : [];
-          if (sources.length > 0) {
-            returned = true;
-            resolve({ sources });
-            return;
-          }
-          remaining -= 1;
-          if (remaining === 0) resolve({ sources: [] });
-        });
-      }
-    });
+    return nimoraFastSourceResult(providers, calls);
   };
   globalThis.__extension.resolve = async (args) => {
     const sourceId = args.sourceId;
