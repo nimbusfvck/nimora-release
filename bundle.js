@@ -10980,8 +10980,15 @@ async function fetchTrending(mediaType) {
   // Anime has its own row now, from a database that counts cours the way the
   // streaming sites do. Leaving it here as well would put the same title on
   // Home twice, under two ids that resolve through different providers.
+  const today = new Date().toISOString().slice(0, 10);
   const results = (Array.isArray(data.results) ? data.results : [])
-    .filter((result) => !tmdbIsAnime(result));
+    .filter((result) => !tmdbIsAnime(result))
+    .filter((result) =>
+      mediaType !== 'movie' ||
+      (typeof result.release_date === 'string' &&
+        result.release_date.length >= 10 &&
+        result.release_date.slice(0, 10) <= today),
+    );
   const items = results.map((r) => tmdbToMediaItem(r, mediaType));
   if (results.length === 0) return items;
 

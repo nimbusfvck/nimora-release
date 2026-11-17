@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.32",
+      "version": "2.0.33",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.33: Filtered unreleased movies out of Trending Movie.",
         "Nimora Compact 2.0.32: added Cricify live sources via Firebase configuration and refreshed Cricfy links when reopening a source.",
         "Nimora Compact 2.0.31: fast live source discovery prefers FCTV, then Cricfy, before falling back to the first available provider.",
         "Nimora Compact 2.0.30: prevented RoxieStreams Cloudflare responses from opening the generic WebView automatically.",
@@ -153,7 +154,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "b781c7a3760f70ad02e68a7d481f796d7ba8e3415892108d693b9c8cda52a351"
+      "bundleSha256": "9efa367a32409f6aec19d5fe116cba82224b069f8ba31315aff37784c6064387"
     }
   ]
 }
