@@ -9101,17 +9101,26 @@ function cricfyRefreshEventsInBackground() {
   );
 }
 
-// Resolved links are cached by a stable link key so repeated discovery can
-// replace the same source instead of making the picker show it twice. The
-// cache is capped so a long session can't grow it forever.
-let cricfyLinkCache = {};
-const CRICFY_MAX_LINK_CACHE_ENTRIES = 500;
-
-function cricfyTrimLinkCache() {
-  const keys = Object.keys(cricfyLinkCache);
-  const overflow = keys.length - CRICFY_MAX_LINK_CACHE_ENTRIES;
-  if (overflow <= 0) return;
-  for (const key of keys.slice(0, overflow)) delete cricfyLinkCache[key];
+// Source ids carry the event and link identity. Resolve can fetch the current
+// link after the QuickJS engine restarts, without keeping signed URLs in memory.
+function cricfySourceLocator(sourceId) {
+  const prefix = `${CRICFY_PROVIDER_KEY}:`;
+  if (!sourceId.startsWith(prefix)) throw new Error(`Malformed Cricfy source id: ${sourceId}`);
+  let encoded = sourceId.slice(prefix.length).replace(/-/g, '+').replace(/_/g, '/');
+  while (encoded.length % 4) encoded += '=';
+  let locator;
+  try {
+    locator = JSON.parse(host.codec.base64ToText(encoded));
+  } catch (_) {
+    throw new Error('Malformed Cricfy source locator');
+  }
+  if (!locator || typeof locator !== 'object' ||
+      typeof locator.event !== 'string' || typeof locator.name !== 'string' ||
+      typeof locator.link !== 'string' || typeof locator.tokenApi !== 'string' ||
+      typeof locator.drmApi !== 'string' || typeof locator.audio !== 'string') {
+    throw new Error('Malformed Cricfy source locator');
+  }
+  return locator;
 }
 
 function cricfyLinkHost(link) {
@@ -9176,7 +9185,6 @@ async function cricfySourcesForEvent(event) {
       null,
       links[i].name || `Cricfy Link ${i + 1}`,
     );
-    cricfyLinkCache[id] = { ...links[i], name: label };
     sources.push({
       id: `${CRICFY_PROVIDER_KEY}:${id}`,
       label,
@@ -9184,7 +9192,6 @@ async function cricfySourcesForEvent(event) {
       providerId: 'nimora.cricfy',
     });
   }
-  cricfyTrimLinkCache();
   return sources;
 }
 
@@ -9224,10 +9231,18 @@ function cricfyMapDrm(drm) {
 }
 
 async function resolveCricfySource(sourceId) {
-  const prefix = `${CRICFY_PROVIDER_KEY}:`;
-  const inner = sourceId.startsWith(prefix) ? sourceId.slice(prefix.length) : sourceId;
-  const link = cricfyLinkCache[inner];
-  if (!link) throw new Error(`Cricfy source expired: ${sourceId}`);
+  const locator = cricfySourceLocator(sourceId);
+  let events = await cricfyFetchEventsMemo();
+  if (cricfyBackgroundRefresh !== null) {
+    await cricfyBackgroundRefresh;
+    events = await cricfyFetchEventsMemo();
+  }
+  const event = events.find((candidate) => cricfyEventSourceKey(candidate) === locator.event);
+  if (!event) throw new Error('Cricfy event is no longer offered');
+  const links = await cricfyEventLinks(event);
+  const link = links.find((candidate) =>
+    cricfySourceCacheKey(event, candidate) === sourceId.slice(CRICFY_PROVIDER_KEY.length + 1));
+  if (!link) throw new Error('Cricfy link is no longer offered');
   const stream = await cricfyResolveStream(link);
   return {
     url: stream.url,
@@ -9358,6 +9373,225 @@ if (!globalThis.__extension.sources) {
     return provider.resolve(sourceId);
   };
 }
+
+// CloudStream CricifyProvider's Firebase-configured Live Events backend.
+// Kept beside the older Cricfy protocol because their feeds are different.
+const CRICIFY_REMOTE_CONFIG_URL = globalThis.__cricifyRemoteConfigUrl ||
+  'https://firebaseremoteconfig.googleapis.com/v1/projects/963020218535/namespaces/firebase:fetch';
+const CRICIFY_FALLBACK_BASE = globalThis.__cricifyFallbackBase ||
+  'https://cfymarkscanjiostar80.top';
+const CRICIFY_CONFIG_KEY = 'AIzaSyAh9jkEU0E_UYxH0m_BKAt-uUSTiTPqhb8';
+const CRICIFY_KEY_PAIRS = [
+  ['3368487a78594167534749382f68616d', '557143766b766a656345497a38343256'],
+  ['4d7165594743543441594b6f484b7254', '6f484b725451755078387a6c386f4a2b'],
+];
+const CRICIFY_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+const CRICIFY_TIMEOUT_MS = 8000;
+
+function cricifyDecrypt(raw) {
+  const encoded = String(raw || '').trim();
+  for (const [keyHex, ivHex] of CRICIFY_KEY_PAIRS) {
+    const plain = host.crypto.aesCbcDecrypt(
+      host.codec.hexToBase64(keyHex),
+      host.codec.hexToBase64(ivHex),
+      encoded,
+    );
+    if (plain !== null) {
+      try { return JSON.parse(host.codec.base64ToText(plain)); } catch (_) { /* next key */ }
+    }
+  }
+  throw new Error('Cricify feed decryption failed');
+}
+
+let cricifyBasesMemo = null;
+async function cricifyBases() {
+  const now = Date.now();
+  if (cricifyBasesMemo && now - cricifyBasesMemo.at < 15 * 60 * 1000) {
+    return cricifyBasesMemo.bases;
+  }
+  const bases = [];
+  try {
+    const response = await fetch(CRICIFY_REMOTE_CONFIG_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-Android-Package': 'com.cricfy.tv',
+        'X-Goog-Api-Key': CRICIFY_CONFIG_KEY,
+        'x-qjsr-disable-cloudflare': '1',
+      },
+      body: JSON.stringify({
+        appInstanceId: '12345678901234567890123456789012',
+        appInstanceIdToken: '',
+        appId: '1:963020218535:android:47ec53252c64fb3c9c7b82',
+        countryCode: 'US',
+        languageCode: 'en-US',
+        platformVersion: '30',
+        timeZone: 'UTC',
+        appVersion: '5.0',
+        appBuild: '50',
+        packageName: 'com.cricfy.tv',
+        sdkVersion: '22.1.0',
+        analyticsUserProperties: {},
+      }),
+      timeoutMs: CRICIFY_TIMEOUT_MS,
+    });
+    if (response.status >= 200 && response.status < 300) {
+      const entries = JSON.parse(response.body).entries || {};
+      for (const key of ['cric_api2', 'cric_api1']) {
+        const value = entries[key];
+        if (typeof value === 'string' && /^https?:\/\/[^/]+/i.test(value)) {
+          bases.push(value.replace(/\/+$/, ''));
+        }
+      }
+    }
+  } catch (_) { /* use the packaged fallback */ }
+  bases.push(CRICIFY_FALLBACK_BASE.replace(/\/+$/, ''));
+  cricifyBasesMemo = { at: now, bases: [...new Set(bases)] };
+  return cricifyBasesMemo.bases;
+}
+
+async function cricifyFetchFeed(path) {
+  let lastError = null;
+  for (const base of await cricifyBases()) {
+    try {
+      const response = await fetch(`${base}/${path}`, {
+        headers: { 'User-Agent': CRICIFY_UA, 'x-qjsr-disable-cloudflare': '1' },
+        timeoutMs: CRICIFY_TIMEOUT_MS,
+      });
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(`Cricify ${path} returned ${response.status}`);
+      }
+      return cricifyDecrypt(response.body);
+    } catch (error) { lastError = error; }
+  }
+  cricifyBasesMemo = null;
+  throw lastError || new Error(`Cricify ${path} unavailable`);
+}
+
+function cricifyEventStart(event) {
+  const raw = String(event.eventInfo?.startTime || '');
+  const match = /^(\d{4})\/(\d{2})\/(\d{2}) (\d{2}:\d{2}:\d{2}) ([+-]\d{2})(\d{2})$/.exec(raw);
+  if (!match) return null;
+  const date = new Date(`${match[1]}-${match[2]}-${match[3]}T${match[4]}${match[5]}:${match[6]}`);
+  return isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function cricifyFindEvent(events, item) {
+  const titleKey = typeof catalogTitleKey === 'function'
+    ? catalogTitleKey
+    : (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const itemTitle = titleKey(item.title);
+  if (itemTitle) {
+    const exact = events.find((event) =>
+      titleKey(event.title) === itemTitle ||
+      titleKey(event.eventInfo?.eventType) === itemTitle);
+    if (exact) return exact;
+  }
+  if (!item.participants || item.participants.length !== 2) return null;
+  const candidates = events.filter((event) =>
+    event.eventInfo?.teamA && event.eventInfo?.teamB);
+  if (candidates.length === 0) return null;
+  const result = host.match.resolve({
+    teamA: item.participants[0].name,
+    teamB: item.participants[1].name,
+    teamAShort: item.participants[0].shortName || null,
+    teamBShort: item.participants[1].shortName || null,
+    kickoff: item.schedule?.startsAt || null,
+  }, candidates.map((event) => ({
+    teamA: event.eventInfo.teamA,
+    teamB: event.eventInfo.teamB,
+    startsAt: cricifyEventStart(event),
+  })), { profile: CRICFY_FOOTBALL_PROFILE });
+  return result ? candidates[result.index] : null;
+}
+
+function cricifyStreamKey(stream, ordinal) {
+  return `${String(stream.title || '').trim().toLowerCase()}|${String(stream.type || '')}|${ordinal}`;
+}
+
+function cricifyStreams(payload) {
+  const rows = Array.isArray(payload?.streamUrls) ? payload.streamUrls : [];
+  const counts = {};
+  const result = [];
+  for (const row of rows) {
+    if (!row || typeof row.link !== 'string') continue;
+    const type = String(row.type ?? '0');
+    if (type !== '0' && type !== '7') continue;
+    if (type === '7' && !cricfyToClearKeyJson(String(row.api || ''))) continue;
+    const split = cricfySplitLinkAndHeaders(row.link);
+    if (!/^https?:\/\//i.test(split.url)) continue;
+    const title = String(row.title || 'Cricify').trim();
+    const group = `${title.toLowerCase()}|${type}`;
+    const ordinal = counts[group] || 0;
+    counts[group] = ordinal + 1;
+    result.push({ row, key: cricifyStreamKey(row, ordinal) });
+  }
+  return result;
+}
+
+function cricifyEncodeLocator(value) {
+  return host.codec.textToBase64(JSON.stringify(value))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function cricifyDecodeLocator(sourceId) {
+  if (!sourceId.startsWith('cricify:')) throw new Error('Malformed Cricify source id');
+  let encoded = sourceId.slice('cricify:'.length).replace(/-/g, '+').replace(/_/g, '/');
+  while (encoded.length % 4) encoded += '=';
+  let locator;
+  try { locator = JSON.parse(host.codec.base64ToText(encoded)); }
+  catch (_) { throw new Error('Malformed Cricify source id'); }
+  if (!locator || typeof locator.slug !== 'string' || typeof locator.key !== 'string' ||
+      !/^[a-z0-9-]+$/.test(locator.slug)) {
+    throw new Error('Malformed Cricify source id');
+  }
+  return locator;
+}
+
+async function cricifySources(args) {
+  if (args.enabledProviders != null &&
+      args.enabledProviders.indexOf(CRICFY_PROVIDER_ID) === -1) return { sources: [] };
+  try {
+    const events = await cricifyFetchFeed('categories/live-events.txt');
+    if (!Array.isArray(events)) return { sources: [] };
+    const event = cricifyFindEvent(events, args.item);
+    if (!event || !/^[a-z0-9-]+$/.test(String(event.slug || ''))) return { sources: [] };
+    const payload = await cricifyFetchFeed(`channels/${event.slug}.txt`);
+    return { sources: cricifyStreams(payload).map(({ row, key }) => ({
+      id: `cricify:${cricifyEncodeLocator({ slug: event.slug, key })}`,
+      label: `Cricify · ${String(row.title || 'Live').trim()}`,
+      provider: 'Nimora',
+      providerId: CRICFY_PROVIDER_ID,
+    })) };
+  } catch (_) { return { sources: [] }; }
+}
+
+async function cricifyResolve(sourceId) {
+  const locator = cricifyDecodeLocator(sourceId);
+  const payload = await cricifyFetchFeed(`channels/${locator.slug}.txt`);
+  const candidate = cricifyStreams(payload).find((stream) => stream.key === locator.key);
+  if (!candidate) throw new Error('Cricify channel is no longer offered');
+  const row = candidate.row;
+  const split = cricfySplitLinkAndHeaders(row.link);
+  const headers = cricfyMergeHeaders([{ 'User-Agent': CRICIFY_UA }, split.headers]);
+  const format = cricfyStreamFormatFromUrl(split.url);
+  const validatedFormat = await cricfyValidatePlaybackManifest(split.url, { headers, format });
+  const clearKeyJson = String(row.type) === '7' ? cricfyToClearKeyJson(String(row.api || '')) : null;
+  return {
+    url: split.url,
+    headers,
+    format: validatedFormat,
+    drm: clearKeyJson ? { scheme: 'clearKey', clearKeyJson } : null,
+    label: `Cricify · ${String(row.title || 'Live').trim()}`,
+  };
+}
+
+globalThis.__streamProviders.push({
+  providerKey: 'cricify',
+  sources: cricifySources,
+  resolve: cricifyResolve,
+});
 
 // MeteGol's football stream provider.
 //
