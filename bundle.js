@@ -3254,6 +3254,10 @@ function decodeVaplayerSourceId(encoded) {
 // is only known from the response, and offering a fixed number would mean
 // either inventing sources that don't resolve or hiding ones that do.
 async function vaplayerListSources(args) {
+  // Skip all network work when this provider is switched off: the app may
+  // ask provider by provider, and every call passes through every provider.
+  const enabled = args && args.enabledProviders;
+  if (Array.isArray(enabled) && enabled.indexOf('nimora.vaplayer') === -1) return { sources: [] };
   const item = args.item || {};
   const refId = (item.ref && item.ref.id) || item.id || '';
   const parsed = parseVaplayerRef(refId);
@@ -3309,7 +3313,13 @@ async function vaplayerResolveSource(sourceId) {
   }
 
   if (Array.isArray(payload.data.cast_urls) && payload.data.cast_urls.includes(urls[index])) {
-    const response = await fetch(urls[index], { headers: vaplayerHeaders() });
+    // Cast hosts answer blocked networks with a Cloudflare WAF page that no
+    // challenge WebView can pass; opting out fails in one request instead of
+    // holding playback for the challenge's 25-second timeout. The private
+    // header is consumed by the host and never sent upstream.
+    const response = await fetch(urls[index], {
+      headers: { ...vaplayerHeaders(), 'x-qjsr-disable-cloudflare': '1' },
+    });
     if (response.status < 200 || response.status >= 300) {
       throw new Error(`VaPlayer: playlist HTTP ${response.status}`);
     }
@@ -4458,8 +4468,12 @@ async function vidcoreCandidate(server, streamBase, csrfToken) {
 }
 
 async function vidcoreResolveMedia(media) {
+  // The page is a document request: VidCore answers it with 403 when it
+  // carries the XHR marker that its API calls need.
+  const pageHeaders = vidcoreHeaders();
+  delete pageHeaders['X-Requested-With'];
   const pageResponse = await vidcoreFetch(vidcorePageUrl(media), {
-    headers: vidcoreHeaders(),
+    headers: pageHeaders,
   });
   if (
     pageResponse == null ||
@@ -4605,12 +4619,18 @@ const VIDEASY_SERVERS = [
   { key: 'orlando', label: 'VidEasy Orlando', quality: '' },
 ];
 
+// API request headers. api.wecollege.net answers blocked networks with a
+// Cloudflare WAF page ("Attention Required"), not a solvable challenge. Without
+// the opt-out the host opens a visible challenge WebView that can only time
+// out, holding source discovery for its full budget. The private header is
+// consumed by the host and never sent upstream.
 function videasyHeaders() {
   return {
     Accept: '*/*',
     Origin: 'https://vidy.st',
     Referer: 'https://vidy.st/',
     'User-Agent': VIDEASY_UA,
+    'x-qjsr-disable-cloudflare': '1',
   };
 }
 
@@ -4735,6 +4755,10 @@ async function decryptVideasy(encryptedText, tmdbId, seed) {
 // We list them by server without fetching (that happens on resolve()), so this
 // is fast and doesn't hit the network per-server.
 async function videasyListSources(args) {
+  // Skip all network work when this provider is switched off: the app may
+  // ask provider by provider, and every call passes through every provider.
+  const enabled = args && args.enabledProviders;
+  if (Array.isArray(enabled) && enabled.indexOf('nimora.videasy') === -1) return { sources: [] };
   const item = args.item || {};
   const refId = (item.ref && item.ref.id) || item.id || '';
 
@@ -6326,6 +6350,10 @@ function movieboxTitleOf(item) {
 // Stops after the search: `detailPath` and the play/download calls are three
 // more round trips per subject, and resolve() needs fresh URLs anyway.
 async function movieboxListSources(args) {
+  // Skip all network work when this provider is switched off: the app may
+  // ask provider by provider, and every call passes through every provider.
+  const enabled = args && args.enabledProviders;
+  if (Array.isArray(enabled) && enabled.indexOf('nimora.moviebox') === -1) return { sources: [] };
   const item = args.item || {};
   const kind = item.kind;
 
@@ -17168,14 +17196,18 @@ async function savefilmGet(url, referer) {
 //      is blocked, and the site operators keep them current;
 //   2. the last domain verified on this device (host.storage, survives
 //      restarts);
-//   3. CloudX's Website.json, which lags behind but covers sites without an
-//      info page;
-//   4. the built-in default.
+//   3. the built-in default, refreshed with each release;
+//   4. CloudX's Website.json, which lags behind but still lists retired
+//      domains that redirect to the current one.
 // Every candidate must serve a Muvipro homepage before it is used, so an
 // info page or directory entry that now points at a parked or hijacked
 // domain is skipped. The origin the homepage redirects to wins.
 
 const SAVEFILM_BASE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// Discovery stops trying new candidates after its budget: on filtered
+// networks each dead domain costs the host's full 10-second request timeout,
+// which a script can raise but not lower, and the host has no timers.
+const SAVEFILM_DISCOVERY_BUDGET_MS = 8000;
 let savefilmDirectoryPromise = null;
 const savefilmDiscoveries = new Map();
 
@@ -17262,11 +17294,14 @@ function savefilmDiscoverStages(site) {
       return info == null ? [] : savefilmInfoPageOrigins(info.body, site.infoUrl, site.brand);
     },
     async () => [savefilmStoredBase(site.storageKey)],
+    // The built-in default is refreshed with each release and is usually
+    // newer than CloudX's directory, whose stale entries cost a full request
+    // timeout each where DNS is filtered.
+    async () => [site.base],
     async () => {
       const listed = (await savefilmDirectory())[site.directoryKey];
       return Array.isArray(listed) ? listed : [];
     },
-    async () => [site.base],
   ];
 }
 
@@ -17276,8 +17311,11 @@ function savefilmDiscoverBase(site) {
   if (savefilmDiscoveries.has(site.storageKey)) return savefilmDiscoveries.get(site.storageKey);
   const discovery = (async () => {
     const tried = new Set();
+    const deadline = Date.now() + SAVEFILM_DISCOVERY_BUDGET_MS;
     for (const stage of savefilmDiscoverStages(site)) {
+      if (Date.now() >= deadline) break;
       for (const value of await stage()) {
+        if (Date.now() >= deadline) break;
         const candidate = savefilmOrigin(value);
         if (!candidate || tried.has(candidate)) continue;
         tried.add(candidate);
@@ -18329,10 +18367,12 @@ globalThis.__catalogProviders.push({
 const MUVIPRO_UA =
   'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
-// One site must not hold the non-fast fan-out hostage: the slowest host
-// decides how long the whole source list takes.
-const MUVIPRO_SOURCES_TIMEOUT_MS = 25000;
-const MUVIPRO_EMBED_TIMEOUT_MS = 10000;
+// The app drops a whole full discovery (every provider's sources) once it
+// passes 30 seconds, so one site must finish well inside that. The JS host has
+// no timers and a script can only raise a request's 10-second timeout, never
+// lower it, so the budget is cooperative: no new request starts once the
+// site's deadline has passed, and the last in-flight one ends within ~10 s.
+const MUVIPRO_SOURCES_BUDGET_MS = 12000;
 const MUVIPRO_MAX_PLAYERS = 6;
 
 // LayarWarna, KlikXXi and WGFilm21 are Muvipro too but are left out: in
@@ -18372,7 +18412,8 @@ function muviproHeaders(referer, extra) {
   };
 }
 
-async function muviproRequest(url, referer, options) {
+async function muviproRequest(url, referer, options, deadline) {
+  if (deadline != null && Date.now() >= deadline) return null;
   try {
     const response = await fetch(url, {
       ...(options || {}),
@@ -18455,11 +18496,11 @@ function muviproScoreResult(result, index, query) {
   return { result, score };
 }
 
-async function muviproFindResult(site, base, query, titles) {
+async function muviproFindResult(site, base, query, titles, deadline) {
   for (const title of titles) {
     for (const variant of savefilmSearchTitleVariants(title)) {
       const url = `${base}/?s=${encodeURIComponent(variant)}&post_type[]=post&post_type[]=tv`;
-      const response = await muviproRequest(url, `${base}/`);
+      const response = await muviproRequest(url, `${base}/`, null, deadline);
       if (response == null) continue;
       const results = savefilmParseArticles(response.body, base);
       const scored = results
@@ -18486,6 +18527,12 @@ function muviproAjaxPlayers(html) {
   return { postId: postId[1], tabs };
 }
 
+// Embed hosts no extractor here can read. Requesting them only costs time:
+// voe.sx, for one, accepts the connection and never answers, which kept a
+// whole site (and so the app's full discovery) waiting past its deadline.
+const MUVIPRO_UNSUPPORTED_EMBED =
+  /^https?:\/\/(?:[^/]*\.)?(?:voe\.sx|[^/]*voe[^/]*|[^/]*d[o0]{2,}d[^/]*|boosterx\.stream|playerekusu\.stream|listeamed\.net|warnafilm\.com|sharer\.pw|linkstaker\.pw|helvid\.net|[^/]*playerp2p[^/]*)(?:[:/]|$)/i;
+
 function muviproIframeUrls(html, pageUrl, base) {
   const urls = [];
   const frames = /<iframe\b([^>]*)>/gi;
@@ -18495,14 +18542,15 @@ function muviproIframeUrls(html, pageUrl, base) {
       savefilmAttr(match[1], 'data-src') || savefilmAttr(match[1], 'src');
     const url = muviproUrl(value, pageUrl, base);
     if (!url || /googletagmanager|youtube\.com|about:blank/i.test(url)) continue;
+    if (MUVIPRO_UNSUPPORTED_EMBED.test(url)) continue;
     if (!urls.includes(url)) urls.push(url);
   }
   return urls;
 }
 
 // Every embed the detail page exposes, in the site's own server order.
-async function muviproEmbedUrls(detailUrl, base) {
-  const detail = await muviproRequest(detailUrl, `${base}/`);
+async function muviproEmbedUrls(detailUrl, base, deadline) {
+  const detail = await muviproRequest(detailUrl, `${base}/`, null, deadline);
   if (detail == null) return [];
   const embeds = [];
   const add = (url) => { if (url && !embeds.includes(url)) embeds.push(url); };
@@ -18517,7 +18565,7 @@ async function muviproEmbedUrls(detailUrl, base) {
           Origin: base,
         },
         body: `action=muvipro_player_content&tab=${encodeURIComponent(tab)}&post_id=${encodeURIComponent(ajax.postId)}`,
-      })));
+      }, deadline)));
     for (const page of pages) {
       if (page != null) muviproIframeUrls(page.body, detailUrl, base).forEach(add);
     }
@@ -18527,7 +18575,7 @@ async function muviproEmbedUrls(detailUrl, base) {
       .filter((url) => url === detailUrl || muviproOrigin(url) === muviproOrigin(detailUrl))
       .slice(0, MUVIPRO_MAX_PLAYERS);
     const pages = await Promise.all(playerPages.map((url) =>
-      url === detailUrl ? detail : muviproRequest(url, detailUrl)));
+      url === detailUrl ? detail : muviproRequest(url, detailUrl, null, deadline)));
     pages.forEach((page, index) => {
       if (page != null) muviproIframeUrls(page.body, playerPages[index], base).forEach(add);
     });
@@ -18541,13 +18589,13 @@ function muviproRedirectUrl(html, pageUrl) {
   return value ? muviproUrl(value, pageUrl, muviproOrigin(pageUrl)) : null;
 }
 
-async function muviproEmbedPage(url, referer, depth = 0) {
-  const response = await muviproRequest(url, referer);
+async function muviproEmbedPage(url, referer, depth = 0, deadline = null) {
+  const response = await muviproRequest(url, referer, null, deadline);
   if (response == null) return null;
   const redirected = depth < 3 && response.body.length <= 2048
     ? muviproRedirectUrl(response.body, url) : null;
   if (!redirected || redirected === url) return { url, body: response.body };
-  return muviproEmbedPage(redirected, url, depth + 1);
+  return muviproEmbedPage(redirected, url, depth + 1, deadline);
 }
 
 function muviproEmbedMedia(body, url) {
@@ -18568,39 +18616,39 @@ function muviproEmbedMedia(body, url) {
     .map(({ entry }) => entry);
 }
 
-async function muviproStreams(detailUrl, base) {
-  const embeds = await muviproEmbedUrls(detailUrl, base);
-  // A dead embed host (they come and go weekly) must not hide the servers
-  // that did answer, so each embed gets its own budget.
-  const perEmbed = await Promise.all(embeds.map((embedUrl) => muviproTimeout((async () => {
+async function muviproStreams(detailUrl, base, deadline) {
+  const embeds = await muviproEmbedUrls(detailUrl, base, deadline);
+  // Embeds load in parallel; a dead embed host fails on its own request
+  // timeout without holding back the servers that answered.
+  const perEmbed = await Promise.all(embeds.map((embedUrl) => (async () => {
     const direct = savefilmMediaUrls(embedUrl, detailUrl);
     if (direct.length > 0) return direct.map((entry) => ({ ...entry, referer: detailUrl }));
-    const page = await muviproEmbedPage(embedUrl, detailUrl);
+    const page = await muviproEmbedPage(embedUrl, detailUrl, 0, deadline);
     if (page == null) return [];
     return muviproEmbedMedia(page.body, page.url).map((entry) => ({
       ...entry,
       referer: page.url,
       ...(entry.resolver === 'abyss' ? { resolverUrl: embedUrl, resolverReferer: detailUrl } : {}),
     }));
-  })().catch(() => []), [], MUVIPRO_EMBED_TIMEOUT_MS)));
+  })().catch(() => [])));
   const streams = [];
   for (const entry of perEmbed.flat()) {
     if (!streams.some((stream) => stream.url === entry.url)) streams.push(entry);
   }
-  return streams;
+  const playable = await Promise.all(streams.map((stream) => muviproPlayableHls(stream, deadline)));
+  return streams.filter((_, index) => playable[index]);
 }
 
-function muviproTimeout(promise, fallback, ms) {
-  // Not every embedding runtime installs timers; the host's own request
-  // timeouts still bound the work there.
-  if (typeof globalThis.setTimeout !== 'function') return promise;
-  let handle = null;
-  return Promise.race([
-    promise.finally(() => { if (handle != null) clearTimeout(handle); }),
-    new Promise((resolve) => {
-      handle = setTimeout(() => resolve(fallback), ms);
-    }),
-  ]);
+// VidHide-family players often list a CDN playlist (`hls2`, `hls3`) whose
+// token the CDN then refuses with 403, so a listed source fails only once
+// the player opens it. Check each HLS playlist with the headers the player
+// will send and list only those that answer with a playlist. When the site's
+// budget is already spent the playlist is kept unchecked rather than lost.
+async function muviproPlayableHls(stream, deadline) {
+  if (stream.format !== 'hls') return true;
+  if (deadline != null && Date.now() >= deadline) return true;
+  const response = await muviproRequest(stream.url, stream.referer, null, deadline);
+  return response != null && /^\s*#EXTM3U/.test(response.body || '');
 }
 
 function muviproQuery(item) {
@@ -18617,19 +18665,22 @@ async function muviproSiteSources(site, args) {
   if (!item || (item.kind !== 'video' && item.kind !== 'episode')) return { sources: [] };
   const query = muviproQuery(item);
   if (!query.title || (query.isEpisode && !Number.isInteger(query.episode))) return { sources: [] };
+  // Domain discovery has its own bound (savefilmDiscoverBase) and counts
+  // against this site's budget too.
+  const deadline = Date.now() + MUVIPRO_SOURCES_BUDGET_MS;
   const base = await muviproActiveBase(site);
   const titles = await savefilmItemTitleVariants(item, query.title);
-  const found = await muviproFindResult(site, base, query, titles);
+  const found = await muviproFindResult(site, base, query, titles, deadline);
   if (found == null) return { sources: [] };
   let watchUrl = found.url;
   if (query.isEpisode) {
-    const detail = await muviproRequest(watchUrl, `${base}/`);
+    const detail = await muviproRequest(watchUrl, `${base}/`, null, deadline);
     if (detail == null) return { sources: [] };
     const season = query.season || 1;
     watchUrl = savefilmEpisodeUrl(detail.body, season, query.episode, base);
     if (!watchUrl) return { sources: [] };
   }
-  const streams = await muviproStreams(watchUrl, base);
+  const streams = await muviproStreams(watchUrl, base, deadline);
   return {
     sources: streams.map((stream, index) => ({
       id: `${site.key}:${savefilmEncode(stream.resolverUrl
@@ -18673,11 +18724,7 @@ globalThis.__streamProviders = globalThis.__streamProviders || [];
 for (const site of MUVIPRO_SITES) {
   globalThis.__streamProviders.push({
     providerKey: site.key,
-    sources: (args) => muviproTimeout(
-      muviproSiteSources(site, args).catch(() => ({ sources: [] })),
-      { sources: [] },
-      MUVIPRO_SOURCES_TIMEOUT_MS,
-    ),
+    sources: (args) => muviproSiteSources(site, args).catch(() => ({ sources: [] })),
     resolve: (sourceId) => muviproResolveSource(site, sourceId),
   });
 }
@@ -18748,6 +18795,17 @@ let layarkacaSeriesBase =
 const layarkacaSearchBase =
   globalThis.__layarkacaSearchBaseUrl || LAYARKACA_DEFAULT_SEARCH_BASE;
 let layarkacaDiscoveryFlight = null;
+// The app gives each provider 30 seconds to list its sources. The JS host has
+// no timers and a script cannot lower a request's 10-second timeout, so
+// discovery stops *starting* search requests after this budget; the last
+// in-flight request still finishes within ~10 seconds. The deadline lives on
+// the discovery query, never in the shared fetch helpers, so a resolve that
+// runs while a discovery is still searching is never cut short.
+const LAYARKACA_DISCOVERY_BUDGET_MS = 15000;
+
+function layarkacaQueryExpired(query) {
+  return Boolean(query && Number.isFinite(query.deadline) && Date.now() >= query.deadline);
+}
 let layarkacaBaseDiscoveryFlight = null;
 const LAYARKACA_WATCH_PAGE_TTL_MS = 15000;
 const layarkacaDiscoveryCache = new Map();
@@ -19325,6 +19383,7 @@ async function layarkacaSlugFallback(query) {
     : [layarkacaBase, layarkacaSeriesBase];
   for (const base of bases) {
     for (const entry of slugs) {
+      if (layarkacaQueryExpired(query)) return null;
       const candidate = entry.candidate;
       const url = `${base.replace(/\/$/, '')}/${candidate}`;
       const response = await layarkacaFetch(url, `${base.replace(/\/$/, '')}/`);
@@ -19362,6 +19421,7 @@ async function layarkacaSearch(query) {
   let best = null;
   for (const base of bases) {
     for (const variant of variants) {
+      if (layarkacaQueryExpired(query)) break;
       const url = `${base.replace(/\/$/, '')}/search?s=${encodeURIComponent(variant)}`;
       const response = await layarkacaFetch(url, `${base.replace(/\/$/, '')}/`);
       if (response == null) continue;
@@ -19379,6 +19439,7 @@ async function layarkacaSearch(query) {
   // this JSON endpoint to populate the cards, so try the same contract before
   // relying on older server-rendered mirror markup.
   for (const variant of variants) {
+    if (layarkacaQueryExpired(query)) break;
     const apiUrl = `${layarkacaSearchBase.replace(/\/$/, '')}/search.php?s=${encodeURIComponent(variant)}&page=1`;
     const response = await layarkacaFetch(apiUrl, `${layarkacaBase}/`);
     if (response == null) continue;
@@ -19665,6 +19726,7 @@ async function layarkacaDiscover(item) {
   if (!query || (query.isEpisode && (!Number.isInteger(query.season) || !Number.isInteger(query.episode)))) {
     return null;
   }
+  query.deadline = Date.now() + LAYARKACA_DISCOVERY_BUDGET_MS;
   query.titles = await layarkacaItemTitleVariants(item, query.title);
   let found = query.detailUrl
     ? {url: query.detailUrl, title: query.title, year: query.year}
@@ -19675,7 +19737,7 @@ async function layarkacaDiscover(item) {
   // A movie mirror can return a matching redirect page for a series title.
   // Re-run the series slug on the dedicated NontonDrama base when that page
   // does not expose the requested season/episode players.
-  if ((!page || page.players.length === 0) && query.isEpisode) {
+  if ((!page || page.players.length === 0) && query.isEpisode && !layarkacaQueryExpired(query)) {
     const seriesFound = await layarkacaSlugFallback(query);
     if (seriesFound && seriesFound.url !== (found && found.url)) {
       found = seriesFound;

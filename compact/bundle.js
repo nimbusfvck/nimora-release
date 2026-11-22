@@ -3255,6 +3255,10 @@ function decodeVaplayerSourceId(encoded) {
 // is only known from the response, and offering a fixed number would mean
 // either inventing sources that don't resolve or hiding ones that do.
 async function vaplayerListSources(args) {
+  // Skip all network work when this provider is switched off: the app may
+  // ask provider by provider, and every call passes through every provider.
+  const enabled = args && args.enabledProviders;
+  if (Array.isArray(enabled) && enabled.indexOf('nimora.vaplayer') === -1) return { sources: [] };
   const item = args.item || {};
   const refId = (item.ref && item.ref.id) || item.id || '';
   const parsed = parseVaplayerRef(refId);
@@ -3310,7 +3314,13 @@ async function vaplayerResolveSource(sourceId) {
   }
 
   if (Array.isArray(payload.data.cast_urls) && payload.data.cast_urls.includes(urls[index])) {
-    const response = await fetch(urls[index], { headers: vaplayerHeaders() });
+    // Cast hosts answer blocked networks with a Cloudflare WAF page that no
+    // challenge WebView can pass; opting out fails in one request instead of
+    // holding playback for the challenge's 25-second timeout. The private
+    // header is consumed by the host and never sent upstream.
+    const response = await fetch(urls[index], {
+      headers: { ...vaplayerHeaders(), 'x-qjsr-disable-cloudflare': '1' },
+    });
     if (response.status < 200 || response.status >= 300) {
       throw new Error(`VaPlayer: playlist HTTP ${response.status}`);
     }
@@ -4459,8 +4469,12 @@ async function vidcoreCandidate(server, streamBase, csrfToken) {
 }
 
 async function vidcoreResolveMedia(media) {
+  // The page is a document request: VidCore answers it with 403 when it
+  // carries the XHR marker that its API calls need.
+  const pageHeaders = vidcoreHeaders();
+  delete pageHeaders['X-Requested-With'];
   const pageResponse = await vidcoreFetch(vidcorePageUrl(media), {
-    headers: vidcoreHeaders(),
+    headers: pageHeaders,
   });
   if (
     pageResponse == null ||
@@ -4606,12 +4620,18 @@ const VIDEASY_SERVERS = [
   { key: 'orlando', label: 'VidEasy Orlando', quality: '' },
 ];
 
+// API request headers. api.wecollege.net answers blocked networks with a
+// Cloudflare WAF page ("Attention Required"), not a solvable challenge. Without
+// the opt-out the host opens a visible challenge WebView that can only time
+// out, holding source discovery for its full budget. The private header is
+// consumed by the host and never sent upstream.
 function videasyHeaders() {
   return {
     Accept: '*/*',
     Origin: 'https://vidy.st',
     Referer: 'https://vidy.st/',
     'User-Agent': VIDEASY_UA,
+    'x-qjsr-disable-cloudflare': '1',
   };
 }
 
@@ -4736,6 +4756,10 @@ async function decryptVideasy(encryptedText, tmdbId, seed) {
 // We list them by server without fetching (that happens on resolve()), so this
 // is fast and doesn't hit the network per-server.
 async function videasyListSources(args) {
+  // Skip all network work when this provider is switched off: the app may
+  // ask provider by provider, and every call passes through every provider.
+  const enabled = args && args.enabledProviders;
+  if (Array.isArray(enabled) && enabled.indexOf('nimora.videasy') === -1) return { sources: [] };
   const item = args.item || {};
   const refId = (item.ref && item.ref.id) || item.id || '';
 
@@ -5068,6 +5092,10 @@ function movieboxTitleOf(item) {
 // Stops after the search: `detailPath` and the play/download calls are three
 // more round trips per subject, and resolve() needs fresh URLs anyway.
 async function movieboxListSources(args) {
+  // Skip all network work when this provider is switched off: the app may
+  // ask provider by provider, and every call passes through every provider.
+  const enabled = args && args.enabledProviders;
+  if (Array.isArray(enabled) && enabled.indexOf('nimora.moviebox') === -1) return { sources: [] };
   const item = args.item || {};
   const kind = item.kind;
 
@@ -14976,6 +15004,17 @@ let layarkacaSeriesBase =
 const layarkacaSearchBase =
   globalThis.__layarkacaSearchBaseUrl || LAYARKACA_DEFAULT_SEARCH_BASE;
 let layarkacaDiscoveryFlight = null;
+// The app gives each provider 30 seconds to list its sources. The JS host has
+// no timers and a script cannot lower a request's 10-second timeout, so
+// discovery stops *starting* search requests after this budget; the last
+// in-flight request still finishes within ~10 seconds. The deadline lives on
+// the discovery query, never in the shared fetch helpers, so a resolve that
+// runs while a discovery is still searching is never cut short.
+const LAYARKACA_DISCOVERY_BUDGET_MS = 15000;
+
+function layarkacaQueryExpired(query) {
+  return Boolean(query && Number.isFinite(query.deadline) && Date.now() >= query.deadline);
+}
 let layarkacaBaseDiscoveryFlight = null;
 const LAYARKACA_WATCH_PAGE_TTL_MS = 15000;
 const layarkacaDiscoveryCache = new Map();
@@ -15553,6 +15592,7 @@ async function layarkacaSlugFallback(query) {
     : [layarkacaBase, layarkacaSeriesBase];
   for (const base of bases) {
     for (const entry of slugs) {
+      if (layarkacaQueryExpired(query)) return null;
       const candidate = entry.candidate;
       const url = `${base.replace(/\/$/, '')}/${candidate}`;
       const response = await layarkacaFetch(url, `${base.replace(/\/$/, '')}/`);
@@ -15590,6 +15630,7 @@ async function layarkacaSearch(query) {
   let best = null;
   for (const base of bases) {
     for (const variant of variants) {
+      if (layarkacaQueryExpired(query)) break;
       const url = `${base.replace(/\/$/, '')}/search?s=${encodeURIComponent(variant)}`;
       const response = await layarkacaFetch(url, `${base.replace(/\/$/, '')}/`);
       if (response == null) continue;
@@ -15607,6 +15648,7 @@ async function layarkacaSearch(query) {
   // this JSON endpoint to populate the cards, so try the same contract before
   // relying on older server-rendered mirror markup.
   for (const variant of variants) {
+    if (layarkacaQueryExpired(query)) break;
     const apiUrl = `${layarkacaSearchBase.replace(/\/$/, '')}/search.php?s=${encodeURIComponent(variant)}&page=1`;
     const response = await layarkacaFetch(apiUrl, `${layarkacaBase}/`);
     if (response == null) continue;
@@ -15893,6 +15935,7 @@ async function layarkacaDiscover(item) {
   if (!query || (query.isEpisode && (!Number.isInteger(query.season) || !Number.isInteger(query.episode)))) {
     return null;
   }
+  query.deadline = Date.now() + LAYARKACA_DISCOVERY_BUDGET_MS;
   query.titles = await layarkacaItemTitleVariants(item, query.title);
   let found = query.detailUrl
     ? {url: query.detailUrl, title: query.title, year: query.year}
@@ -15903,7 +15946,7 @@ async function layarkacaDiscover(item) {
   // A movie mirror can return a matching redirect page for a series title.
   // Re-run the series slug on the dedicated NontonDrama base when that page
   // does not expose the requested season/episode players.
-  if ((!page || page.players.length === 0) && query.isEpisode) {
+  if ((!page || page.players.length === 0) && query.isEpisode && !layarkacaQueryExpired(query)) {
     const seriesFound = await layarkacaSlugFallback(query);
     if (seriesFound && seriesFound.url !== (found && found.url)) {
       found = seriesFound;

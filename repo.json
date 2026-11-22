@@ -3,13 +3,16 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "2.0.34",
+      "version": "2.0.39",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora 2.0.39: LayarKaca's discovery time budget no longer cuts short a HYDRAX or other LayarKaca resolve that runs while a search is in progress. VidCore's initial page request no longer sends the XHR header used by its API calls.",
+        "Nimora 2.0.38: Muvipro sites list only HLS playlists that answer, so CDN playlists the host refuses no longer reach the player; VaPlayer, VidEasy and MovieBox skip their requests when switched off, so per-provider source discovery does not repeat them.",
+        "Nimora 2.0.37: sources found by VaPlayer, Dutamovie and other providers are no longer lost when a slow provider passes the 30-second discovery limit: VidEasy and VaPlayer no longer open Cloudflare challenges they cannot pass, Muvipro sites try their current domain first and skip embed hosts that never answer, and Muvipro and LayarKaca stop starting new requests once their time budget is spent.",
         "Nimora 2.0.34: added Ngefilm, Dutamovie, Pusatmovie, Kawanfilm and Sarangfilm movie and series sources that follow each site's domain changes, Savefilm domain discovery from its info page, and updated VaPlayer, VidFast, VidEasy and LayarKaca HYDRAX resolvers.",
         "Nimora 2.0.33: Filtered unreleased movies out of Trending Movie.",
         "Nimora 2.0.32: added Cricify live sources via Firebase configuration and refreshed Cricfy links when reopening a source.",
@@ -295,7 +298,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "b91377869c115a37dfd2721115f46334b86ea2f3287e210e747ca144ccb52260"
+      "bundleSha256": "75743340a5ab2578242d1e9ab9041a80d7a5f04e12a136e2a0eb2de0a5f34924"
     }
   ]
 }
