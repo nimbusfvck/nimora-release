@@ -3119,7 +3119,7 @@ function sourceQuality(value) {
 //
 // Ported from CineStream's `invokeVaPlayer` (CineStreamExtractors.kt). The
 // one upstream in this family that hands back playable URLs in the clear:
-// `api.php` answers with `data.stream_urls`, a plain list of HLS playlists,
+// `api.php` answers with `data.cast_urls` (formerly `stream_urls`),
 // plus a large `default_subs` list. No cipher, no key exchange, nothing to
 // decrypt.
 //
@@ -3205,9 +3205,13 @@ async function fetchVaplayer(url) {
 }
 
 function vaplayerStreamUrls(payload) {
-  const urls = payload && payload.data && payload.data.stream_urls;
-  if (!Array.isArray(urls)) return [];
-  return urls.filter((u) => typeof u === 'string' && u.length > 0);
+  const data = payload && payload.data;
+  if (!data) return [];
+  const validUrls = (urls) => Array.isArray(urls)
+    ? urls.filter((u) => typeof u === 'string' && /^https?:\/\/[^\s/?#]+(?:[/?#]|$)/i.test(u))
+    : [];
+  const castUrls = validUrls(data.cast_urls);
+  return castUrls.length > 0 ? castUrls : validUrls(data.stream_urls);
 }
 
 // `default_subs` entries are `{lang, code, url}`. `lang` is the human label
@@ -3275,7 +3279,6 @@ async function vaplayerListSources(args) {
         season: isSeries ? parsed.season : null,
         episode: isSeries ? parsed.episode : null,
       })}`;
-      // The upstream distinguishes them in no way at all — they are
       // The upstream gives these playlists no distinct names.
       return {
         id,
@@ -3304,6 +3307,16 @@ async function vaplayerResolveSource(sourceId) {
   // Re-fetched, so the list can be shorter than when the id was minted.
   if (index >= urls.length) {
     throw new Error('VaPlayer: stream no longer offered');
+  }
+
+  if (Array.isArray(payload.data.cast_urls) && payload.data.cast_urls.includes(urls[index])) {
+    const response = await fetch(urls[index], { headers: vaplayerHeaders() });
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`VaPlayer: playlist HTTP ${response.status}`);
+    }
+    if (typeof response.body !== 'string' || !response.body.trimStart().startsWith('#EXTM3U')) {
+      throw new Error('VaPlayer: cast URL did not return an HLS playlist');
+    }
   }
 
   return {
@@ -4025,7 +4038,7 @@ async function vidfastCandidate(server, streamBase, csrfToken) {
   const streamUrl = `${String(streamBase).replace(/\/$/, '')}/${server.data}`;
   const encryptedResponse = await vidfastFetch(streamUrl, {
     method: 'POST',
-    headers: vidfastHeaders({'X-CSRF-Token': csrfToken}),
+    headers: vidfastHeaders({'X-CSRF-Token': csrfToken, 'X-Requested-With': 'XMLHttpRequest'}),
   });
   if (
     encryptedResponse == null ||
@@ -4057,8 +4070,23 @@ async function vidfastResolveMedia(media) {
   const encodedToken = vidfastTokenFromPage(pageResponse.body);
   if (encodedToken == null) throw new Error('VidFast: page token missing');
 
+  const stage1Data = await vidfastJson(
+    `${VIDFAST_ENCDEC_BASE}/enc-vidfast?text=${encodeURIComponent(encodedToken)}&stage=1`,
+  );
+  const stage1 = stage1Data && stage1Data.status === 200 ? stage1Data.result : null;
+  if (stage1 == null || typeof stage1.stage1 !== 'string' ||
+      !/^https?:\/\//i.test(stage1.stage1) || typeof stage1.token !== 'string') {
+    throw new Error('VidFast: stage 1 bootstrap failed');
+  }
+  const challenge = await vidfastFetch(stage1.stage1, {
+    method: 'POST',
+    headers: vidfastHeaders({'X-CSRF-Token': stage1.token, 'X-Requested-With': 'XMLHttpRequest'}),
+  });
+  if (challenge == null || challenge.status < 200 || challenge.status >= 300) {
+    throw new Error(`VidFast: stage 1 request failed${challenge == null ? '' : ` (HTTP ${challenge.status})`}`);
+  }
   const encodedData = await vidfastJson(
-    `${VIDFAST_ENCDEC_BASE}/enc-vidfast?text=${encodeURIComponent(encodedToken)}`,
+    `${VIDFAST_ENCDEC_BASE}/enc-vidfast?text=${encodeURIComponent(challenge.body)}&stage=2`,
   );
   const decoded = encodedData && encodedData.status === 200
     ? encodedData.result
@@ -4074,7 +4102,7 @@ async function vidfastResolveMedia(media) {
 
   const serversResponse = await vidfastFetch(decoded.servers, {
     method: 'POST',
-    headers: vidfastHeaders({'X-CSRF-Token': decoded.token}),
+    headers: vidfastHeaders({'X-CSRF-Token': decoded.token, 'X-Requested-With': 'XMLHttpRequest'}),
   });
   if (
     serversResponse == null ||
@@ -4545,22 +4573,13 @@ globalThis.__streamProviders.push({
 
 // VidEasy stream provider, in JS on the host `fetch`/`codec` API.
 //
-// VidEasy (player.videasy.to) sources streams from api.speedracelight.com,
+// VidEasy (vidy.st) sources streams from api.wecollege.net,
 // which returns seed-encrypted JSON. We decrypt via enc-dec.app/api/dec-videasy.
-//
-// Servers available (language info from EncDecEndpoints README):
-//   cdn        -> Original (may have 4K)
-//   m4uhd      -> Original
-//   vsrc       -> Original
-//   hdmovie    -> Original (EN quality) / Hindi (quality == "Hindi")
-//   meine      -> German
-//   lamovie    -> Spanish
-//   superflix  -> Portuguese
 //
 // Matches TMDB-backed items through their movie/series reference prefix.
 
 const VIDEASY_SPEEDRACE_BASE =
-  globalThis.__videasySpeedraceBaseUrl || 'https://api.speedracelight.com';
+  globalThis.__videasySpeedraceBaseUrl || 'https://api.wecollege.net';
 const VIDEASY_ENCDEC_BASE =
   globalThis.__videasyEncDecBaseUrl || 'https://enc-dec.app/api';
 
@@ -4571,38 +4590,27 @@ const VIDEASY_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 
-// Servers exposed as stream sources. The key is the speedracelight.com path
-// segment (e.g. /cdn/sources-with-title).
-//
-// Several, because which ones answer changes per *title*, not just per day:
-// checked live, a film resolved only on `downloader2` while an episode of a
-// series resolved only on `m4uhd`, `cdn` and `lamovie` — every other server
-// returned 500 for that same request. Listing one server, or a short list
-// that happens to miss the right one, reads to the viewer as "VidEasy has
-// nothing" when it simply wasn't asked in the right place.
-//
-// Listing costs nothing: `videasyListSources` doesn't call these, it only
-// names them. The requests happen when a source is resolved.
-//
-// Servers that answered 404 for every request (`myflixerzupcloud`, `jett`,
-// `tejo`, `ym`) are left out — a 404 here is the path segment not existing,
-// so those are wasted round trips rather than a server being down.
+// Current original-language servers from the upstream integration sample.
 const VIDEASY_SERVERS = [
-  { key: 'vsrc', label: 'VidEasy Original', quality: '' },
-  { key: 'cdn', label: 'VidEasy Yoru', quality: '' },
-  { key: 'downloader2', label: 'VidEasy Kite', quality: '' },
-  { key: 'm4uhd', label: 'VidEasy Breach', quality: '' },
-  { key: 'hdmovie', label: 'VidEasy Vyse', quality: '' },
-  { key: 'lamovie', label: 'VidEasy Aura', quality: '' },
-  { key: 'superflix', label: 'VidEasy Solstice', quality: '' },
-  { key: 'neon2', label: 'VidEasy Neon', quality: '' },
+  { key: 'miami', label: 'VidEasy Miami', quality: '' },
+  { key: 'boise', label: 'VidEasy Boise', quality: '' },
+  { key: 'vegas', label: 'VidEasy Vegas', quality: '' },
+  { key: 'reno', label: 'VidEasy Reno', quality: '' },
+  { key: 'oakland', label: 'VidEasy Oakland', quality: '' },
+  { key: 'seattle', label: 'VidEasy Seattle', quality: '' },
+  { key: 'phoenix', label: 'VidEasy Phoenix', quality: '' },
+  { key: 'atlanta', label: 'VidEasy Atlanta', quality: '' },
+  { key: 'portland', label: 'VidEasy Portland', quality: '' },
+  { key: 'dallas', label: 'VidEasy Dallas', quality: '' },
+  { key: 'tampa', label: 'VidEasy Tampa', quality: '' },
+  { key: 'orlando', label: 'VidEasy Orlando', quality: '' },
 ];
 
 function videasyHeaders() {
   return {
     Accept: '*/*',
-    Origin: 'https://player.videasy.to',
-    Referer: 'https://player.videasy.to/',
+    Origin: 'https://vidy.st',
+    Referer: 'https://vidy.st/',
     'User-Agent': VIDEASY_UA,
   };
 }
@@ -4686,12 +4694,12 @@ function doubleEncodeTitle(title) {
   return encodeURIComponent(encodeURIComponent(title));
 }
 
-// Returns the raw encrypted text from speedracelight.
+// Returns the encrypted upstream response.
 async function fetchEncryptedSources(serverKey, query) {
   const params = Object.entries(query)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join('&');
-  const url = `${VIDEASY_SPEEDRACE_BASE}/${serverKey}/sources-with-title?${params}`;
+  const url = `${VIDEASY_SPEEDRACE_BASE}/${serverKey}/sources?${params}`;
   let response;
   try {
     response = await fetch(url, { headers: videasyHeaders() });
@@ -4794,7 +4802,7 @@ async function videasyResolveSource(sourceId) {
     ep: episode,
   } = payload;
 
-  // Build the speedracelight query.
+  // Build the upstream query.
   const query = {
     tmdbId,
     mediaType: type,
@@ -4848,8 +4856,8 @@ async function videasyResolveSource(sourceId) {
     // These come back as both .m3u8 and .mp4 depending on the server.
     format: entry.url.includes('.m3u8') ? 'hls' : 'other',
     headers: {
-      Origin: 'https://player.videasy.to',
-      Referer: 'https://player.videasy.to/',
+      Origin: 'https://vidy.st',
+      Referer: 'https://vidy.st/',
       'User-Agent': VIDEASY_UA,
     },
     subtitles,
@@ -16063,6 +16071,15 @@ async function layarkacaResolveIframe(
     );
     if (resolved) return resolved;
   }
+  // HYDRAX's iframe can expose Abyss immediately while the parent never does.
+  const directHydrax = /\/iframe3\//i.test(pageUrl) &&
+    layarkacaPrefersAbyss(pageUrl, label);
+  if (directHydrax) {
+    const direct = await layarkacaResolveWebViewCandidate(
+      pageUrl, referer, depth, seen, label,
+    );
+    if (direct) return direct;
+  }
   // Non-P2P iframe3 servers can return a browser-only shell or a nested ad
   // wrapper whose final player is only created when the selected link is
   // clicked from the watch page. Retry through that parent before asking the
@@ -16074,6 +16091,7 @@ async function layarkacaResolveIframe(
     );
     if (parentResolved) return parentResolved;
   }
+  if (directHydrax) return null;
   const preferred = await layarkacaResolveWebViewCandidate(
     pageUrl, referer, depth, seen, label,
   );

@@ -3,13 +3,14 @@
     {
       "id": "nimora",
       "name": "Nimora",
-      "version": "2.0.33",
+      "version": "2.0.34",
       "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora 2.0.34: added Ngefilm, Dutamovie, Pusatmovie, Kawanfilm and Sarangfilm movie and series sources that follow each site's domain changes, Savefilm domain discovery from its info page, and updated VaPlayer, VidFast, VidEasy and LayarKaca HYDRAX resolvers.",
         "Nimora 2.0.33: Filtered unreleased movies out of Trending Movie.",
         "Nimora 2.0.32: added Cricify live sources via Firebase configuration and refreshed Cricfy links when reopening a source.",
         "Nimora 2.0.31: fast live source discovery prefers FCTV, then Cricfy, before falling back to the first available provider.",
@@ -294,7 +295,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/bundle.js",
-      "bundleSha256": "4cb7e174ad5723e91bffffdb5a6e01cca12a9e239a298ce8b49274f1b9511a8f"
+      "bundleSha256": "b91377869c115a37dfd2721115f46334b86ea2f3287e210e747ca144ccb52260"
     }
   ]
 }

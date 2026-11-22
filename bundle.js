@@ -3118,7 +3118,7 @@ function sourceQuality(value) {
 //
 // Ported from CineStream's `invokeVaPlayer` (CineStreamExtractors.kt). The
 // one upstream in this family that hands back playable URLs in the clear:
-// `api.php` answers with `data.stream_urls`, a plain list of HLS playlists,
+// `api.php` answers with `data.cast_urls` (formerly `stream_urls`),
 // plus a large `default_subs` list. No cipher, no key exchange, nothing to
 // decrypt.
 //
@@ -3204,9 +3204,13 @@ async function fetchVaplayer(url) {
 }
 
 function vaplayerStreamUrls(payload) {
-  const urls = payload && payload.data && payload.data.stream_urls;
-  if (!Array.isArray(urls)) return [];
-  return urls.filter((u) => typeof u === 'string' && u.length > 0);
+  const data = payload && payload.data;
+  if (!data) return [];
+  const validUrls = (urls) => Array.isArray(urls)
+    ? urls.filter((u) => typeof u === 'string' && /^https?:\/\/[^\s/?#]+(?:[/?#]|$)/i.test(u))
+    : [];
+  const castUrls = validUrls(data.cast_urls);
+  return castUrls.length > 0 ? castUrls : validUrls(data.stream_urls);
 }
 
 // `default_subs` entries are `{lang, code, url}`. `lang` is the human label
@@ -3274,7 +3278,6 @@ async function vaplayerListSources(args) {
         season: isSeries ? parsed.season : null,
         episode: isSeries ? parsed.episode : null,
       })}`;
-      // The upstream distinguishes them in no way at all — they are
       // The upstream gives these playlists no distinct names.
       return {
         id,
@@ -3303,6 +3306,16 @@ async function vaplayerResolveSource(sourceId) {
   // Re-fetched, so the list can be shorter than when the id was minted.
   if (index >= urls.length) {
     throw new Error('VaPlayer: stream no longer offered');
+  }
+
+  if (Array.isArray(payload.data.cast_urls) && payload.data.cast_urls.includes(urls[index])) {
+    const response = await fetch(urls[index], { headers: vaplayerHeaders() });
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`VaPlayer: playlist HTTP ${response.status}`);
+    }
+    if (typeof response.body !== 'string' || !response.body.trimStart().startsWith('#EXTM3U')) {
+      throw new Error('VaPlayer: cast URL did not return an HLS playlist');
+    }
   }
 
   return {
@@ -4024,7 +4037,7 @@ async function vidfastCandidate(server, streamBase, csrfToken) {
   const streamUrl = `${String(streamBase).replace(/\/$/, '')}/${server.data}`;
   const encryptedResponse = await vidfastFetch(streamUrl, {
     method: 'POST',
-    headers: vidfastHeaders({'X-CSRF-Token': csrfToken}),
+    headers: vidfastHeaders({'X-CSRF-Token': csrfToken, 'X-Requested-With': 'XMLHttpRequest'}),
   });
   if (
     encryptedResponse == null ||
@@ -4056,8 +4069,23 @@ async function vidfastResolveMedia(media) {
   const encodedToken = vidfastTokenFromPage(pageResponse.body);
   if (encodedToken == null) throw new Error('VidFast: page token missing');
 
+  const stage1Data = await vidfastJson(
+    `${VIDFAST_ENCDEC_BASE}/enc-vidfast?text=${encodeURIComponent(encodedToken)}&stage=1`,
+  );
+  const stage1 = stage1Data && stage1Data.status === 200 ? stage1Data.result : null;
+  if (stage1 == null || typeof stage1.stage1 !== 'string' ||
+      !/^https?:\/\//i.test(stage1.stage1) || typeof stage1.token !== 'string') {
+    throw new Error('VidFast: stage 1 bootstrap failed');
+  }
+  const challenge = await vidfastFetch(stage1.stage1, {
+    method: 'POST',
+    headers: vidfastHeaders({'X-CSRF-Token': stage1.token, 'X-Requested-With': 'XMLHttpRequest'}),
+  });
+  if (challenge == null || challenge.status < 200 || challenge.status >= 300) {
+    throw new Error(`VidFast: stage 1 request failed${challenge == null ? '' : ` (HTTP ${challenge.status})`}`);
+  }
   const encodedData = await vidfastJson(
-    `${VIDFAST_ENCDEC_BASE}/enc-vidfast?text=${encodeURIComponent(encodedToken)}`,
+    `${VIDFAST_ENCDEC_BASE}/enc-vidfast?text=${encodeURIComponent(challenge.body)}&stage=2`,
   );
   const decoded = encodedData && encodedData.status === 200
     ? encodedData.result
@@ -4073,7 +4101,7 @@ async function vidfastResolveMedia(media) {
 
   const serversResponse = await vidfastFetch(decoded.servers, {
     method: 'POST',
-    headers: vidfastHeaders({'X-CSRF-Token': decoded.token}),
+    headers: vidfastHeaders({'X-CSRF-Token': decoded.token, 'X-Requested-With': 'XMLHttpRequest'}),
   });
   if (
     serversResponse == null ||
@@ -4544,22 +4572,13 @@ globalThis.__streamProviders.push({
 
 // VidEasy stream provider, in JS on the host `fetch`/`codec` API.
 //
-// VidEasy (player.videasy.to) sources streams from api.speedracelight.com,
+// VidEasy (vidy.st) sources streams from api.wecollege.net,
 // which returns seed-encrypted JSON. We decrypt via enc-dec.app/api/dec-videasy.
-//
-// Servers available (language info from EncDecEndpoints README):
-//   cdn        -> Original (may have 4K)
-//   m4uhd      -> Original
-//   vsrc       -> Original
-//   hdmovie    -> Original (EN quality) / Hindi (quality == "Hindi")
-//   meine      -> German
-//   lamovie    -> Spanish
-//   superflix  -> Portuguese
 //
 // Matches TMDB-backed items through their movie/series reference prefix.
 
 const VIDEASY_SPEEDRACE_BASE =
-  globalThis.__videasySpeedraceBaseUrl || 'https://api.speedracelight.com';
+  globalThis.__videasySpeedraceBaseUrl || 'https://api.wecollege.net';
 const VIDEASY_ENCDEC_BASE =
   globalThis.__videasyEncDecBaseUrl || 'https://enc-dec.app/api';
 
@@ -4570,38 +4589,27 @@ const VIDEASY_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 
-// Servers exposed as stream sources. The key is the speedracelight.com path
-// segment (e.g. /cdn/sources-with-title).
-//
-// Several, because which ones answer changes per *title*, not just per day:
-// checked live, a film resolved only on `downloader2` while an episode of a
-// series resolved only on `m4uhd`, `cdn` and `lamovie` — every other server
-// returned 500 for that same request. Listing one server, or a short list
-// that happens to miss the right one, reads to the viewer as "VidEasy has
-// nothing" when it simply wasn't asked in the right place.
-//
-// Listing costs nothing: `videasyListSources` doesn't call these, it only
-// names them. The requests happen when a source is resolved.
-//
-// Servers that answered 404 for every request (`myflixerzupcloud`, `jett`,
-// `tejo`, `ym`) are left out — a 404 here is the path segment not existing,
-// so those are wasted round trips rather than a server being down.
+// Current original-language servers from the upstream integration sample.
 const VIDEASY_SERVERS = [
-  { key: 'vsrc', label: 'VidEasy Original', quality: '' },
-  { key: 'cdn', label: 'VidEasy Yoru', quality: '' },
-  { key: 'downloader2', label: 'VidEasy Kite', quality: '' },
-  { key: 'm4uhd', label: 'VidEasy Breach', quality: '' },
-  { key: 'hdmovie', label: 'VidEasy Vyse', quality: '' },
-  { key: 'lamovie', label: 'VidEasy Aura', quality: '' },
-  { key: 'superflix', label: 'VidEasy Solstice', quality: '' },
-  { key: 'neon2', label: 'VidEasy Neon', quality: '' },
+  { key: 'miami', label: 'VidEasy Miami', quality: '' },
+  { key: 'boise', label: 'VidEasy Boise', quality: '' },
+  { key: 'vegas', label: 'VidEasy Vegas', quality: '' },
+  { key: 'reno', label: 'VidEasy Reno', quality: '' },
+  { key: 'oakland', label: 'VidEasy Oakland', quality: '' },
+  { key: 'seattle', label: 'VidEasy Seattle', quality: '' },
+  { key: 'phoenix', label: 'VidEasy Phoenix', quality: '' },
+  { key: 'atlanta', label: 'VidEasy Atlanta', quality: '' },
+  { key: 'portland', label: 'VidEasy Portland', quality: '' },
+  { key: 'dallas', label: 'VidEasy Dallas', quality: '' },
+  { key: 'tampa', label: 'VidEasy Tampa', quality: '' },
+  { key: 'orlando', label: 'VidEasy Orlando', quality: '' },
 ];
 
 function videasyHeaders() {
   return {
     Accept: '*/*',
-    Origin: 'https://player.videasy.to',
-    Referer: 'https://player.videasy.to/',
+    Origin: 'https://vidy.st',
+    Referer: 'https://vidy.st/',
     'User-Agent': VIDEASY_UA,
   };
 }
@@ -4685,12 +4693,12 @@ function doubleEncodeTitle(title) {
   return encodeURIComponent(encodeURIComponent(title));
 }
 
-// Returns the raw encrypted text from speedracelight.
+// Returns the encrypted upstream response.
 async function fetchEncryptedSources(serverKey, query) {
   const params = Object.entries(query)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join('&');
-  const url = `${VIDEASY_SPEEDRACE_BASE}/${serverKey}/sources-with-title?${params}`;
+  const url = `${VIDEASY_SPEEDRACE_BASE}/${serverKey}/sources?${params}`;
   let response;
   try {
     response = await fetch(url, { headers: videasyHeaders() });
@@ -4793,7 +4801,7 @@ async function videasyResolveSource(sourceId) {
     ep: episode,
   } = payload;
 
-  // Build the speedracelight query.
+  // Build the upstream query.
   const query = {
     tmdbId,
     mediaType: type,
@@ -4847,8 +4855,8 @@ async function videasyResolveSource(sourceId) {
     // These come back as both .m3u8 and .mp4 depending on the server.
     format: entry.url.includes('.m3u8') ? 'hls' : 'other',
     headers: {
-      Origin: 'https://player.videasy.to',
-      Referer: 'https://player.videasy.to/',
+      Origin: 'https://vidy.st',
+      Referer: 'https://vidy.st/',
       'User-Agent': VIDEASY_UA,
     },
     subtitles,
@@ -17138,7 +17146,7 @@ const savefilmDetailUrlsByRef = new Map();
 function savefilmHeaders(referer) {
   return {
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    Referer: referer || `${savefilmBase || SAVEFILM_DEFAULT_BASE}/`,
+    ...(referer === null ? {} : { Referer: referer || `${savefilmBase || SAVEFILM_DEFAULT_BASE}/` }),
     'User-Agent': SAVEFILM_UA,
   };
 }
@@ -17152,18 +17160,154 @@ async function savefilmGet(url, referer) {
   }
 }
 
+// ---- domain discovery (shared with muvipro.js) ----
+//
+// Muvipro sites move to a new domain every few weeks. Candidates, in order:
+//   1. the site's own "info update domain" page (ngefilm.store,
+//      savefilm21.info). These answer on plain DNS even where the site itself
+//      is blocked, and the site operators keep them current;
+//   2. the last domain verified on this device (host.storage, survives
+//      restarts);
+//   3. CloudX's Website.json, which lags behind but covers sites without an
+//      info page;
+//   4. the built-in default.
+// Every candidate must serve a Muvipro homepage before it is used, so an
+// info page or directory entry that now points at a parked or hijacked
+// domain is skipped. The origin the homepage redirects to wins.
+
+const SAVEFILM_BASE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+let savefilmDirectoryPromise = null;
+const savefilmDiscoveries = new Map();
+
+function savefilmDirectory() {
+  if (!savefilmDirectoryPromise) {
+    savefilmDirectoryPromise = (async () => {
+      const response = await savefilmGet(SAVEFILM_DIRECTORY, null);
+      if (response == null) return {};
+      try {
+        const parsed = JSON.parse(response.body);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch (_) {
+        return {};
+      }
+    })();
+  }
+  return savefilmDirectoryPromise;
+}
+
+function savefilmOrigin(url) {
+  const match = /^(https?:\/\/[^/?#\s]+)/i.exec(String(url || ''));
+  return match ? match[1].replace(/\/$/, '').toLowerCase() : null;
+}
+
+function savefilmIsIpOrigin(url) {
+  return /^https?:\/\/\d+\.\d+\.\d+\.\d+(?::\d+)?$/.test(String(url || ''));
+}
+
+function savefilmStorage() {
+  return typeof host === 'object' && host !== null && host.storage ? host.storage : null;
+}
+
+function savefilmStoredBase(key) {
+  const storage = savefilmStorage();
+  if (storage == null) return null;
+  try {
+    return savefilmOrigin(storage.read(key));
+  } catch (_) {
+    return null;
+  }
+}
+
+function savefilmStoreBase(key, base) {
+  const storage = savefilmStorage();
+  if (storage == null) return;
+  try {
+    storage.write(key, base, SAVEFILM_BASE_TTL_MS);
+  } catch (_) {
+    // A refused write is a cache miss next launch, nothing more.
+  }
+}
+
+// Links on an info page whose host carries the site's brand. Info pages also
+// carry ads; the brand check keeps those out of the candidate list.
+function savefilmInfoPageOrigins(html, infoUrl, brand) {
+  const own = savefilmOrigin(infoUrl);
+  const origins = [];
+  const links = /<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi;
+  let match;
+  while ((match = links.exec(html || '')) != null) {
+    const origin = savefilmOrigin(match[1]);
+    if (!origin || origin === own || origins.includes(origin)) continue;
+    const hostname = origin.replace(/^https?:\/\//, '').replace(/:\d+$/, '');
+    if (brand.test(hostname)) origins.push(origin);
+  }
+  return origins;
+}
+
+async function savefilmProbeBase(candidate) {
+  const response = await savefilmGet(`${candidate}/`, `${candidate}/`);
+  if (response == null || !/muvipro/i.test(response.body)) return null;
+  const landed = savefilmOrigin(response.url) || candidate;
+  // Some sites bounce a hostname to a bare IP (Filmlokal did); keep the
+  // hostname then, since the IP is not a stable address for the site.
+  return savefilmIsIpOrigin(landed) && !savefilmIsIpOrigin(candidate) ? candidate : landed;
+}
+
+// Each stage is only fetched when every earlier candidate failed its probe.
+function savefilmDiscoverStages(site) {
+  return [
+    async () => {
+      if (!site.infoUrl) return [];
+      const info = await savefilmGet(site.infoUrl, null);
+      return info == null ? [] : savefilmInfoPageOrigins(info.body, site.infoUrl, site.brand);
+    },
+    async () => [savefilmStoredBase(site.storageKey)],
+    async () => {
+      const listed = (await savefilmDirectory())[site.directoryKey];
+      return Array.isArray(listed) ? listed : [];
+    },
+    async () => [site.base],
+  ];
+}
+
+// Resolves to {base, verified}. Concurrent callers share one discovery; an
+// unverified result is not memoised so the next request tries again.
+function savefilmDiscoverBase(site) {
+  if (savefilmDiscoveries.has(site.storageKey)) return savefilmDiscoveries.get(site.storageKey);
+  const discovery = (async () => {
+    const tried = new Set();
+    for (const stage of savefilmDiscoverStages(site)) {
+      for (const value of await stage()) {
+        const candidate = savefilmOrigin(value);
+        if (!candidate || tried.has(candidate)) continue;
+        tried.add(candidate);
+        const base = await savefilmProbeBase(candidate);
+        if (base == null) continue;
+        savefilmStoreBase(site.storageKey, base);
+        return { base, verified: true };
+      }
+    }
+    savefilmDiscoveries.delete(site.storageKey);
+    return { base: savefilmStoredBase(site.storageKey) || site.base, verified: false };
+  })();
+  savefilmDiscoveries.set(site.storageKey, discovery);
+  return discovery;
+}
+
+const SAVEFILM_SITE = {
+  storageKey: 'muvipro.base.savefilm',
+  infoUrl: globalThis.__savefilmInfoUrl !== undefined
+    ? globalThis.__savefilmInfoUrl : 'https://savefilm21.info/',
+  brand: globalThis.__savefilmInfoBrand || /savefilm/i,
+  directoryKey: 'savefilm',
+  base: SAVEFILM_DEFAULT_BASE,
+};
+
 async function savefilmActiveBase() {
   if (savefilmBase) return savefilmBase;
-  const response = await savefilmGet(SAVEFILM_DIRECTORY, SAVEFILM_DEFAULT_BASE);
-  if (response != null) {
-    try {
-      const urls = JSON.parse(response.body).savefilm;
-      if (Array.isArray(urls) && typeof urls[0] === 'string' && /^https?:\/\//i.test(urls[0])) {
-        savefilmBase = urls[0].replace(/\/$/, '');
-      }
-    } catch (_) {}
-  }
-  return savefilmBase || SAVEFILM_DEFAULT_BASE;
+  const discovered = await savefilmDiscoverBase(SAVEFILM_SITE);
+  if (discovered.verified) savefilmBase = discovered.base;
+  return discovered.base;
 }
 
 function savefilmUrl(value, base) {
@@ -18162,6 +18306,381 @@ globalThis.__catalogProviders.push({
   catalogId: SAVEFILM_NSFW_CATALOG_ID,
   catalog: savefilmNsfwCatalog,
 });
+
+// Muvipro-theme Indonesian movie sites (CloudX-V2 family).
+//
+// Ngefilm, Dutamovie, Pusatmovie, Kawanfilm and Sarangfilm all run
+// the same WordPress "Muvipro" theme that Savefilm uses. They share the search
+// markup (`article.item-infinite`), the episode buttons (`S3 Eps1`) and the
+// embed hosts, so one adapter serves every site. Each site is registered as
+// its own stream provider so the app can enable or disable it individually.
+//
+// The page parsing and media extraction helpers live in savefilm.js (Abyss,
+// P.A.C.K.E.R. JWPlayer configs, AceFile Drive mirrors, direct HLS/MP4). This
+// file must be bundled after savefilm.js.
+//
+// Muvipro has two player layouts:
+//   * `ul.muvipro-player-tabs` links to `?player=N` pages that each carry an
+//     iframe (same as Savefilm);
+//   * `div#muvipro_player_content_id[data-id]` with `div.tab-content-ajax`
+//     panes whose iframe comes from `admin-ajax.php`
+//     (`action=muvipro_player_content&tab=<pane id>&post_id=<data-id>`).
+
+const MUVIPRO_UA =
+  'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
+// One site must not hold the non-fast fan-out hostage: the slowest host
+// decides how long the whole source list takes.
+const MUVIPRO_SOURCES_TIMEOUT_MS = 25000;
+const MUVIPRO_EMBED_TIMEOUT_MS = 10000;
+const MUVIPRO_MAX_PLAYERS = 6;
+
+// LayarWarna, KlikXXi and WGFilm21 are Muvipro too but are left out: in
+// November 2026 LayarWarna only served JuicyCodes/mivalyo embeds that do not
+// resolve, and the other two answered admin-ajax with a Cloudflare block.
+//
+// `directoryKey` is the key in CloudX's Website.json, `infoUrl` the site's
+// own domain-update page where one exists, and `base` the last domain
+// verified to serve the site. See savefilmDiscoverBase for the order.
+const muviproInfoOverrides = globalThis.__muviproInfoUrls || {};
+const muviproBrandOverrides = globalThis.__muviproBrands || {};
+const MUVIPRO_SITES = [
+  { key: 'ngefilm', name: 'Ngefilm', directoryKey: 'ngefilm', base: 'https://new39.ngefilm.site', infoUrl: 'https://ngefilm.store/', brand: /ngefilm/i },
+  { key: 'dutamovie', name: 'Dutamovie', directoryKey: 'dutamovie', base: 'https://arringtonaccuracy.com' },
+  { key: 'pusatmovie', name: 'Pusatmovie', directoryKey: 'pusatmovie', base: 'https://alwen.org' },
+  { key: 'kawanfilm', name: 'Kawanfilm', directoryKey: 'kawanfilm', base: 'https://web.kawanfilm21.co' },
+  { key: 'sarangfilm', name: 'Sarangfilm', directoryKey: 'sarangfilm', base: 'https://sarangfilm.co' },
+].map((site) => ({
+  ...site,
+  storageKey: `muvipro.base.${site.key}`,
+  brand: muviproBrandOverrides[site.key] || site.brand || new RegExp(site.key, 'i'),
+  infoUrl: site.key in muviproInfoOverrides ? muviproInfoOverrides[site.key] : site.infoUrl || null,
+}));
+
+const muviproBaseOverrides = globalThis.__muviproBaseUrls || {};
+
+function muviproProviderId(site) {
+  return `nimora.${site.key}`;
+}
+
+function muviproHeaders(referer, extra) {
+  return {
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'User-Agent': MUVIPRO_UA,
+    ...(referer ? { Referer: referer } : {}),
+    ...(extra || {}),
+  };
+}
+
+async function muviproRequest(url, referer, options) {
+  try {
+    const response = await fetch(url, {
+      ...(options || {}),
+      headers: muviproHeaders(referer, options && options.headers),
+    });
+    return response.status >= 200 && response.status < 300 ? response : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function muviproOrigin(url) {
+  const match = /^(https?:\/\/[^/?#]+)/i.exec(String(url || ''));
+  return match ? match[1].replace(/\/$/, '') : null;
+}
+
+async function muviproActiveBase(site) {
+  if (typeof muviproBaseOverrides[site.key] === 'string') return muviproBaseOverrides[site.key];
+  return (await savefilmDiscoverBase(site)).base;
+}
+
+function muviproUrl(value, pageUrl, base) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const raw = value.trim();
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('//')) return `https:${raw}`;
+  if (raw.startsWith('/')) {
+    const origin = muviproOrigin(pageUrl) || base;
+    return origin ? `${origin}${raw}` : null;
+  }
+  const page = typeof pageUrl === 'string' ? pageUrl.split(/[?#]/, 1)[0] : '';
+  if (raw.startsWith('?') && page) return `${page}${raw}`;
+  return page ? `${page.slice(0, page.lastIndexOf('/') + 1)}${raw}` : null;
+}
+
+// Sites append release markers to titles: "Inception (2010) Sub Indo",
+// "... Bluray Subtitle Indonesia", "... Dubbing Indonesia".
+function muviproCleanTitle(value) {
+  return savefilmNormalize(value)
+    .replace(/\b(?:sub(?:title)?|subtitle\s+indonesia|indo(?:nesia)?|bluray|web\s*dl|webrip|hdrip|hdcam|hd|cam|dubbing|dub|nonton|film|streaming|download)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function muviproSeriesTitle(value) {
+  return muviproCleanTitle(value)
+    .replace(/\b(?:season|musim)\s*\d{1,2}\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function muviproIsDubbed(value) {
+  return /\b(?:dubbing|dub)\b/i.test(savefilmText(value));
+}
+
+function muviproScoreResult(result, index, query) {
+  const wanted = muviproSeriesTitle(query.title);
+  if (!wanted) return null;
+  const candidate = query.isEpisode ? muviproSeriesTitle(result.title) : muviproCleanTitle(result.title);
+  if (!candidate) return null;
+  const exact = candidate === wanted;
+  const overlap = candidate.startsWith(`${wanted} `) || wanted.startsWith(`${candidate} `);
+  if (!exact && !overlap) return null;
+  const isSeries = /\/tv\//i.test(result.url);
+  let score = (exact ? 0 : 20) + index / 1000;
+  if (query.isEpisode !== isSeries) score += 50;
+  if (muviproIsDubbed(result.title)) score += 5;
+  if (!query.isEpisode && Number.isInteger(query.year) && Number.isInteger(result.year)) {
+    const delta = Math.abs(query.year - result.year);
+    if (delta > 1) return null;
+    score += delta * 3;
+  }
+  if (query.isEpisode && Number.isInteger(query.season)) {
+    const season = savefilmSeasonNumber(result.title);
+    // Per-season pages ("Squid Game Season 3") must match the season. A page
+    // without a season marker can hold every season.
+    if (season != null && season !== query.season) return null;
+    if (season == null) score += 2;
+  }
+  return { result, score };
+}
+
+async function muviproFindResult(site, base, query, titles) {
+  for (const title of titles) {
+    for (const variant of savefilmSearchTitleVariants(title)) {
+      const url = `${base}/?s=${encodeURIComponent(variant)}&post_type[]=post&post_type[]=tv`;
+      const response = await muviproRequest(url, `${base}/`);
+      if (response == null) continue;
+      const results = savefilmParseArticles(response.body, base);
+      const scored = results
+        .map((result, index) => muviproScoreResult(result, index, { ...query, title: variant }))
+        .filter((entry) => entry != null)
+        .sort((a, b) => a.score - b.score);
+      if (scored.length > 0) return scored[0].result;
+    }
+  }
+  return null;
+}
+
+function muviproAjaxPlayers(html) {
+  const postId = /id\s*=\s*["']muvipro_player_content_id["'][^>]*data-id\s*=\s*["'](\d+)/i.exec(html || '')
+    || /data-id\s*=\s*["'](\d+)["'][^>]*id\s*=\s*["']muvipro_player_content_id/i.exec(html || '');
+  if (!postId) return null;
+  const tabs = [];
+  const panes = /<div\b([^>]*\btab-content-ajax\b[^>]*)>/gi;
+  let pane;
+  while ((pane = panes.exec(html || '')) != null) {
+    const id = savefilmAttr(pane[1], 'id');
+    if (id && /^[\w-]+$/.test(id) && !tabs.includes(id)) tabs.push(id);
+  }
+  return { postId: postId[1], tabs };
+}
+
+function muviproIframeUrls(html, pageUrl, base) {
+  const urls = [];
+  const frames = /<iframe\b([^>]*)>/gi;
+  let match;
+  while ((match = frames.exec(html || '')) != null) {
+    const value = savefilmAttr(match[1], 'data-litespeed-src') ||
+      savefilmAttr(match[1], 'data-src') || savefilmAttr(match[1], 'src');
+    const url = muviproUrl(value, pageUrl, base);
+    if (!url || /googletagmanager|youtube\.com|about:blank/i.test(url)) continue;
+    if (!urls.includes(url)) urls.push(url);
+  }
+  return urls;
+}
+
+// Every embed the detail page exposes, in the site's own server order.
+async function muviproEmbedUrls(detailUrl, base) {
+  const detail = await muviproRequest(detailUrl, `${base}/`);
+  if (detail == null) return [];
+  const embeds = [];
+  const add = (url) => { if (url && !embeds.includes(url)) embeds.push(url); };
+  const ajax = muviproAjaxPlayers(detail.body);
+  if (ajax && ajax.tabs.length > 0) {
+    const pages = await Promise.all(ajax.tabs.slice(0, MUVIPRO_MAX_PLAYERS).map((tab) =>
+      muviproRequest(`${base}/wp-admin/admin-ajax.php`, detailUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'X-Requested-With': 'XMLHttpRequest',
+          Origin: base,
+        },
+        body: `action=muvipro_player_content&tab=${encodeURIComponent(tab)}&post_id=${encodeURIComponent(ajax.postId)}`,
+      })));
+    for (const page of pages) {
+      if (page != null) muviproIframeUrls(page.body, detailUrl, base).forEach(add);
+    }
+  }
+  if (embeds.length === 0) {
+    const playerPages = savefilmPlayerPageUrls(detail.body, detailUrl, base)
+      .filter((url) => url === detailUrl || muviproOrigin(url) === muviproOrigin(detailUrl))
+      .slice(0, MUVIPRO_MAX_PLAYERS);
+    const pages = await Promise.all(playerPages.map((url) =>
+      url === detailUrl ? detail : muviproRequest(url, detailUrl)));
+    pages.forEach((page, index) => {
+      if (page != null) muviproIframeUrls(page.body, playerPages[index], base).forEach(add);
+    });
+  }
+  return embeds;
+}
+
+function muviproRedirectUrl(html, pageUrl) {
+  const match = /(?:window\.)?location(?:\.href)?\s*=\s*['"]([^'"]+)|(?:window\.)?location\.replace\(\s*['"]([^'"]+)['"]\s*\)/i.exec(html || '');
+  const value = match && (match[1] || match[2]);
+  return value ? muviproUrl(value, pageUrl, muviproOrigin(pageUrl)) : null;
+}
+
+async function muviproEmbedPage(url, referer, depth = 0) {
+  const response = await muviproRequest(url, referer);
+  if (response == null) return null;
+  const redirected = depth < 3 && response.body.length <= 2048
+    ? muviproRedirectUrl(response.body, url) : null;
+  if (!redirected || redirected === url) return { url, body: response.body };
+  return muviproEmbedPage(redirected, url, depth + 1);
+}
+
+function muviproEmbedMedia(body, url) {
+  const origin = muviproOrigin(url);
+  const media = [
+    ...savefilmMediaUrls(body, origin),
+    ...savefilmAbyssMediaUrls(body),
+    ...savefilmAcefileMediaUrls(body),
+  ].filter((entry) => !/\/(?:blank|ads?)\.mp4(?:[?#]|$)/i.test(entry.url || ''));
+  // VidHide-family players shuffle their `links` object per request. The
+  // `/stream/` playlist on the player's own origin plays; the CDN `hls2`
+  // playlist carries an ASN-bound token that often answers 403. Prefer the
+  // same-origin entries so the first listed source is the playable one.
+  const sameOrigin = (entry) => (muviproOrigin(entry.url) === origin ? 0 : 1);
+  return media
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => sameOrigin(a.entry) - sameOrigin(b.entry) || a.index - b.index)
+    .map(({ entry }) => entry);
+}
+
+async function muviproStreams(detailUrl, base) {
+  const embeds = await muviproEmbedUrls(detailUrl, base);
+  // A dead embed host (they come and go weekly) must not hide the servers
+  // that did answer, so each embed gets its own budget.
+  const perEmbed = await Promise.all(embeds.map((embedUrl) => muviproTimeout((async () => {
+    const direct = savefilmMediaUrls(embedUrl, detailUrl);
+    if (direct.length > 0) return direct.map((entry) => ({ ...entry, referer: detailUrl }));
+    const page = await muviproEmbedPage(embedUrl, detailUrl);
+    if (page == null) return [];
+    return muviproEmbedMedia(page.body, page.url).map((entry) => ({
+      ...entry,
+      referer: page.url,
+      ...(entry.resolver === 'abyss' ? { resolverUrl: embedUrl, resolverReferer: detailUrl } : {}),
+    }));
+  })().catch(() => []), [], MUVIPRO_EMBED_TIMEOUT_MS)));
+  const streams = [];
+  for (const entry of perEmbed.flat()) {
+    if (!streams.some((stream) => stream.url === entry.url)) streams.push(entry);
+  }
+  return streams;
+}
+
+function muviproTimeout(promise, fallback, ms) {
+  // Not every embedding runtime installs timers; the host's own request
+  // timeouts still bound the work there.
+  if (typeof globalThis.setTimeout !== 'function') return promise;
+  let handle = null;
+  return Promise.race([
+    promise.finally(() => { if (handle != null) clearTimeout(handle); }),
+    new Promise((resolve) => {
+      handle = setTimeout(() => resolve(fallback), ms);
+    }),
+  ]);
+}
+
+function muviproQuery(item) {
+  const query = savefilmItemQuery(item);
+  const year = item && Number.isInteger(item.releaseYear) ? item.releaseYear : null;
+  return { ...query, year };
+}
+
+async function muviproSiteSources(site, args) {
+  const providerId = muviproProviderId(site);
+  const enabled = args && args.enabledProviders;
+  if (enabled != null && enabled.indexOf(providerId) === -1) return { sources: [] };
+  const item = args && args.item;
+  if (!item || (item.kind !== 'video' && item.kind !== 'episode')) return { sources: [] };
+  const query = muviproQuery(item);
+  if (!query.title || (query.isEpisode && !Number.isInteger(query.episode))) return { sources: [] };
+  const base = await muviproActiveBase(site);
+  const titles = await savefilmItemTitleVariants(item, query.title);
+  const found = await muviproFindResult(site, base, query, titles);
+  if (found == null) return { sources: [] };
+  let watchUrl = found.url;
+  if (query.isEpisode) {
+    const detail = await muviproRequest(watchUrl, `${base}/`);
+    if (detail == null) return { sources: [] };
+    const season = query.season || 1;
+    watchUrl = savefilmEpisodeUrl(detail.body, season, query.episode, base);
+    if (!watchUrl) return { sources: [] };
+  }
+  const streams = await muviproStreams(watchUrl, base);
+  return {
+    sources: streams.map((stream, index) => ({
+      id: `${site.key}:${savefilmEncode(stream.resolverUrl
+        ? { a: stream.resolverUrl, r: stream.resolverReferer }
+        : { u: stream.url, r: stream.referer })}`,
+      label: stream.label
+        ? `${site.name} · ${stream.label}`
+        : `${site.name} · ${stream.format === 'hls' ? 'HLS' : 'MP4'} ${index + 1}`,
+      provider: 'Nimora',
+      providerId,
+    })),
+  };
+}
+
+async function muviproResolveSource(site, sourceId) {
+  const prefix = `${site.key}:`;
+  if (typeof sourceId !== 'string' || !sourceId.startsWith(prefix)) {
+    throw new Error(`Invalid ${site.name} source id`);
+  }
+  const payload = savefilmDecode(sourceId.slice(prefix.length));
+  if (typeof payload?.a === 'string' && /^https?:\/\/[^\s]+$/i.test(payload.a)) {
+    // Abyss media URLs are signed per page load; rebuild them on demand.
+    const page = await muviproEmbedPage(payload.a, payload.r);
+    const stream = page == null ? null
+      : savefilmAbyssMediaUrls(page.body).find((entry) => entry.resolver === 'abyss');
+    if (stream == null) throw new Error(`${site.name} Abyss player has no playable media`);
+    return savefilmResolvedStream(stream, page.url);
+  }
+  const isFile = typeof payload?.u === 'string' &&
+    /^https?:\/\/[^\s]+\.(?:m3u8|mp4)(?:[?#].*)?$/i.test(payload.u);
+  const isDrive = typeof payload?.u === 'string' &&
+    /^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/[A-Za-z0-9_-]{10,}\?alt=media&key=[^\s&]+$/i.test(payload.u);
+  if (!isFile && !isDrive) throw new Error(`Malformed ${site.name} source id`);
+  return savefilmResolvedStream({
+    url: payload.u,
+    format: /\.m3u8(?:[?#]|$)/i.test(payload.u) ? 'hls' : 'mp4',
+  }, payload.r);
+}
+
+globalThis.__streamProviders = globalThis.__streamProviders || [];
+for (const site of MUVIPRO_SITES) {
+  globalThis.__streamProviders.push({
+    providerKey: site.key,
+    sources: (args) => muviproTimeout(
+      muviproSiteSources(site, args).catch(() => ({ sources: [] })),
+      { sources: [] },
+      MUVIPRO_SOURCES_TIMEOUT_MS,
+    ),
+    resolve: (sourceId) => muviproResolveSource(site, sourceId),
+  });
+}
 
 // LayarKaca stream discovery for TMDB-owned movie and episode items.
 //
@@ -19324,6 +19843,15 @@ async function layarkacaResolveIframe(
     );
     if (resolved) return resolved;
   }
+  // HYDRAX's iframe can expose Abyss immediately while the parent never does.
+  const directHydrax = /\/iframe3\//i.test(pageUrl) &&
+    layarkacaPrefersAbyss(pageUrl, label);
+  if (directHydrax) {
+    const direct = await layarkacaResolveWebViewCandidate(
+      pageUrl, referer, depth, seen, label,
+    );
+    if (direct) return direct;
+  }
   // Non-P2P iframe3 servers can return a browser-only shell or a nested ad
   // wrapper whose final player is only created when the selected link is
   // clicked from the watch page. Retry through that parent before asking the
@@ -19335,6 +19863,7 @@ async function layarkacaResolveIframe(
     );
     if (parentResolved) return parentResolved;
   }
+  if (directHydrax) return null;
   const preferred = await layarkacaResolveWebViewCandidate(
     pageUrl, referer, depth, seen, label,
   );

@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "2.0.33",
+  "version": "2.0.34",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -170,6 +170,41 @@
         "stream"
       ],
       "streamDomains": ["movie", "series", "anime"]
+    },
+    {
+      "id": "nimora.ngefilm",
+      "name": "Ngefilm",
+      "roles": ["stream"],
+      "streamDomains": ["movie", "series"],
+      "locales": {"countries": ["ID"], "languages": ["id"]}
+    },
+    {
+      "id": "nimora.dutamovie",
+      "name": "Dutamovie",
+      "roles": ["stream"],
+      "streamDomains": ["movie", "series"],
+      "locales": {"countries": ["ID"], "languages": ["id"]}
+    },
+    {
+      "id": "nimora.pusatmovie",
+      "name": "Pusatmovie",
+      "roles": ["stream"],
+      "streamDomains": ["movie", "series"],
+      "locales": {"countries": ["ID"], "languages": ["id"]}
+    },
+    {
+      "id": "nimora.kawanfilm",
+      "name": "Kawanfilm",
+      "roles": ["stream"],
+      "streamDomains": ["movie", "series"],
+      "locales": {"countries": ["ID"], "languages": ["id"]}
+    },
+    {
+      "id": "nimora.sarangfilm",
+      "name": "Sarangfilm",
+      "roles": ["stream"],
+      "streamDomains": ["movie", "series"],
+      "locales": {"countries": ["ID"], "languages": ["id"]}
     },
     {
       "id": "nimora.layarkaca.catalog",
