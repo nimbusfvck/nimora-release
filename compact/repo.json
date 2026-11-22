@@ -3,13 +3,14 @@
     {
       "id": "nimora.compact",
       "name": "Nimora Compact",
-      "version": "2.0.39",
+      "version": "2.0.40",
       "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
       "author": "nimbusfvck",
       "hosts": [
         "*"
       ],
       "releaseNotes": [
+        "Nimora Compact 2.0.40: added AK47 Sports live and upcoming events with fresh stream links, including token-signed, HTML and embedded players.",
         "Nimora Compact 2.0.39: LayarKaca's discovery time budget no longer cuts short a HYDRAX or other LayarKaca resolve that runs while a search is in progress. VidCore's initial page request no longer sends the XHR header used by its API calls.",
         "Nimora Compact 2.0.38: vaPlayer, VidEasy and MovieBox skip their requests when switched off, so per-provider source discovery does not repeat them.",
         "Nimora Compact 2.0.37: sources from other providers are no longer lost when a slow provider passes the 30-second discovery limit: VidEasy and VaPlayer no longer open Cloudflare challenges they cannot pass, and LayarKaca stops starting new requests once its time budget is spent.",
@@ -158,7 +159,7 @@
       ],
       "manifestUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/manifest.json",
       "bundleUrl": "https://raw.githubusercontent.com/nimbusfvck/nimora-release/main/compact/bundle.js",
-      "bundleSha256": "98a8d161494590cdb61e86624bbe7e3c56ae1f7e14479fe7d6e6b215a21829a6"
+      "bundleSha256": "921cc204ad853ad897fb69a9312a61dc12aace0a23f100985ca514e4d71fa6bf"
     }
   ]
 }

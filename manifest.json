@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora",
   "name": "Nimora",
-  "version": "2.0.39",
+  "version": "2.0.40",
   "runtime": "js",
   "description": "Live and upcoming sports, movie and TV catalogs, plus anime streams, running as a JavaScript bundle in the sandboxed QuickJS runtime.",
   "author": "nimbusfvck",
@@ -136,6 +136,24 @@
       "roles": [
         "stream"
       ],
+      "streamDomains": ["live"]
+    },
+    {
+      "id": "nimora.ak47.catalog",
+      "name": "AK47 Catalog",
+      "roles": ["catalog"],
+      "catalogs": [{
+        "id": "fixtures_sport_ak47",
+        "name": "AK47",
+        "categories": ["sport"],
+        "kind": "liveEvent",
+        "display": "row"
+      }]
+    },
+    {
+      "id": "nimora.ak47",
+      "name": "AK47 Sports",
+      "roles": ["stream"],
       "streamDomains": ["live"]
     },
     {

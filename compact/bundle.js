@@ -89,6 +89,7 @@ const CATALOG_ID = 'fixtures';
 const LIVE_CATALOG_ID = 'fixtures_live';
 const SPORT_CATALOG_ID = 'fixtures_sport';
 const PROVIDER_SPORT_CATALOGS = [
+  { id: 'fixtures_sport_ak47', name: 'AK47', load: getAk47SportEntries, includeFootball: true },
   { id: 'fixtures_sport_fctv', name: 'FCTV', load: getFctvSportEntries },
   { id: 'fixtures_sport_daddylive', name: 'DaddyLive', load: getDaddyliveSportEntries },
 ];
@@ -1328,6 +1329,15 @@ async function getStreamedPkSportEntries(nowMs) {
   }
 }
 
+async function getAk47SportEntries(nowMs) {
+  if (typeof globalThis.__ak47SportEntries !== 'function') return [];
+  try {
+    return await globalThis.__ak47SportEntries(nowMs);
+  } catch (_) {
+    return [];
+  }
+}
+
 async function getDaddyliveSportEntries(nowMs) {
   if (typeof globalThis.__daddyliveSportEntries !== 'function') return [];
   try {
@@ -1931,6 +1941,7 @@ function buildProviderSportPage(
     .map((entry) => normalizeProviderEntry(entry, nowMs))
     .filter((entry) => entry.item?.schedule?.state !== 'ended')
     .filter((entry) =>
+      source.includeFootball === true ||
       sportIdOf(entry.sportName || entry.sportId) !== FOOTBALL.id);
   const ownIndex = providerEntriesIndex([]);
   const grouped = new Map();
@@ -8370,6 +8381,504 @@ globalThis.__streamProviders.push({
   sources: cricifySources,
   resolve: cricifyResolve,
 });
+
+// AK47 Sports 1.6: Firebase config, wrapped event lists, and fresh stream links.
+// Uses the shared Cricfy event, header, manifest, and DRM helpers.
+const AK47_PROVIDER_ID = 'nimora.ak47';
+const AK47_CONFIG_URL = globalThis.__ak47ConfigUrl ||
+  'https://firebaseremoteconfig.googleapis.com/v1/projects/987682933046/namespaces/firebase:fetch';
+const AK47_FALLBACK_BASE = globalThis.__ak47FallbackBase || 'https://hellobabu.xyz/';
+const AK47_CERT_SHA256 = '98b7f4eeb9cfc4f723d1d1fc2b210d07254e714db29f9069ccc4d4eac3b794f9';
+const AK47_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+const AK47_TIMEOUT_MS = 8000;
+
+function ak47SwapPairs(value) {
+  const chars = value.split('');
+  for (let i = 0; i + 1 < chars.length; i += 2) {
+    [chars[i], chars[i + 1]] = [chars[i + 1], chars[i]];
+  }
+  return chars.join('');
+}
+
+function ak47ContentKey() {
+  const digest = host.codec.hexToBase64(AK47_CERT_SHA256);
+  const material = ak47SwapPairs(digest.split('').reverse().join(''));
+  return host.codec.textToBase64(host.codec.textToBase64(material).slice(0, 16));
+}
+
+function ak47Decode(raw) {
+  const text = String(raw || '').trim();
+  if (text.startsWith('{') || text.startsWith('[')) return JSON.parse(text);
+  try {
+    const encoded = ak47SwapPairs(host.codec.base64ToText(text)).split('').reverse().join('');
+    const plain = host.crypto.aesCbcDecrypt(
+      ak47ContentKey(), host.codec.textToBase64('dz00QVhsNmZZU0Fw'), encoded,
+    );
+    if (plain !== null) return JSON.parse(host.codec.base64ToText(plain));
+  } catch (_) { /* older config uses the Java AES fallback */ }
+  const plain = host.crypto.aesCbcDecrypt(
+    host.codec.textToBase64('l9K5bT5xC1wP7pK1'),
+    host.codec.textToBase64('k5K4nN7oU8hL6l19'), text,
+  );
+  if (plain !== null) {
+    try { return JSON.parse(host.codec.base64ToText(plain)); } catch (_) { /* invalid feed */ }
+  }
+  throw new Error('AK47 feed decryption failed');
+}
+
+// The feed nests JSON strings with an extra escaped slash layer.
+function ak47Unwrap(row, key) {
+  const value = row?.[key] ?? row;
+  if (typeof value === 'string') return JSON.parse(value.replace(/\\\\/g, '\\'));
+  return value;
+}
+
+function ak47FeedPath(path) {
+  if (typeof path !== 'string' || !/^[a-zA-Z0-9_/-]+\.txt$/.test(path) ||
+      path.startsWith('/') || path.includes('..')) throw new Error('Invalid AK47 feed path');
+  return path;
+}
+
+let ak47BasesMemo = null;
+let ak47BasesPending = null;
+async function ak47Bases() {
+  if (ak47BasesMemo && Date.now() - ak47BasesMemo.at < 15 * 60 * 1000) return ak47BasesMemo.bases;
+  if (ak47BasesPending) return ak47BasesPending;
+  ak47BasesPending = (async () => {
+    const bases = [];
+    try {
+      const response = await fetch(AK47_CONFIG_URL, {
+        method: 'POST', timeoutMs: AK47_TIMEOUT_MS,
+        headers: {
+          'Content-Type': 'application/json', 'X-Android-Package': 'app.aksports.live',
+          'X-Goog-Api-Key': 'AIzaSyCOhPo6X5o8517oC_tFtH_L8ka3ElacTu0',
+        },
+        body: JSON.stringify({
+          appId: '1:987682933046:android:b0d2f52255416b34cb0b97',
+          appInstanceId: '12345678901234567890123456789012',
+          appInstanceIdToken: '', languageCode: 'en-US', countryCode: 'US',
+        }),
+      });
+      if (response.status >= 200 && response.status < 300) {
+        const base = JSON.parse(response.body).entries?.api_url;
+        if (typeof base === 'string' && /^https?:\/\/[^\s/?#]+\/?$/.test(base)) bases.push(base);
+      }
+    } catch (_) { /* use the last known host */ }
+    bases.push(AK47_FALLBACK_BASE);
+    const result = [...new Set(bases.map((base) => base.replace(/\/+$/, '') + '/'))];
+    ak47BasesMemo = { at: Date.now(), bases: result };
+    return result;
+  })();
+  try { return await ak47BasesPending; } finally { ak47BasesPending = null; }
+}
+
+async function ak47FetchFeed(path) {
+  ak47FeedPath(path);
+  let lastError;
+  for (const base of await ak47Bases()) {
+    try {
+      const response = await fetch(base + path, { timeoutMs: AK47_TIMEOUT_MS });
+      if (response.status < 200 || response.status >= 300) throw new Error(`AK47 feed HTTP ${response.status}`);
+      const result = ak47Decode(response.body);
+      if (!Array.isArray(result)) throw new Error('AK47 feed is not a list');
+      return result;
+    } catch (error) { lastError = error; }
+  }
+  ak47BasesMemo = null;
+  throw lastError || new Error('AK47 feed unavailable');
+}
+
+function ak47ParseEvents(rows) {
+  const events = [];
+  for (const row of rows) {
+    try {
+      const json = ak47Unwrap(row, 'event');
+      const event = cricfyEventFromJson({
+        ...json, teamALogo: json.teamAFlag || json.teamALogo,
+        teamBLogo: json.teamBFlag || json.teamBLogo,
+      });
+      if (event.visible) {
+        ak47FeedPath(event.linksPath);
+        events.push(event);
+      }
+    } catch (_) { /* skip malformed rows without losing the schedule */ }
+  }
+  return events;
+}
+
+let ak47EventsMemo = null;
+async function ak47Events() {
+  if (ak47EventsMemo && Date.now() - ak47EventsMemo.at < 60 * 1000) return ak47EventsMemo.promise;
+  const memo = { at: Date.now(), promise: ak47FetchFeed('events.txt').then(ak47ParseEvents) };
+  ak47EventsMemo = memo;
+  try { return await memo.promise; } catch (error) {
+    if (ak47EventsMemo === memo) ak47EventsMemo = null;
+    throw error;
+  }
+}
+
+function ak47Json(raw) {
+  const text = String(raw || '').trim();
+  if (text.startsWith('{') || text.startsWith('[')) return JSON.parse(text);
+  try { return ak47Decode(text); } catch (_) { /* response cipher differs from feeds */ }
+  try { return JSON.parse(decodeCricfyPayload(text)); } catch (_) { /* encrypted response */ }
+  const plain = host.crypto.aesCbcDecrypt(
+    host.codec.textToBase64('l2K5wB8xC1wP7rK1'),
+    host.codec.textToBase64('n0K4nP8uB8hH1l18'), text,
+  );
+  if (plain !== null) return JSON.parse(host.codec.base64ToText(plain));
+  throw new Error('AK47 response is not valid JSON');
+}
+
+function ak47TokenSpec(blob) {
+  const spec = ak47Json(blob);
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) throw new Error('Invalid AK47 tokenApi');
+  const type = String(spec.type || 'token').toLowerCase();
+  if (!['token', 'json', 'sp', 'ls', 'html', 'yt', 'daddy', 'embed'].includes(type)) {
+    throw new Error(`Unknown AK47 tokenApi type: ${type}`);
+  }
+  return { ...spec, type };
+}
+
+function ak47Absolute(value, base) {
+  const text = String(value || '').trim().replace(/&amp;/g, '&').replace(/\\\//g, '/');
+  if (/^https?:\/\//i.test(text)) return text;
+  const origin = /^(https?:\/\/[^/?#]+)/i.exec(base || '')?.[1];
+  if (!origin) throw new Error('AK47 URL has no base');
+  if (text.startsWith('//')) return origin.split(':')[0] + ':' + text;
+  const path = text.startsWith('/') ? text : (base.split(/[?#]/)[0].slice(origin.length).replace(/[^/]*$/, '') + text);
+  const parts = [];
+  for (const part of path.split('/')) {
+    if (part === '..') parts.pop();
+    else if (part && part !== '.') parts.push(part);
+  }
+  return `${origin}/${parts.join('/')}`;
+}
+
+async function ak47Request(value, { headers = {}, method = 'GET', body, json = false } = {}) {
+  const split = cricfySplitLinkAndHeaders(String(value || ''));
+  if (!/^https?:\/\/[^\s/?#]+/i.test(split.url)) throw new Error('AK47 request URL is not absolute');
+  const merged = cricfyMergeHeaders([{ 'User-Agent': AK47_UA }, headers, split.headers]);
+  const options = { method, headers: merged, timeoutMs: AK47_TIMEOUT_MS };
+  if (method === 'POST') {
+    options.headers = cricfyMergeHeaders([
+      { 'Content-Type': json ? 'application/json; charset=utf-8' : 'application/x-www-form-urlencoded; charset=UTF-8' }, merged,
+    ]);
+    options.body = typeof body === 'string' ? body : body == null ? '' : JSON.stringify(body);
+  }
+  const response = await fetch(split.url, options);
+  if (response.status < 200 || response.status >= 300) throw new Error(`AK47 request HTTP ${response.status}`);
+  return { response, headers: merged, url: response.url || split.url };
+}
+
+function ak47ResponseLink(text, key = 'playback_url', sp = false) {
+  let payload;
+  try { payload = ak47Json(text); } catch (error) {
+    if (!sp) throw error;
+    const decoded = host.codec.base64ToText(String(text).trim().split('').reverse().join(''));
+    const separator = decoded.indexOf('|');
+    const shift = Number(decoded.slice(0, separator));
+    if (separator < 1 || !Number.isInteger(shift)) throw new Error('Invalid AK47 sp response');
+    payload = JSON.parse(decoded.slice(separator + 1).replace(/[a-z]/gi, (char) => {
+      const base = char <= 'Z' ? 65 : 97;
+      return String.fromCharCode(((char.charCodeAt(0) - base - shift) % 26 + 26) % 26 + base);
+    }));
+  }
+  const link = payload?.[key];
+  if (typeof link !== 'string' || !link.trim()) throw new Error(`AK47 response has no ${key}`);
+  return link;
+}
+
+function ak47MediaInHtml(html) {
+  const yt = /hlsManifestUrl\s*["']\s*:\s*["']([^"']+)/.exec(html);
+  if (yt) return yt[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+  const atob = /(?:source|file|src)\s*[:=]\s*atob\(["']([^"']+)["']\)/i.exec(html);
+  if (atob) return host.codec.base64ToText(atob[1]);
+  const loader = /player\.load\(\{[^}]*source:\s*([a-zA-Z0-9_]+)\(\)/.exec(html);
+  if (loader) {
+    const fn = new RegExp('function\\s+' + loader[1] + '\\s*\\(\\)\\s*\\{([\\s\\S]*?)\\}').exec(html);
+    const array = fn && /\[([\s\S]*?)\]\.join\(/.exec(fn[1]);
+    if (array) {
+      const pieces = [...array[1].matchAll(/"((?:\\.|[^"\\])*)"/g)].map((part) => JSON.parse('"' + part[1] + '"'));
+      if (pieces.length) return pieces.join('').replace(/^https:\/\/\/\//, 'https://').replace(/\]$/, '');
+    }
+  }
+  const direct = /["']((?:https?:)?(?:\\?\/){2}[^"'<>\s]+\.(?:m3u8|mpd|mp4|webm|mkv)(?:[^"'<>\s]*))["']/i.exec(html);
+  if (direct) return direct[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+  return null;
+}
+
+function ak47MediaPattern(hostname = '') {
+  const escaped = hostname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const authority = escaped ? `(?:www\\.)?${escaped}(?::[0-9]+)?` : '[^/\\s]+';
+  return `^https?://${authority}/[^\\s]*\\.(?:m3u8|mpd|mp4|ts|webm|mkv)(?:[?#]|$)`;
+}
+
+async function ak47Embed(page, hostname = '', depth = 0, headers = {}) {
+  if (depth > 4) throw new Error('AK47 embed nesting limit exceeded');
+  const split = cricfySplitLinkAndHeaders(page);
+  const playbackHeaders = cricfyMergeHeaders([headers, split.headers]);
+  let requestError;
+  try {
+    const request = await ak47Request(page, { headers });
+    const media = ak47MediaInHtml(String(request.response.body || ''));
+    if (media) {
+      const url = ak47Absolute(media, request.url);
+      if (new RegExp(ak47MediaPattern(hostname), 'i').test(url)) {
+        return { url, headers: cricfyMergeHeaders([playbackHeaders, { Referer: request.url }]) };
+      }
+    }
+    const iframe = /<iframe[^>]+src\s*=\s*["']([^"']+)/i.exec(request.response.body || '');
+    if (iframe) {
+      try {
+        return await ak47Embed(ak47Absolute(iframe[1], request.url), hostname, depth + 1,
+          cricfyMergeHeaders([playbackHeaders, { Referer: request.url }]));
+      } catch (error) { requestError = error; }
+    }
+  } catch (error) { requestError = error; }
+  const response = await fetch(split.url, {
+    headers: cricfyMergeHeaders([playbackHeaders, { 'x-qjsr-webview-pattern': ak47MediaPattern(hostname) }]),
+    timeoutMs: AK47_TIMEOUT_MS,
+  });
+  if (response.status === 501) throw new Error('AK47 embed requires the host WebView resolver');
+  if (response.status < 200 || response.status >= 300 ||
+      !new RegExp(ak47MediaPattern(hostname), 'i').test(String(response.url || ''))) {
+    throw requestError || new Error('AK47 embed did not return media');
+  }
+  return { url: response.url, headers: cricfyMergeHeaders([playbackHeaders, { Referer: split.url }]) };
+}
+
+async function ak47ResolveToken(blob) {
+  const spec = ak47TokenSpec(blob);
+  const api = cricfySplitLinkAndHeaders(String(spec.api || ''));
+  const headers = api.headers;
+  if (spec.type === 'embed') return ak47Embed(api.url, String(spec.url || ''), 0, headers);
+  if (spec.type === 'html' || spec.type === 'yt') {
+    const request = await ak47Request(api.url, { headers });
+    const url = ak47MediaInHtml(String(request.response.body || ''));
+    if (!url) throw new Error(`AK47 ${spec.type} page has no media source`);
+    return { url: ak47Absolute(url, request.url), headers: {} };
+  }
+  if (spec.type === 'token') {
+    const request = await ak47Request(api.url, { method: 'POST', headers, body: 'Xkz48rLmC9Tq21vBmNw5' });
+    const target = cricfySplitLinkAndHeaders(String(spec.url || ''));
+    return { url: target.url + String(request.response.body || '').replace(/[\r\n]/g, ''),
+      headers: cricfyMergeHeaders([headers, target.headers]) };
+  }
+  if (spec.type === 'ls') {
+    const request = await ak47Request(spec.ip_api || 'https://ip-api.streamingucms.com/', {
+      headers, method: spec.request_type === 'post' ? 'POST' : 'GET',
+      body: spec.request_body, json: spec.request_body_type === 'json',
+    });
+    const seconds = Math.floor(Date.now() / 1000);
+    const path = api.url.split('/').filter(Boolean);
+    if (path.length < 2) throw new Error('AK47 ls URL has no channel');
+    const material = path[path.length - 2] + String(spec.default_string ?? '9HY(#b1q6') + seconds + request.response.body;
+    let hex = '';
+    for (const char of material) {
+      const code = char.charCodeAt(0);
+      hex += (code <= 255 ? code : 63).toString(16).padStart(2, '0');
+    }
+    const hash = host.codec.base64ToHex(host.crypto.sha256(host.codec.hexToBase64(hex)));
+    return { url: api.url + `?token=${hash}-${seconds + 77}-${seconds}`, headers };
+  }
+  if (spec.type === 'daddy') {
+    const parts = String(spec.api || '').split('|');
+    if (parts.length < 2) throw new Error('AK47 daddy tokenApi has no exchange endpoint');
+    const endpoint = decodeCricfyPayload(parts[1]);
+    const source = String(spec.url || '');
+    const first = await ak47Request(source);
+    const form = (fields) => Object.entries(fields).map(([key, value]) =>
+      encodeURIComponent(key) + '=' + encodeURIComponent(value)).join('&');
+    const exchange = await ak47Request(endpoint, { method: 'POST', headers: first.headers,
+      body: form({ source, type: parts[0], data: first.response.body }) });
+    const next = ak47ResponseLink(exchange.response.body, 'link');
+    const payload = ak47Json(exchange.response.body);
+    const loaded = await ak47Request(next);
+    const final = await ak47Request(endpoint, { method: 'POST', headers: loaded.headers,
+      body: form({ source: next, type: payload.type, status: loaded.response.body }) });
+    return { url: ak47ResponseLink(final.response.body), headers: {} };
+  }
+  const request = await ak47Request(api.url, {
+    headers, method: spec.request_type === 'post' ? 'POST' : 'GET',
+    body: spec.request_body, json: spec.request_body_type === 'json',
+  });
+  const url = ak47ResponseLink(request.response.body, spec.link_key || 'playback_url', spec.type === 'sp');
+  return { url, headers: url.includes('|') ? {} : headers };
+}
+
+function ak47PlaylistLink(text, channel) {
+  let current = null;
+  for (const line of String(text).split(/\r?\n/).map((value) => value.trim())) {
+    if (line.startsWith('#EXTINF')) current = { name: line.slice(line.indexOf(',') + 1), headers: {} };
+    else if (current && line.startsWith('#KODIPROP:inputstream.adaptive.license_type=')) {
+      current.scheme = /widevine/i.test(line) ? 1 : /clearkey/i.test(line) ? 0 : 2;
+    } else if (current && line.startsWith('#KODIPROP:inputstream.adaptive.license_key=')) current.api = line.split('license_key=')[1];
+    else if (current && /^#EXTVLCOPT:http-(user-agent|referer|referrer|origin)=/.test(line)) {
+      const match = /^#EXTVLCOPT:http-([^=]+)=(.*)/.exec(line);
+      const key = { 'user-agent': 'User-Agent', referer: 'Referer', referrer: 'Referer', origin: 'Origin' }[match[1]];
+      current.headers[key] = match[2];
+    } else if (current && line.startsWith('#EXTHTTP:')) {
+      const extra = JSON.parse(line.slice(9));
+      Object.assign(current.headers, extra);
+    } else if (current && /^https?:\/\//i.test(line)) {
+      if (current.name === channel) {
+        return cricfyLinkFromJson({ ...current, link: line + '|' + Object.entries(current.headers)
+          .map(([key, value]) => key + '=' + value).join('&') });
+      }
+      current = null;
+    }
+  }
+  throw new Error('AK47 playlist channel is no longer offered');
+}
+
+async function ak47ResolveLink(link, depth = 0, inheritedHeaders = {}) {
+  if (depth > 6) throw new Error('AK47 exchange nesting limit exceeded');
+  if (link.playlist) {
+    const playlist = await ak47Request(link.playlist, { headers: inheritedHeaders });
+    return ak47ResolveLink(ak47PlaylistLink(playlist.response.body, link.channel), depth + 1, inheritedHeaders);
+  }
+  const token = link.tokenApi ? await ak47ResolveToken(link.tokenApi) : null;
+  const split = cricfySplitLinkAndHeaders(token ? token.url : link.link);
+  const headers = cricfyMergeHeaders([{ 'User-Agent': AK47_UA }, inheritedHeaders,
+    cricfySplitLinkAndHeaders(link.link).headers, token?.headers || {}, split.headers]);
+  let target = split.url;
+  if (!/^https?:\/\//i.test(target)) {
+    ak47FeedPath(target);
+    target = (await ak47Bases())[0] + target;
+  }
+  const extension = cricfyStreamFormatFromUrl(target);
+  if (extension !== 'other' || /\.(?:mp4|ts|webm|mkv)(?:[?#]|$)/i.test(target)) {
+    const format = await cricfyValidatePlaybackManifest(target, { headers, format: extension });
+    return { url: target, headers, format, drm: cricfyMapDrm(cricfyBuildDrm(link)), audioUrl: link.audio || null };
+  }
+  const request = await ak47Request(target, { headers });
+  const body = String(request.response.body || '').trim();
+  const format = cricfyManifestFormatFromResponse(request.response);
+  if (format !== 'other') {
+    if ((format === 'hls' && !body.startsWith('#EXTM3U')) ||
+        (format === 'dash' && !/<MPD(?:\s|>)/i.test(body))) {
+      throw new Error('AK47 endpoint did not return a media manifest');
+    }
+    return { url: request.url, headers, format, drm: cricfyMapDrm(cricfyBuildDrm(link)), audioUrl: link.audio || null };
+  }
+  if (body.startsWith('<')) {
+    const media = await ak47Embed(request.url, '', 0, headers);
+    return ak47ResolveLink({ ...link, link: media.url, tokenApi: '' }, depth + 1, media.headers);
+  }
+  const decoded = ak47Json(body);
+  const row = Array.isArray(decoded) ? decoded[0] : decoded;
+  if (!row || typeof row !== 'object') throw new Error('AK47 exchange returned no stream');
+  const child = cricfyLinkFromJson(row);
+  return ak47ResolveLink({ ...child, playlist: row.playlist, channel: row.channel,
+    drmApi: child.drmApi || link.drmApi, audio: child.audio || link.audio,
+    scheme: child.drmApi ? child.scheme : link.scheme }, depth + 1, headers);
+}
+
+function ak47Streams(rows) {
+  const counts = new Map();
+  const result = [];
+  for (const row of rows) {
+    try {
+      if (!row || typeof row !== 'object' || row.visible === false) continue;
+      const json = JSON.parse(JSON.stringify(row).replace(/\\\\/g, '\\'));
+      const link = cricfyLinkFromJson(json);
+      if (json.playlist) { link.playlist = json.playlist; link.channel = String(json.channel || ''); }
+      if (link.tokenApi) ak47TokenSpec(link.tokenApi);
+      else if (!link.playlist && !/^https?:\/\//i.test(link.link)) ak47FeedPath(link.link);
+      const identity = cricfySourceIdentity(link) + (link.playlist ? ':' + link.channel : '');
+      const ordinal = counts.get(identity) || 0;
+      counts.set(identity, ordinal + 1);
+      result.push({ link, key: `${identity}|${ordinal}` });
+    } catch (_) { /* ignore malformed rows, retain the remaining sources */ }
+  }
+  return result;
+}
+
+function ak47EncodeLocator(locator) {
+  return host.codec.textToBase64(JSON.stringify(locator))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function ak47DecodeLocator(sourceId) {
+  if (!sourceId.startsWith('ak47:')) throw new Error('Malformed AK47 source id');
+  let value = sourceId.slice(5).replace(/-/g, '+').replace(/_/g, '/');
+  while (value.length % 4) value += '=';
+  const locator = JSON.parse(host.codec.base64ToText(value));
+  ak47FeedPath(locator?.event);
+  if (typeof locator.key !== 'string' || !locator.key) throw new Error('Malformed AK47 source locator');
+  return locator;
+}
+
+async function ak47Sources(args) {
+  if (args.enabledProviders != null && !args.enabledProviders.includes(AK47_PROVIDER_ID)) return { sources: [] };
+  if (args.item?.kind && args.item.kind !== 'event' && args.item.kind !== 'liveEvent') return { sources: [] };
+  try {
+    const events = await ak47Events();
+    const item = args.item;
+    const id = String(item.ref?.id || '');
+    let event = id.startsWith('ak47:')
+      ? events.find((candidate) => candidate.linksPath === id.slice(5)) : null;
+    if (!event && item.participants?.length === 2) {
+      const candidates = cricfyCandidatesFrom(events);
+      const match = host.match.resolve({
+        teamA: item.participants[0].name, teamB: item.participants[1].name,
+        teamAShort: item.participants[0].shortName || null,
+        teamBShort: item.participants[1].shortName || null,
+        kickoff: item.schedule?.startsAt || null,
+      }, candidates.map((candidate) => ({
+        teamA: candidate.teamA, teamB: candidate.teamB, startsAt: candidate.startsAt,
+      })), { profile: CRICFY_FOOTBALL_PROFILE });
+      if (match) event = candidates[match.index].event;
+    }
+    if (!event && !item.participants?.length && item.title) {
+      const matches = events.filter((candidate) =>
+        catalogTitleKey(candidate.eventName) === catalogTitleKey(item.title) &&
+        cricfyIsLiveOrUpcoming(candidate));
+      const kickoff = Date.parse(item.schedule?.startsAt);
+      event = matches.find((candidate) => {
+        const start = cricfyParseEventDateTime(candidate.date, candidate.time);
+        return start && Number.isFinite(kickoff) && Math.abs(start.getTime() - kickoff) <= 6 * 60 * 60 * 1000;
+      });
+    }
+    if (!event) return { sources: [] };
+    const streams = ak47Streams(await ak47FetchFeed(event.linksPath));
+    return { sources: streams.map(({ link, key }) => ({
+      id: `ak47:${ak47EncodeLocator({ event: event.linksPath, key })}`,
+      label: `AK47 · ${link.name || 'Live'}`, provider: 'Nimora', providerId: AK47_PROVIDER_ID,
+    })) };
+  } catch (_) { return { sources: [] }; }
+}
+
+async function ak47Resolve(sourceId) {
+  const locator = ak47DecodeLocator(sourceId);
+  const candidate = ak47Streams(await ak47FetchFeed(locator.event))
+    .find((stream) => stream.key === locator.key);
+  if (!candidate) throw new Error('AK47 stream is no longer offered');
+  const link = candidate.link;
+  return { ...await ak47ResolveLink(link), label: `AK47 · ${link.name || 'Live'}` };
+}
+
+async function ak47SportEntries(nowMs = Date.now()) {
+  const entries = [];
+  for (const event of await ak47Events()) {
+    if (isExcludedSportCategory(event.category)) continue;
+    const start = cricfyParseEventDateTime(event.date, event.time);
+    if (!start || start.getTime() - nowMs > UPCOMING_WINDOW_MS) continue;
+    const status = cricfyEventStatusAt(event, nowMs,
+      eventDurationMinutes(event.category, `${event.teamAName} vs ${event.teamBName}`));
+    if (status === 'ended') continue;
+    const item = cricfyEventItem(event, status);
+    if (!item) continue;
+    item.ref = { ...item.ref, providerId: 'nimora.ak47.catalog', id: `ak47:${event.linksPath}` };
+    entries.push({ sportId: sportIdOf(event.category), sportName: sportNameOf(event.category),
+      live: status === 'live', item });
+  }
+  return entries;
+}
+
+globalThis.__ak47SportEntries = ak47SportEntries;
+globalThis.__streamProviders.push({ providerKey: 'ak47', sources: ak47Sources, resolve: ak47Resolve });
 
 // TMDB + shegu.st curated-lists catalog, as a JS extension — Movies and TV.
 //

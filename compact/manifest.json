@@ -2,7 +2,7 @@
   "apiVersion": 2,
   "id": "nimora.compact",
   "name": "Nimora Compact",
-  "version": "2.0.39",
+  "version": "2.0.40",
   "runtime": "js",
   "description": "A lightweight Nimora bundle with the core movie, TV, anime, sports and LayarKaca providers.",
   "author": "nimbusfvck",
@@ -110,6 +110,24 @@
     {
       "id": "nimora.cdnlivetv",
       "name": "CDNLiveTV",
+      "roles": ["stream"],
+      "streamDomains": ["live"]
+    },
+    {
+      "id": "nimora.ak47.catalog",
+      "name": "AK47 Catalog",
+      "roles": ["catalog"],
+      "catalogs": [{
+        "id": "fixtures_sport_ak47",
+        "name": "AK47",
+        "categories": ["sport"],
+        "kind": "liveEvent",
+        "display": "row"
+      }]
+    },
+    {
+      "id": "nimora.ak47",
+      "name": "AK47 Sports",
       "roles": ["stream"],
       "streamDomains": ["live"]
     },
